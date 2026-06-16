@@ -15,7 +15,6 @@ import uuid
 import subprocess
 import base64
 import hashlib
-import hmac
 import secrets
 from collections import defaultdict
 from pathlib import Path
@@ -57,7 +56,6 @@ def load_config() -> dict:
 CONFIG = load_config()
 
 # Extract frequently used values
-MASTER_API_KEY: str = CONFIG["api_key"] # Now used only as an emergency bypass
 LLM_URL: str = CONFIG["llm"]["fast_brain_url"]
 REQUEST_TIMEOUT: int = CONFIG["llm"]["request_timeout_seconds"]
 TEMPERATURE: float = CONFIG["llm"]["default_temperature"]
@@ -177,21 +175,10 @@ async def security_middleware(request: Request, call_next):
 
     token = auth_header[7:]
 
-    # 1. Master Bypass (bootstrap/emergency) — accepted ONLY from the local host.
-    # The voice listener (run_listener.sh) runs on the box and uses it over loopback;
-    # remote callers (LAN/Tailscale) must use a login token or a per-user API key, so a
-    # sniffed or leaked master key can't grant remote admin.
-    if hmac.compare_digest(token.encode(), MASTER_API_KEY.encode()):
-        if not _is_local_request(request):
-            return Response(content=json.dumps({"error": "Master key is local-only"}), status_code=403)
-        request.state.user_id = 1 # Force admin user ID
-        request.state.is_admin = True
-        return await call_next(request)
-
     conn = get_db()
     is_authenticated = False
     try:
-        # 2. Check auth_sessions (Web UI Logins)
+        # 1. Check auth_sessions (Web UI Logins)
         cursor = conn.execute("SELECT user_id, u.role FROM auth_sessions s JOIN users u ON s.user_id = u.id WHERE s.token = ? AND s.expires_at > datetime('now')", (token,))
         row = cursor.fetchone()
         if row:
@@ -199,7 +186,7 @@ async def security_middleware(request: Request, call_next):
             request.state.is_admin = (row["role"] == "admin")
             is_authenticated = True
         else:
-            # 3. Check api_keys (Machine Integrations)
+            # 2. Check api_keys (machine integrations, e.g. the voice listener)
             cursor = conn.execute("SELECT user_id, u.role FROM api_keys k JOIN users u ON k.user_id = u.id WHERE k.key_string = ?", (token,))
             row = cursor.fetchone()
             if row:
@@ -232,11 +219,6 @@ def _apply_security_headers(response: Response) -> Response:
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Cache-Control"] = "no-store"
     return response
-
-def _is_local_request(request: Request) -> bool:
-    """True if the request originates from the loopback interface."""
-    host = request.client.host if request.client else ""
-    return host in ("127.0.0.1", "::1", "localhost")
 
 def _safe_exec(conn: sqlite3.Connection, sql: str):
     """Run a best-effort migration statement (e.g. ALTER that may already be applied)."""

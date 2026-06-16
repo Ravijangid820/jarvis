@@ -44,3 +44,6 @@ frontend/dist/
 .DS_Store
 *.swp
 .idea/
+
+# Voice-listener API key (mint with manage.py)
+config/voice_listener.key

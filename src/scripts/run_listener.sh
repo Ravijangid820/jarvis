@@ -4,8 +4,14 @@
 
 cd /srv/jarvis/whisper
 
-# Load API key from config
-API_KEY=$(python3 -c "import json; print(json.load(open('/srv/jarvis/config/jarvis.json'))['api_key'])")
+# Load the voice-listener API key (a real, revocable api_keys row — mint with
+# `uv run python src/scripts/manage.py mint-key <user> voice-listener`).
+KEY_FILE=/srv/jarvis/config/voice_listener.key
+if [ ! -r "$KEY_FILE" ]; then
+  echo "FATAL: $KEY_FILE missing. Mint one: uv run python src/scripts/manage.py mint-key admin voice-listener > $KEY_FILE" >&2
+  exit 1
+fi
+API_KEY=$(tr -d '[:space:]' < "$KEY_FILE")
 
 echo "Starting Jarvis Voice Listener..."
 echo "Waiting for wake word: 'Jarvis'"

@@ -62,11 +62,23 @@ sudo nft add rule inet jarvis input tcp dport 5000 drop
 
 The LLM server (`llama-fast`) already binds `127.0.0.1` only and is never network-exposed.
 
-## Rotate the master key (recommended)
-The previous key was committed in plaintext during development. Generate a new one and
-update the voice listener's source (it reads from `config/jarvis.json` automatically):
+## Auth model & the admin CLI
+
+There is **no master API key**. Authentication is either a web-login session token or a
+per-user API key (the `api_keys` table). The voice listener uses a real, revocable API key
+read from `config/voice_listener.key` (gitignored).
+
+`src/scripts/manage.py` is the local recovery/admin tool (talks straight to the DB):
 
 ```bash
-python3 -c "import secrets; print(secrets.token_hex(32))"   # paste into config api_key
-sudo systemctl restart jarvis-orchestrator
+uv run python src/scripts/manage.py list-users
+uv run python src/scripts/manage.py create-admin <user> <password>   # bootstrap / lockout recovery
+uv run python src/scripts/manage.py reset-password <user> <password>
+uv run python src/scripts/manage.py mint-key <user> voice-listener   # prints a new key
+
+# (Re)provision the voice listener's key:
+uv run python src/scripts/manage.py mint-key admin voice-listener > config/voice_listener.key
+chmod 600 config/voice_listener.key
 ```
+
+To revoke a key, delete its row from `api_keys` (admin panel, or the API).

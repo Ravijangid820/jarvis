@@ -1,5 +1,4 @@
 {
-    "api_key": "REPLACE_WITH_secrets.token_hex(32)_OUTPUT",
     "llm": {
         "fast_brain_url": "http://127.0.0.1:8081/v1/chat/completions",
         "reasoning_brain_url": "http://127.0.0.1:8080/v1/chat/completions",
