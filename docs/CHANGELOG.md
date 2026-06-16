@@ -4,6 +4,18 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-16 — Session-ownership tests + TLS guide
+
+- Added `tests/test_sessions.py`: CI-safe authorization tests for session ownership —
+  `require_owned_session`, the cross-user `delete_session` IDOR (must 403 and preserve the
+  victim's data + vectors), and `rename_session` ownership. (Stubs `config`/`memory` so it
+  runs without the `/srv/jarvis` config or the embedding model. Suite is now 16 tests.)
+- DEPLOY.md: added an **"Adding TLS (HTTPS)"** section — bind the orchestrator to loopback
+  and terminate TLS with Tailscale Serve (recommended for this setup) or Caddy, so bearer
+  tokens never travel as plaintext. Notes the login-limiter behavior behind a proxy.
+
+---
+
 ## 2026-06-16 — Reliability polish
 
 - `POST /knowledge` no longer runs the 300M embedding model inline on the request

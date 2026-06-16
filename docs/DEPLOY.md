@@ -72,6 +72,53 @@ sudo nft add rule inet jarvis input tcp dport 5000 drop
 
 The LLM server (`llama-fast`) already binds `127.0.0.1` only and is never network-exposed.
 
+## Adding TLS (HTTPS)
+
+The firewall above keeps the API off the open LAN, but traffic is still **plaintext HTTP**
+(bearer tokens in the clear) over `lo` + `tailscale0`. Put a TLS terminator in front and
+bind the orchestrator to **loopback only** so nothing speaks plaintext on a network interface.
+
+First, in `config/jarvis.json` set the orchestrator to loopback (the reverse proxy reaches it
+locally; the firewall rules above are then optional):
+
+```jsonc
+"orchestrator": { "host": "127.0.0.1", "port": 5000 }
+```
+
+### Option A — Tailscale Serve (recommended; you already run Tailscale)
+
+Tailscale provisions a valid Let's Encrypt cert for your tailnet name and proxies HTTPS to the
+local app — no domain, no certbot, no extra daemon:
+
+```bash
+sudo tailscale serve --bg --https=443 http://127.0.0.1:5000
+sudo tailscale serve status          # shows https://<machine>.<tailnet>.ts.net → 127.0.0.1:5000
+```
+
+Now reach Jarvis at `https://<machine>.<tailnet>.ts.net` from any tailnet device. Remove the
+`--https` mapping with `sudo tailscale serve --https=443 off`.
+
+### Option B — Caddy (a real domain, automatic certs)
+
+```caddy
+# /etc/caddy/Caddyfile
+jarvis.example.com {
+    reverse_proxy 127.0.0.1:5000
+}
+```
+
+`sudo systemctl reload caddy` — Caddy fetches and renews the cert automatically. (nginx works
+too; point a `server { listen 443 ssl; location / { proxy_pass http://127.0.0.1:5000; } }` at
+your cert.)
+
+### Note on the login rate limiter
+
+`/auth/login` is throttled per **connecting IP**. Behind a proxy that IP becomes the proxy's
+(`127.0.0.1`), so the limit applies globally (8 logins/min total) rather than per client — more
+restrictive, not less, so it's safe to leave. If you want per-client limiting through a proxy,
+have the proxy set `X-Forwarded-For` and we can teach the limiter to read it (only when behind a
+trusted proxy — never trust that header on a directly-exposed bind).
+
 ## Auth model & the admin CLI
 
 There is **no master API key**. Authentication is either a web-login session token or a
