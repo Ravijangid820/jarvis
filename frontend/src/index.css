@@ -541,6 +541,51 @@ button, input, textarea { font-family: inherit; outline: none; }
   .message { transform: perspective(1200px) rotateY(calc(var(--mx, 0) * 0.7deg)); transition: transform 0.2s ease-out; }
 }
 
+/* ============================================================
+   MARK V — command palette (⌘K)
+   ============================================================ */
+.kbd { font-family: var(--font-data); font-size: 0.85em; border: 1px solid rgba(103,199,235,0.3); border-radius: 3px; padding: 0 4px; color: rgba(103,199,235,0.7); }
+
+.palette-overlay {
+  position: fixed; inset: 0; z-index: 9998;
+  background: rgba(2,5,8,0.6); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  display: flex; align-items: flex-start; justify-content: center; padding: 12vh 16px 16px;
+  animation: paletteFade 0.15s ease;
+}
+@keyframes paletteFade { from { opacity: 0; } to { opacity: 1; } }
+.palette {
+  width: 100%; max-width: 560px;
+  background: var(--bg-glass-heavy);
+  border: 1px solid rgba(103,199,235,0.35);
+  clip-path: var(--clip-angle);
+  box-shadow: 0 0 50px rgba(0,0,0,0.8), 0 0 32px var(--holo-cyan-glow), inset 0 1px 0 rgba(103,199,235,0.2);
+  overflow: hidden; animation: paletteIn 0.2s cubic-bezier(0.16,1,0.3,1);
+}
+@keyframes paletteIn { from { opacity: 0; transform: translateY(-12px) scale(0.98); } to { opacity: 1; transform: none; } }
+.palette-input {
+  width: 100%; padding: 18px 20px; background: transparent; border: none;
+  border-bottom: 1px solid rgba(103,199,235,0.2);
+  color: var(--holo-cyan); font-family: var(--font-data); font-size: 0.95rem;
+}
+.palette-input::placeholder { color: rgba(103,199,235,0.35); text-transform: uppercase; letter-spacing: 0.1em; }
+.palette-list { max-height: 50vh; overflow-y: auto; padding: 6px; }
+.palette-item {
+  display: flex; align-items: center; gap: 12px; padding: 10px 14px; cursor: pointer;
+  color: rgba(103,199,235,0.8); font-size: 0.85rem; transition: background 0.12s;
+}
+.palette-item.active { background: rgba(103,199,235,0.1); color: var(--holo-cyan); box-shadow: inset 2px 0 0 var(--holo-cyan); }
+.palette-tag {
+  font-family: var(--font-data); font-size: 0.58rem; color: var(--stark-gold);
+  border: 1px solid rgba(255,214,107,0.3); padding: 3px 6px; min-width: 44px; text-align: center;
+  letter-spacing: 0.08em; flex-shrink: 0;
+}
+.palette-empty { padding: 24px; text-align: center; color: rgba(103,199,235,0.4); font-size: 0.8rem; }
+.palette-hint {
+  padding: 8px 16px; border-top: 1px solid rgba(103,199,235,0.15);
+  font-family: var(--font-data); font-size: 0.6rem; color: rgba(103,199,235,0.4);
+  display: flex; gap: 18px; text-transform: uppercase; letter-spacing: 0.1em;
+}
+
 /* Respect reduced-motion */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.001s !important; animation-iteration-count: 1 !important; }

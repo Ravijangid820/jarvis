@@ -60,11 +60,17 @@ function App() {
   const [uptime, setUptime] = useState(0)
   const [bootPct, setBootPct] = useState(0)
 
+  // Command palette (⌘K / Ctrl+K).
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  const [paletteQuery, setPaletteQuery] = useState("")
+  const [paletteIndex, setPaletteIndex] = useState(0)
+
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
   const abortRef = useRef(null)   // AbortController for the in-flight /chat/stream request
   const messagesContainerRef = useRef(null)
   const sessionStartRef = useRef(Date.now())
+  const paletteInputRef = useRef(null)
   // Whether the chat is "pinned" to the bottom. Auto-scroll only happens while
   // pinned, so streaming never yanks the user back down when they scroll up to read.
   const stickToBottomRef = useRef(true)
@@ -148,6 +154,22 @@ function App() {
     window.addEventListener("pointermove", onMove, { passive: true })
     return () => { window.removeEventListener("pointermove", onMove); if (raf) cancelAnimationFrame(raf) }
   }, [])
+
+  // Command palette: ⌘K / Ctrl+K toggles it; Escape closes.
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault()
+        setPaletteQuery(""); setPaletteIndex(0); setPaletteOpen(o => !o)
+      } else if (e.key === "Escape") {
+        setPaletteOpen(false)
+      }
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [])
+
+  useEffect(() => { if (paletteOpen) paletteInputRef.current?.focus() }, [paletteOpen])
 
   const checkHealth = async () => {
     try {
@@ -426,6 +448,32 @@ function App() {
     }
   }
 
+  // --- Command palette actions ---
+  const paletteActions = () => {
+    const acts = [
+      { tag: "NEW", label: "New session", run: () => createSession() },
+      { tag: "VOX", label: `Voice output: ${voice ? "on" : "off"} — toggle`, run: () => setVoice(v => !v) },
+      { tag: "CFG", label: `${advancedOpen ? "Hide" : "Show"} advanced parameters`, run: () => setAdvancedOpen(o => !o) },
+      { tag: "IN", label: "Focus message input", run: () => inputRef.current?.focus() },
+      ...(role === "admin" ? [{ tag: "ADM", label: "Open admin console", run: () => { window.location.href = "/admin" } }] : []),
+      { tag: "OUT", label: "Disconnect", run: () => doLogout() },
+      ...sessions.map(s => ({ tag: "GO", label: `Go to: ${s.title}`, run: () => loadHistory(s.id) })),
+    ]
+    const q = paletteQuery.trim().toLowerCase()
+    return q ? acts.filter(a => a.label.toLowerCase().includes(q)) : acts
+  }
+
+  const runPaletteItem = (item) => {
+    setPaletteOpen(false); setPaletteQuery("")
+    item?.run()
+  }
+
+  const onPaletteKey = (e, items) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); setPaletteIndex(i => Math.min(i + 1, items.length - 1)) }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setPaletteIndex(i => Math.max(i - 1, 0)) }
+    else if (e.key === "Enter") { e.preventDefault(); runPaletteItem(items[paletteIndex]) }
+  }
+
   // --- Rendering Helpers ---
   const fmtUptime = (s) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`
 
@@ -544,6 +592,36 @@ function App() {
         <span className="pfield p1" /><span className="pfield p2" /><span className="pfield p3" />
       </div>
       <div className={`sidebar-overlay ${sidebarOpen ? 'visible' : ''}`} onClick={() => setSidebarOpen(false)}></div>
+
+      {paletteOpen && (() => {
+        const items = paletteActions()
+        const idx = Math.min(paletteIndex, Math.max(items.length - 1, 0))
+        return (
+          <div className="palette-overlay" onClick={() => setPaletteOpen(false)}>
+            <div className="palette" onClick={e => e.stopPropagation()}>
+              <input
+                ref={paletteInputRef}
+                className="palette-input"
+                value={paletteQuery}
+                onChange={e => { setPaletteQuery(e.target.value); setPaletteIndex(0) }}
+                onKeyDown={e => onPaletteKey(e, items)}
+                placeholder="Type a command or session…"
+              />
+              <div className="palette-list">
+                {items.length === 0 && <div className="palette-empty">No matches</div>}
+                {items.map((it, i) => (
+                  <div key={i} className={`palette-item ${i === idx ? 'active' : ''}`}
+                    onMouseEnter={() => setPaletteIndex(i)} onClick={() => runPaletteItem(it)}>
+                    <span className="palette-tag">{it.tag}</span>
+                    <span>{it.label}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="palette-hint"><span>↑↓ navigate</span><span>⏎ run</span><span>esc close</span></div>
+            </div>
+          </div>
+        )
+      })()}
       
       <aside className={`sidebar ${sidebarOpen ? 'open' : ''} ${sidebarCollapsed ? 'collapsed' : ''}`}>
         <div className="sidebar-inner">
@@ -787,7 +865,7 @@ function App() {
               {processing ? '■' : '▶'}
             </button>
           </div>
-          <div className="input-hint">Enter to transmit · Shift+Enter new line</div>
+          <div className="input-hint">Enter to transmit · Shift+Enter new line · <span className="kbd">⌘K</span> commands</div>
         </div>
       </main>
     </div>
