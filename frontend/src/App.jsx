@@ -41,6 +41,9 @@ function App() {
   const [voice, setVoice] = useState(false)
   const [sysPrompt, setSysPrompt] = useState("")
 
+  // Cinematic boot sequence — shown once per browser session.
+  const [booting, setBooting] = useState(() => !sessionStorage.getItem("jarvis_booted"))
+
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
 
@@ -52,6 +55,15 @@ function App() {
       loadHistory("default")
     }
   }, [token])
+
+  useEffect(() => {
+    if (!booting) return
+    const t = setTimeout(() => {
+      sessionStorage.setItem("jarvis_booted", "1")
+      setBooting(false)
+    }, 2400)
+    return () => clearTimeout(t)
+  }, [booting])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -340,6 +352,44 @@ function App() {
     })
   }
 
+  if (booting) {
+    return (
+      <div className="boot-overlay">
+        <div className="boot-grid" />
+        <svg className="boot-reactor" width="160" height="160" viewBox="0 0 160 160">
+          <circle cx="80" cy="80" r="76" fill="none" stroke="#67C7EB" strokeWidth="1" opacity="0.2" />
+          <circle cx="80" cy="80" r="64" fill="none" stroke="#67C7EB" strokeWidth="1.5" strokeDasharray="14 8" opacity="0.45">
+            <animateTransform attributeName="transform" type="rotate" from="0 80 80" to="360 80 80" dur="6s" repeatCount="indefinite" />
+          </circle>
+          <circle cx="80" cy="80" r="48" fill="none" stroke="#67C7EB" strokeWidth="1" strokeDasharray="4 6" opacity="0.5">
+            <animateTransform attributeName="transform" type="rotate" from="360 80 80" to="0 80 80" dur="4s" repeatCount="indefinite" />
+          </circle>
+          <circle cx="80" cy="80" r="30" fill="none" stroke="#67C7EB" strokeWidth="2" opacity="0.7" />
+          <circle cx="80" cy="80" r="18" fill="url(#bootCore)">
+            <animate attributeName="opacity" values="0.5;1;0.5" dur="1.4s" repeatCount="indefinite" />
+          </circle>
+          <circle cx="80" cy="80" r="7" fill="#fff" opacity="0.95" />
+          <defs>
+            <radialGradient id="bootCore">
+              <stop offset="0%" stopColor="#cdeeff" stopOpacity="1" />
+              <stop offset="60%" stopColor="#67C7EB" stopOpacity="0.5" />
+              <stop offset="100%" stopColor="#67C7EB" stopOpacity="0" />
+            </radialGradient>
+          </defs>
+        </svg>
+        <div className="boot-title">J.A.R.V.I.S</div>
+        <div className="boot-log">
+          <span style={{animationDelay: '0.2s'}}>▸ Initializing neural core…</span>
+          <span style={{animationDelay: '0.6s'}}>▸ Mounting memory banks…</span>
+          <span style={{animationDelay: '1.0s'}}>▸ Calibrating language model…</span>
+          <span style={{animationDelay: '1.4s'}}>▸ Establishing secure uplink…</span>
+          <span style={{animationDelay: '1.9s', color: 'var(--alert-orange)'}}>▸ All systems online.</span>
+        </div>
+        <div className="boot-bar"><div className="boot-bar-fill" /></div>
+      </div>
+    )
+  }
+
   if (!token) {
     return (
       <div className="login-overlay" style={{display: 'flex'}}>
@@ -365,6 +415,10 @@ function App() {
 
   return (
     <div className="app-container">
+      <div className="hud-frame" aria-hidden="true">
+        <span className="hud-corner tl" /><span className="hud-corner tr" />
+        <span className="hud-corner bl" /><span className="hud-corner br" />
+      </div>
       <div className={`sidebar-overlay ${sidebarOpen ? 'visible' : ''}`} onClick={() => setSidebarOpen(false)}></div>
       
       <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
@@ -569,7 +623,12 @@ function App() {
                           <div className="typing-dot"></div><div className="typing-dot"></div><div className="typing-dot"></div>
                         </div>
                       </div>
-                    ) : renderMessageContent(m.content)}
+                    ) : (
+                      <>
+                        {renderMessageContent(m.content)}
+                        {m.isStreaming && <span className="stream-cursor" aria-hidden="true" />}
+                      </>
+                    )}
                   </div>
                 </div>
               </div>

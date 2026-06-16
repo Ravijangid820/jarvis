@@ -13,7 +13,11 @@
 
   --alert-orange: #FBCA03;
   --action-red: #E52020;
-  
+
+  /* Stark gold — secondary accent for an Iron-Man feel */
+  --stark-gold: #FFD66B;
+  --stark-gold-glow: rgba(255, 197, 61, 0.35);
+
   --bg-void: #020305;
   --bg-glass: rgba(4, 10, 16, 0.6);
   --bg-glass-heavy: rgba(4, 10, 16, 0.85);
@@ -300,4 +304,127 @@ button, input, textarea { font-family: inherit; outline: none; }
   .sidebar-overlay.visible { opacity: 1; pointer-events: auto; }
   .input-wrap { clip-path: none; border-radius: 8px; }
   .welcome-grid { grid-template-columns: 1fr; }
+}
+
+/* ============================================================
+   MARK II — Cinematic HUD enhancements (Stark / Iron-Man)
+   ============================================================ */
+
+/* Ambient arc-reactor glow behind the whole interface */
+.app-container::before {
+  content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background:
+    radial-gradient(circle at 50% 118%, rgba(103,199,235,0.12), transparent 55%),
+    radial-gradient(circle at 50% -18%, rgba(255,197,61,0.05), transparent 45%);
+  animation: reactorBreath 8s ease-in-out infinite;
+}
+@keyframes reactorBreath { 0%,100% { opacity: 0.65; } 50% { opacity: 1; } }
+::selection { background: rgba(103,199,235,0.35); color: #eaffff; }
+
+/* Animated HUD frame with corner brackets */
+.hud-frame { position: fixed; inset: 9px; z-index: 30; pointer-events: none; }
+.hud-corner {
+  position: absolute; width: 24px; height: 24px;
+  border-color: var(--holo-cyan); filter: drop-shadow(0 0 4px var(--holo-cyan-glow));
+  animation: cornerPulse 4s ease-in-out infinite;
+}
+.hud-corner.tl { top: 0; left: 0; border-top: 2px solid; border-left: 2px solid; }
+.hud-corner.tr { top: 0; right: 0; border-top: 2px solid; border-right: 2px solid; }
+.hud-corner.bl { bottom: 0; left: 0; border-bottom: 2px solid; border-left: 2px solid; }
+.hud-corner.br { bottom: 0; right: 0; border-bottom: 2px solid; border-right: 2px solid; }
+@keyframes cornerPulse { 0%,100% { opacity: 0.35; } 50% { opacity: 0.8; } }
+
+/* Reactor / title glows */
+.reactor-logo, .login-reactor, .welcome-reactor svg { filter: drop-shadow(0 0 7px var(--holo-cyan-glow)); }
+.sidebar-title, .welcome-title, .top-title, .boot-title { animation: holoFlicker 7s infinite; }
+@keyframes holoFlicker { 0%,95%,100% { opacity: 1; } 96% { opacity: 0.72; } 97% { opacity: 1; } 98.5% { opacity: 0.85; } }
+
+/* Stark-gold secondary accents (was amber-yellow) */
+.stat-val, .slider-val, .sug-icon { color: var(--stark-gold); text-shadow: 0 0 6px var(--stark-gold-glow); }
+.top-model { color: var(--stark-gold); border-color: rgba(255,197,61,0.4); text-shadow: 0 0 6px var(--stark-gold-glow); }
+
+/* Status dot — stronger reactor pulse */
+.status-dot.online { animation: dotPulse 2s ease-in-out infinite; }
+@keyframes dotPulse {
+  0%,100% { box-shadow: 0 0 6px #00ff88; opacity: 1; }
+  50% { box-shadow: 0 0 14px #00ff88, 0 0 24px rgba(0,255,136,0.5); opacity: 0.55; }
+}
+
+/* Holographic message panels */
+.msg-body { transition: border-color 0.25s, background 0.25s, box-shadow 0.25s, transform 0.25s; overflow: hidden; }
+.message:hover .msg-body {
+  box-shadow: 0 0 24px rgba(103,199,235,0.12), inset 0 0 18px rgba(103,199,235,0.05);
+  transform: translateX(2px);
+}
+.msg-body::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none; opacity: 0;
+  background: linear-gradient(110deg, transparent 35%, rgba(103,199,235,0.08) 50%, transparent 65%);
+  background-size: 220% 100%;
+}
+.message:hover .msg-body::after { opacity: 1; animation: sheen 1.3s linear; }
+@keyframes sheen { from { background-position: 220% 0; } to { background-position: -120% 0; } }
+
+/* Streaming caret */
+.stream-cursor {
+  display: inline-block; width: 8px; height: 1.05em; margin-left: 3px; vertical-align: text-bottom;
+  background: var(--holo-cyan); box-shadow: 0 0 8px var(--holo-cyan); animation: caret 1.05s steps(1) infinite;
+}
+@keyframes caret { 0%,50% { opacity: 1; } 51%,100% { opacity: 0; } }
+
+/* Input "power up" on focus */
+.input-wrap { transition: border-color 0.4s, box-shadow 0.4s; }
+.input-wrap:focus-within {
+  border-color: var(--holo-cyan);
+  box-shadow: 0 0 40px rgba(103,199,235,0.22), inset 0 0 25px rgba(103,199,235,0.07);
+}
+.input-wrap:focus-within::before, .input-wrap:focus-within::after { width: 75px; transition: width 0.4s; }
+.send-btn.stop { animation: stopPulse 1.2s ease-in-out infinite; }
+@keyframes stopPulse { 0%,100% { box-shadow: 0 0 0 rgba(229,32,32,0); } 50% { box-shadow: 0 0 16px var(--action-red); } }
+
+/* Suggestion / new-session buttons — sharper hover lift */
+.sug-btn:hover { transform: translateY(-2px); }
+.new-session-btn { transition: all 0.25s; }
+.new-session-btn:hover { transform: translateY(-1px); }
+
+/* --- Boot sequence --- */
+.boot-overlay {
+  position: fixed; inset: 0; z-index: 10001; overflow: hidden;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  background: radial-gradient(circle at 50% 50%, #04141f, var(--bg-void) 72%);
+  animation: bootFade 0.4s ease, bootOut 0.5s ease 1.9s forwards;
+}
+@keyframes bootFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes bootOut { to { opacity: 0; filter: blur(10px); } }
+.boot-grid {
+  position: absolute; inset: 0;
+  background-image:
+    linear-gradient(rgba(103,199,235,0.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(103,199,235,0.07) 1px, transparent 1px);
+  background-size: 42px 42px;
+  -webkit-mask-image: radial-gradient(circle at 50% 50%, #000 28%, transparent 72%);
+  mask-image: radial-gradient(circle at 50% 50%, #000 28%, transparent 72%);
+  animation: gridIn 1s ease;
+}
+@keyframes gridIn { from { opacity: 0; transform: scale(1.12); } to { opacity: 1; transform: scale(1); } }
+.boot-reactor { filter: drop-shadow(0 0 22px var(--holo-cyan-glow)); animation: bootReactorIn 0.8s cubic-bezier(0.16,1,0.3,1); }
+@keyframes bootReactorIn { from { opacity: 0; transform: scale(0.55); } to { opacity: 1; transform: scale(1); } }
+.boot-title {
+  margin-top: 16px; font-family: var(--font-hud); font-size: 1.9rem; font-weight: 700;
+  letter-spacing: 0.4em; color: var(--holo-cyan); text-shadow: 0 0 22px var(--holo-cyan-glow);
+  animation: bootTitleIn 0.9s 0.15s both;
+}
+@keyframes bootTitleIn { from { opacity: 0; letter-spacing: 0.9em; } to { opacity: 1; letter-spacing: 0.4em; } }
+.boot-log {
+  margin-top: 18px; display: flex; flex-direction: column; gap: 6px;
+  font-family: var(--font-data); font-size: 0.72rem; color: rgba(103,199,235,0.8); text-align: left;
+}
+.boot-log span { opacity: 0; animation: logIn 0.45s forwards; }
+@keyframes logIn { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: translateX(0); } }
+.boot-bar { margin-top: 22px; width: 264px; height: 2px; background: rgba(103,199,235,0.15); overflow: hidden; }
+.boot-bar-fill { height: 100%; width: 0; background: var(--holo-cyan); box-shadow: 0 0 10px var(--holo-cyan); animation: barFill 2.1s ease forwards; }
+@keyframes barFill { from { width: 0; } to { width: 100%; } }
+
+/* Respect reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.001s !important; animation-iteration-count: 1 !important; }
 }
