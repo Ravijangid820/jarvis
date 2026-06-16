@@ -1,8 +1,6 @@
 {
     "llm": {
         "fast_brain_url": "http://127.0.0.1:8081/v1/chat/completions",
-        "reasoning_brain_url": "http://127.0.0.1:8080/v1/chat/completions",
-        "active_model": "fast",
         "request_timeout_seconds": 120,
         "default_temperature": 0.4,
         "max_context_tokens": 4096

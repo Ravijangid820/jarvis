@@ -22,8 +22,7 @@ kernels, so smaller models and tight prompt budgets matter more than usual.
 | STT | whisper.cpp `base.en` | ~142 MB | whisper-command | built `-DGGML_AVX=ON -DWHISPER_SDL2=ON` |
 | TTS | Piper `en_GB-alan-medium` | ~63 MB | piper binary | ONNX voice |
 
-A 4B model is on disk but unused (the orchestrator is single-model). The `reasoning_brain_url` /
-`active_model` config keys are **legacy and not read** by the code.
+A 4B model is on disk but unused — the orchestrator is single-model by design.
 
 ## Performance (measured on this box)
 
@@ -48,8 +47,6 @@ specific); commit changes to [`config/jarvis.example.json`](../config/jarvis.exa
 {
   "llm": {
     "fast_brain_url": "http://127.0.0.1:8081/v1/chat/completions",  // the LLM server
-    "reasoning_brain_url": "...",      // LEGACY — not read by the code
-    "active_model": "fast",            // LEGACY — not read by the code
     "request_timeout_seconds": 120,    // urllib timeout on LLM calls
     "default_temperature": 0.4,
     "max_context_tokens": 4096         // must match llama-server's -c flag
