@@ -586,6 +586,39 @@ button, input, textarea { font-family: inherit; outline: none; }
   display: flex; gap: 18px; text-transform: uppercase; letter-spacing: 0.1em;
 }
 
+/* ============================================================
+   MARK VI — themes · interactive chat reactor · temp gauge
+   ============================================================ */
+
+/* Theme tint: a global hue/saturation shift via [data-theme] on <html>.
+   Retints the whole HUD uniformly (SVGs + literals included). stark = default. */
+html[data-theme="cyberpunk"] body { filter: hue-rotate(118deg) saturate(1.25); }
+html[data-theme="emerald"]  body { filter: hue-rotate(-58deg) saturate(1.05); }
+html[data-theme="ember"]    body { filter: hue-rotate(-156deg) saturate(1.2); }
+
+/* Interactive arc reactor behind the chat: parallax-tilts to cursor, ramps while thinking. */
+.main-area { position: relative; }
+.messages-container { position: relative; z-index: 1; }
+.chat-reactor-bg {
+  position: absolute; top: 46%; left: 50%; z-index: 0; pointer-events: none;
+  opacity: 0.07; filter: drop-shadow(0 0 30px var(--holo-cyan-glow));
+  transform: translate(calc(-50% + var(--mx, 0) * 16px), calc(-50% + var(--my, 0) * 16px))
+             perspective(900px) rotateY(calc(var(--mx, 0) * 10deg)) rotateX(calc(var(--my, 0) * -10deg));
+  transition: opacity 0.6s ease, transform 0.25s ease-out;
+}
+.app-container.thinking .chat-reactor-bg { opacity: 0.16; animation: reactorBgPulse 1.7s ease-in-out infinite; }
+@keyframes reactorBgPulse {
+  0%,100% { filter: drop-shadow(0 0 26px var(--holo-cyan-glow)); }
+  50%     { filter: drop-shadow(0 0 55px var(--holo-cyan)); }
+}
+
+/* Temperature radial gauge (live, in the Parameters panel). */
+.temp-gauge { position: relative; width: 92px; height: 92px; margin: 6px auto 14px; }
+.temp-gauge .tg-arc { filter: drop-shadow(0 0 6px var(--holo-cyan-glow)); transition: stroke-dashoffset 0.2s ease; }
+.tg-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; }
+.tg-val { font-family: var(--font-data); font-size: 1.1rem; color: var(--holo-cyan); text-shadow: 0 0 8px var(--holo-cyan-glow); }
+.tg-lbl { font-size: 0.5rem; letter-spacing: 0.2em; color: rgba(103,199,235,0.5); }
+
 /* Respect reduced-motion */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.001s !important; animation-iteration-count: 1 !important; }

@@ -65,6 +65,11 @@ function App() {
   const [paletteQuery, setPaletteQuery] = useState("")
   const [paletteIndex, setPaletteIndex] = useState(0)
 
+  // Theme switcher + synthesized UI sound (both persisted, sound off by default).
+  const [theme, setTheme] = useState(() => localStorage.getItem("jarvis_theme") || "stark")
+  const [sound, setSound] = useState(() => localStorage.getItem("jarvis_sound") === "1")
+  const audioCtxRef = useRef(null)
+
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
   const abortRef = useRef(null)   // AbortController for the in-flight /chat/stream request
@@ -170,6 +175,13 @@ function App() {
   }, [])
 
   useEffect(() => { if (paletteOpen) paletteInputRef.current?.focus() }, [paletteOpen])
+
+  // Theme: a global hue/saturation tint applied via [data-theme] on <html>.
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme)
+    localStorage.setItem("jarvis_theme", theme)
+  }, [theme])
+  useEffect(() => { localStorage.setItem("jarvis_sound", sound ? "1" : "0") }, [sound])
 
   const checkHealth = async () => {
     try {
@@ -325,6 +337,7 @@ function App() {
     if (!queryOverride) setInput("")
     setProcessing(true)
     setSpeed("")
+    blip("send")
     
     setMessages(prev => [...prev, { role: "user", content: userText }])
     setMessages(prev => [...prev, { role: "jarvis", content: "", isStreaming: true }])
@@ -389,6 +402,7 @@ function App() {
                 })
               }
               if (data.done) {
+                blip("done")
                 const wallTimeSecs = (performance.now() - startTime) / 1000
                 // Honest, clearly-approximate estimate (~4 chars/token), guarded for div-by-zero.
                 if (answer && wallTimeSecs > 0) {
@@ -448,6 +462,29 @@ function App() {
     }
   }
 
+  // Synthesized UI blips (Web Audio — no files). Lazily created on first use, which
+  // also satisfies the browser autoplay gesture requirement. No-op when sound is off.
+  const blip = (kind) => {
+    if (!sound) return
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext
+      if (!audioCtxRef.current) audioCtxRef.current = new Ctx()
+      const ctx = audioCtxRef.current
+      const tones = { send: [520, 880], done: [660, 990], open: [440, 660] }[kind] || [600]
+      const now = ctx.currentTime
+      tones.forEach((f, i) => {
+        const osc = ctx.createOscillator(), g = ctx.createGain()
+        osc.type = "sine"; osc.frequency.value = f
+        const t = now + i * 0.06
+        g.gain.setValueAtTime(0, t)
+        g.gain.linearRampToValueAtTime(0.05, t + 0.01)
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.12)
+        osc.connect(g); g.connect(ctx.destination)
+        osc.start(t); osc.stop(t + 0.13)
+      })
+    } catch { /* audio unavailable — ignore */ }
+  }
+
   // --- Command palette actions ---
   const paletteActions = () => {
     const acts = [
@@ -455,6 +492,10 @@ function App() {
       { tag: "VOX", label: `Voice output: ${voice ? "on" : "off"} — toggle`, run: () => setVoice(v => !v) },
       { tag: "CFG", label: `${advancedOpen ? "Hide" : "Show"} advanced parameters`, run: () => setAdvancedOpen(o => !o) },
       { tag: "IN", label: "Focus message input", run: () => inputRef.current?.focus() },
+      { tag: "SND", label: `Sound: ${sound ? "on" : "off"} — toggle`, run: () => setSound(s => !s) },
+      ...["stark", "cyberpunk", "emerald", "ember"].map(t => ({
+        tag: "THM", label: `Theme: ${t.charAt(0).toUpperCase() + t.slice(1)}${theme === t ? " ✓" : ""}`, run: () => setTheme(t),
+      })),
       ...(role === "admin" ? [{ tag: "ADM", label: "Open admin console", run: () => { window.location.href = "/admin" } }] : []),
       { tag: "OUT", label: "Disconnect", run: () => doLogout() },
       ...sessions.map(s => ({ tag: "GO", label: `Go to: ${s.title}`, run: () => loadHistory(s.id) })),
@@ -672,6 +713,16 @@ function App() {
                 {advancedOpen ? '▾ Hide' : '▸ Advanced'}
               </button>
             </div>
+            <div className="temp-gauge">
+              <svg width="92" height="92" viewBox="0 0 92 92">
+                <circle cx="46" cy="46" r="38" fill="none" stroke="rgba(103,199,235,0.15)" strokeWidth="4" />
+                <circle className="tg-arc" cx="46" cy="46" r="38" fill="none" stroke="var(--holo-cyan)" strokeWidth="4" strokeLinecap="round"
+                  strokeDasharray={2 * Math.PI * 38}
+                  strokeDashoffset={2 * Math.PI * 38 * (1 - Math.min(temp / 2, 1))}
+                  transform="rotate(-90 46 46)" />
+              </svg>
+              <div className="tg-center"><span className="tg-val">{temp.toFixed(2)}</span><span className="tg-lbl">TEMP</span></div>
+            </div>
             <div className="slider-row">
               <label>Temp</label>
               <input type="range" min="0" max="2" step="0.05" value={temp} onChange={e => setTemp(parseFloat(e.target.value))} />
@@ -753,6 +804,27 @@ function App() {
       </aside>
       
       <main className="main-area">
+        {/* Interactive arc reactor behind the chat — parallax-tilts to the cursor, ramps while thinking. */}
+        <div className="chat-reactor-bg" aria-hidden="true">
+          <svg viewBox="0 0 400 400" width="540" height="540">
+            <circle cx="200" cy="200" r="192" fill="none" stroke="#67C7EB" strokeWidth="1" opacity="0.5" />
+            <circle cx="200" cy="200" r="160" fill="none" stroke="#67C7EB" strokeWidth="1.5" strokeDasharray="22 14" opacity="0.6">
+              <animateTransform attributeName="transform" type="rotate" from="0 200 200" to="360 200 200" dur="55s" repeatCount="indefinite" />
+            </circle>
+            <circle cx="200" cy="200" r="124" fill="none" stroke="#67C7EB" strokeWidth="1" strokeDasharray="6 11" opacity="0.5">
+              <animateTransform attributeName="transform" type="rotate" from="360 200 200" to="0 200 200" dur="40s" repeatCount="indefinite" />
+            </circle>
+            <circle cx="200" cy="200" r="90" fill="none" stroke="#67C7EB" strokeWidth="2" opacity="0.7" />
+            <circle cx="200" cy="200" r="62" fill="none" stroke="#67C7EB" strokeWidth="1" strokeDasharray="3 9" opacity="0.5">
+              <animateTransform attributeName="transform" type="rotate" from="0 200 200" to="360 200 200" dur="24s" repeatCount="indefinite" />
+            </circle>
+            <circle cx="200" cy="200" r="40" fill="none" stroke="#67C7EB" strokeWidth="1.5" opacity="0.8" />
+            <g stroke="#67C7EB" strokeWidth="1" opacity="0.5">
+              <line x1="200" y1="8" x2="200" y2="40" /><line x1="200" y1="360" x2="200" y2="392" />
+              <line x1="8" y1="200" x2="40" y2="200" /><line x1="360" y1="200" x2="392" y2="200" />
+            </g>
+          </svg>
+        </div>
         <div className="top-bar">
           <button className="sidebar-toggle" onClick={toggleSidebar} aria-label="Toggle menu" title="Toggle sidebar">☰</button>
           <span className="top-title">{currentTitle}</span>
