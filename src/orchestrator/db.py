@@ -1,9 +1,8 @@
 """SQLite access: connection factory + schema initialization."""
 import sqlite3
-from pathlib import Path
 
 from auth import hash_token
-from config import DB_PATH
+from config import DB_PATH, SCHEMA_PATH
 
 
 def get_db() -> sqlite3.Connection:
@@ -56,13 +55,12 @@ def _migrate_plaintext_api_keys(conn: sqlite3.Connection):
 
 
 def init_db():
-    schema_path = Path("/srv/jarvis/config/schema.sql")
-    if not schema_path.exists():
+    if not SCHEMA_PATH.exists():
         # Fail loudly — a silent no-op leaves every query failing with "no such table".
-        raise RuntimeError(f"schema.sql not found at {schema_path}; cannot initialize the database")
+        raise RuntimeError(f"schema.sql not found at {SCHEMA_PATH}; cannot initialize the database")
     conn = get_db()
     try:
-        with open(schema_path, "r") as f:
+        with open(SCHEMA_PATH, "r") as f:
             conn.executescript(f.read())
         # Safety-net migrations for databases created before these columns existed.
         _safe_exec(conn, "ALTER TABLE chat_sessions ADD COLUMN user_id INTEGER DEFAULT 1 REFERENCES users(id)")

@@ -4,6 +4,18 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-16 — Config path portability
+
+- `config.py` now derives every on-disk path from a `BASE_DIR` (the repo root via
+  `__file__`, overridable with `JARVIS_HOME`) instead of hardcoding `/srv/jarvis`, and
+  falls back to `jarvis.example.json` when `jarvis.json` is absent. On the deployed box
+  this resolves to the identical `/srv/jarvis` paths (no behavior change); off-box (CI,
+  a fresh checkout, tests) the app/config can now be imported and run. `schema.sql` path
+  moved into config as `SCHEMA_PATH`. Enables future HTTP/middleware tests (which also
+  need the embedding model to load lazily — separate follow-up).
+
+---
+
 ## 2026-06-16 — Session-ownership tests + TLS guide
 
 - Added `tests/test_sessions.py`: CI-safe authorization tests for session ownership —

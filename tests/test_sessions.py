@@ -18,6 +18,7 @@ sys.path.insert(0, str(SRC))
 # --- stub heavy/path-bound modules before importing the code under test ---
 _cfg = types.ModuleType("config")
 _cfg.DB_PATH = ":memory:"
+_cfg.SCHEMA_PATH = Path("/nonexistent/schema.sql")  # init_db isn't exercised here
 _cfg.COMPLETION_RESERVE_DEFAULT = 512
 _cfg.KNOWLEDGE_TOKEN_CAP = 512
 _cfg.MAX_CONTEXT_MESSAGES = 100

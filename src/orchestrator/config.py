@@ -5,14 +5,21 @@ re-read the JSON or duplicate magic numbers. No dependencies on other app module
 """
 import json
 import logging
+import os
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import List
 
+# Project root. Defaults to the repo location (this file is at <root>/src/orchestrator/
+# config.py) but can be overridden with JARVIS_HOME. Every on-disk path derives from it,
+# so the app and tests can run from any checkout — not only /srv/jarvis. On the deployed
+# box this resolves to /srv/jarvis, so paths are unchanged.
+BASE_DIR = Path(os.environ.get("JARVIS_HOME") or Path(__file__).resolve().parents[2])
+
 # --- Logging ----------------------------------------------------------------
 # Rotating file handler so the log can't grow without bound (5 MB x 3 backups).
 # stdout also goes to journald via systemd; rely on journald's own rotation there.
-_LOG_DIR = Path("/srv/jarvis/logs")
+_LOG_DIR = BASE_DIR / "logs"
 _LOG_DIR.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
@@ -25,14 +32,20 @@ logging.basicConfig(
 logger = logging.getLogger("jarvis")
 
 # --- Config file ------------------------------------------------------------
-CONFIG_PATH = Path("/srv/jarvis/config/jarvis.json")
+CONFIG_PATH = Path(os.environ.get("JARVIS_CONFIG") or (BASE_DIR / "config" / "jarvis.json"))
+_EXAMPLE_CONFIG = BASE_DIR / "config" / "jarvis.example.json"
 
 
 def load_config() -> dict:
-    if not CONFIG_PATH.exists():
-        logger.error("Config file not found at %s", CONFIG_PATH)
+    # Fall back to the committed example so the app/tests can load without a real config
+    # (e.g. CI, a fresh checkout). The example carries every key with safe defaults.
+    path = CONFIG_PATH if CONFIG_PATH.exists() else _EXAMPLE_CONFIG
+    if not path.exists():
+        logger.error("Config not found at %s (and no example at %s)", CONFIG_PATH, _EXAMPLE_CONFIG)
         raise SystemExit("FATAL: Config file missing. Cannot start without config.")
-    with open(CONFIG_PATH, "r") as f:
+    if path != CONFIG_PATH:
+        logger.warning("Config %s missing; using %s (example defaults)", CONFIG_PATH, path.name)
+    with open(path, "r") as f:
         return json.load(f)
 
 
@@ -46,7 +59,7 @@ MAX_INPUT_LENGTH: int = CONFIG["orchestrator"]["max_input_length"]
 RATE_LIMIT_RPM: int = CONFIG["orchestrator"]["rate_limit_requests_per_minute"]
 ALLOWED_ORIGINS: List[str] = CONFIG["orchestrator"].get("allowed_origins", [])
 DB_PATH: str = CONFIG["memory"]["db_path"]
-CHROMA_DB_PATH: str = CONFIG["memory"].get("chroma_db_path", "/srv/jarvis/memory/chroma_db")
+CHROMA_DB_PATH: str = CONFIG["memory"].get("chroma_db_path", str(BASE_DIR / "memory" / "chroma_db"))
 MAX_CONTEXT_MESSAGES: int = CONFIG["memory"]["max_context_messages"]
 SYSTEM_PROMPT: str = CONFIG["system_prompt"]
 
@@ -102,12 +115,13 @@ VALID_FACT_CATEGORIES = {
 }
 
 # --- Voice (Piper TTS) ------------------------------------------------------
-PIPER_BIN = Path("/srv/jarvis/piper/piper")
-PIPER_MODEL = Path("/srv/jarvis/piper/voices/en_GB-alan-medium.onnx")
+PIPER_BIN = BASE_DIR / "piper" / "piper"
+PIPER_MODEL = BASE_DIR / "piper" / "voices" / "en_GB-alan-medium.onnx"
 
 # --- HTTP / static ----------------------------------------------------------
-REACT_DIST_DIR = Path("/srv/jarvis/frontend/dist")
+REACT_DIST_DIR = BASE_DIR / "frontend" / "dist"
 STATIC_DIR = Path(__file__).parent / "static"
 INDEX_HTML = REACT_DIST_DIR / "index.html"
+SCHEMA_PATH = BASE_DIR / "config" / "schema.sql"
 ADMIN_MAX_INPUT = 10000
 REGULAR_MAX_INPUT = 500
