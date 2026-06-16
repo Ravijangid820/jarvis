@@ -4,6 +4,24 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-16 — Lazy model load, offline HF, end-to-end auth tests
+
+- **Embedding model loads lazily at startup, not at import.** `memory.init_embeddings()`
+  (called from the app lifespan) loads `embeddinggemma-300m` from the local HF cache;
+  `import memory`/`import main` no longer pull torch (imports drop from ~35s to <1s). Set
+  `JARVIS_NO_EMBED=1` to skip it (RAG disabled) — used by tests. *The model is not
+  re-downloaded each start — it's cached (~1.2 GB in `~/.cache/huggingface`).*
+- **Offline HuggingFace** in the systemd unit (`HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`)
+  so startup is strictly cache-only — no network call to check for model updates. (The model
+  must be present in the cache; it already is. Fresh installs download it once, online.)
+- **`tests/test_api.py`**: end-to-end auth-middleware tests via FastAPI TestClient (missing/
+  invalid token → 401/403, login + authed, wrong password, admin gating, session-ownership
+  IDOR over HTTP, login throttling → 429, tokens stored hashed). Now possible thanks to the
+  config refactor + lazy load; runs without the model. Suite is now **24 tests**. Added
+  `httpx` as a dev dependency.
+
+---
+
 ## 2026-06-16 — Config path portability
 
 - `config.py` now derives every on-disk path from a `BASE_DIR` (the repo root via

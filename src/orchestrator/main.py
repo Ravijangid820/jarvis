@@ -40,6 +40,7 @@ from llm import llm_content, request_llm, request_llm_stream, synthesize_tts
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    memory.init_embeddings()   # load the model now (from cache), not at import time
     memory.start_embedding_worker()
     memory.start_memory_worker()
     logger.info("Jarvis Orchestrator started with Auth + Memory Core")

@@ -4,13 +4,11 @@ idle-time fact extraction, and request-activity tracking.
 Depends on config, db, and llm — never on chat/main (keeps the import graph acyclic).
 """
 import json
+import os
 import queue
 import threading
 import time
 from typing import Any, Dict, List, Optional
-
-import chromadb
-from sentence_transformers import SentenceTransformer
 
 from config import (
     CHROMA_DB_PATH, EMBED_DOC_PREFIX, EMBED_MODEL_NAME, EMBED_QUERY_PREFIX,
@@ -22,23 +20,48 @@ from db import get_db
 from llm import llm_content, request_llm
 
 # --- Embeddings + vector store ----------------------------------------------
-chroma_client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
-try:
-    _embed_model: Optional[SentenceTransformer] = SentenceTransformer(EMBED_MODEL_NAME)
-    # Cosine space with normalized vectors (the "jarvis_memory_cos" collection).
-    memory_collection = chroma_client.get_or_create_collection(
-        name="jarvis_memory_cos", metadata={"hnsw:space": "cosine"}
-    )
-    # Surface the embedding dimension + collection size at startup. If EMBED_MODEL_NAME
-    # ever changes to a different dimension, get_or_create returns the OLD collection and
-    # the first add() would fail inside the worker — logging this makes that diagnosable.
-    logger.info("Embeddings: %s (dim=%d), collection 'jarvis_memory_cos' has %d vectors",
-                EMBED_MODEL_NAME, _embed_model.get_sentence_embedding_dimension(),
-                memory_collection.count())
-except Exception as e:
-    logger.error("Failed to initialize ChromaDB / embedding model: %s", e)
-    _embed_model = None
-    memory_collection = None
+# Initialized lazily by init_embeddings() (called once at startup), NOT at import:
+# the model is ~1.2 GB cached on disk and takes seconds to load, so importing this
+# module stays cheap (lets the app/tests import without pulling the model).
+chroma_client = None
+_embed_model = None        # a SentenceTransformer once init_embeddings() has run
+memory_collection = None
+_embed_init_done = False
+
+
+def init_embeddings():
+    """Load the embedding model (from the local HF cache) and open the ChromaDB
+    collection. Idempotent; call once at startup. Set JARVIS_NO_EMBED=1 to skip it
+    entirely (RAG disabled) — used by tests so they don't load the model.
+    """
+    global chroma_client, _embed_model, memory_collection, _embed_init_done
+    if _embed_init_done:
+        return
+    _embed_init_done = True
+    if os.environ.get("JARVIS_NO_EMBED") == "1":
+        logger.info("JARVIS_NO_EMBED=1 — embeddings/RAG disabled")
+        return
+    try:
+        # Imported here, not at module top: torch/sentence-transformers are heavy to
+        # import (tens of seconds on this CPU), so deferring keeps `import memory` cheap.
+        import chromadb
+        from sentence_transformers import SentenceTransformer
+        chroma_client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
+        _embed_model = SentenceTransformer(EMBED_MODEL_NAME)
+        # Cosine space with normalized vectors (the "jarvis_memory_cos" collection).
+        memory_collection = chroma_client.get_or_create_collection(
+            name="jarvis_memory_cos", metadata={"hnsw:space": "cosine"}
+        )
+        # Surface the embedding dimension + collection size. If EMBED_MODEL_NAME ever
+        # changes dimension, get_or_create returns the OLD collection and the first add()
+        # would fail in the worker — logging this makes that diagnosable.
+        logger.info("Embeddings: %s (dim=%d), collection 'jarvis_memory_cos' has %d vectors",
+                    EMBED_MODEL_NAME, _embed_model.get_sentence_embedding_dimension(),
+                    memory_collection.count())
+    except Exception as e:
+        logger.error("Failed to initialize ChromaDB / embedding model: %s", e)
+        _embed_model = None
+        memory_collection = None
 
 
 def vectors_available() -> bool:

@@ -13,6 +13,10 @@ StartLimitBurst=5
 Type=simple
 WorkingDirectory=/srv/jarvis/src/orchestrator
 Environment="PATH=/root/.local/bin:/home/ubuntu/.local/bin:/usr/local/bin:/usr/bin:/bin"
+# Embedding model is already in the HF cache (~/.cache/huggingface) — load cache-only,
+# never reach out to HuggingFace on startup. Private/offline by design; faster, no network.
+Environment="HF_HUB_OFFLINE=1"
+Environment="TRANSFORMERS_OFFLINE=1"
 # host 0.0.0.0 so loopback (voice listener) AND the Tailscale interface both work;
 # a host firewall restricts tcp:5000 to lo + tailscale0 (see docs/DEPLOY.md).
 ExecStart=/usr/bin/env uv run uvicorn main:app \
