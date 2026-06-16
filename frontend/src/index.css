@@ -646,6 +646,14 @@ html[data-theme="ember"]    body { filter: hue-rotate(-156deg) saturate(1.2); }
    MARK VII — neural oscilloscope · richer markdown
    ============================================================ */
 
+/* Live host telemetry gauges (Diagnostics panel). */
+.gauge-row { display: flex; align-items: center; gap: 8px; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 7px; color: rgba(103,199,235,0.7); }
+.gauge-row > span:first-child { min-width: 46px; }
+.mini-bar { flex: 1; height: 4px; background: rgba(103,199,235,0.12); overflow: hidden; }
+.mini-bar-fill { height: 100%; width: 0; background: var(--holo-cyan); box-shadow: 0 0 8px var(--holo-cyan-glow); transition: width 0.6s ease, background 0.3s; }
+.mini-bar-fill.hot { background: var(--action-red); box-shadow: 0 0 8px var(--action-red); }
+.gauge-row .stat-val { min-width: 34px; }
+
 /* Sidebar "neural activity" oscilloscope: idles low, spikes while thinking. */
 .oscilloscope {
   height: 50px; margin-top: 14px; overflow: hidden; position: relative;

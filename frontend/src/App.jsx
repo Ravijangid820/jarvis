@@ -72,6 +72,7 @@ function App() {
   const [tokHistory, setTokHistory] = useState([])
   const [uptime, setUptime] = useState(0)
   const [bootPct, setBootPct] = useState(0)
+  const [sys, setSys] = useState({})   // live host stats from /system (CPU/RAM/uptime)
 
   // Command palette (⌘K / Ctrl+K).
   const [paletteOpen, setPaletteOpen] = useState(false)
@@ -188,6 +189,21 @@ function App() {
   }, [])
 
   useEffect(() => { if (paletteOpen) paletteInputRef.current?.focus() }, [paletteOpen])
+
+  // Poll live host telemetry (CPU/RAM/uptime) for the diagnostics panel.
+  useEffect(() => {
+    if (!token) return
+    let active = true
+    const fetchSys = async () => {
+      try {
+        const r = await fetch(API + "/system", { headers: { Authorization: "Bearer " + token } })
+        if (r.ok && active) setSys(await r.json())
+      } catch { /* ignore transient errors */ }
+    }
+    fetchSys()
+    const id = setInterval(fetchSys, 5000)
+    return () => { active = false; clearInterval(id) }
+  }, [token])
 
   // Theme: a global hue/saturation tint applied via [data-theme] on <html>.
   useEffect(() => {
@@ -581,6 +597,11 @@ function App() {
 
   // --- Rendering Helpers ---
   const fmtUptime = (s) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`
+  const fmtDuration = (s) => {
+    if (s == null) return "—"
+    const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60)
+    return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m`
+  }
 
   const renderSparkline = (data) => {
     const w = 46, h = 14
@@ -792,6 +813,20 @@ function App() {
             <div className="stat-row">
               <span>Uplink</span>
               <span className="stat-val">{uplink}</span>
+            </div>
+            <div className="gauge-row">
+              <span>CPU</span>
+              <div className="mini-bar"><div className={`mini-bar-fill ${sys.cpu_pct > 85 ? 'hot' : ''}`} style={{ width: (sys.cpu_pct ?? 0) + '%' }} /></div>
+              <span className="stat-val">{sys.cpu_pct != null ? sys.cpu_pct + '%' : '—'}</span>
+            </div>
+            <div className="gauge-row">
+              <span>RAM</span>
+              <div className="mini-bar"><div className={`mini-bar-fill ${sys.mem_pct > 85 ? 'hot' : ''}`} style={{ width: (sys.mem_pct ?? 0) + '%' }} /></div>
+              <span className="stat-val">{sys.mem_pct != null ? sys.mem_pct + '%' : '—'}</span>
+            </div>
+            <div className="stat-row">
+              <span>Host Up</span>
+              <span className="stat-val">{fmtDuration(sys.uptime_sec)}</span>
             </div>
             <div className="oscilloscope">
               <svg className="osc-svg" viewBox="0 0 240 60" preserveAspectRatio="none">

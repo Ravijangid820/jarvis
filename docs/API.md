@@ -104,6 +104,7 @@ Valid categories: `personal, family, preferences, location, work, education, int
 | Method | Path | Returns |
 |---|---|---|
 | `GET` | `/health` | `{ "status": "ok", "model": "qwen3.5-2b" }` |
+| `GET` | `/system` | **auth** · live host telemetry: `{ load1, cpus, cpu_pct, mem_used_mb, mem_total_mb, mem_pct, uptime_sec }` (dependency-free, from `/proc` + `os`) |
 | `GET` | `/` | React SPA (`frontend/dist/index.html`) |
 | `GET` | `/admin` | Admin panel HTML (its data endpoints are still auth-gated) |
 | `GET` | `/favicon.svg` | App icon (served from the dist root) |

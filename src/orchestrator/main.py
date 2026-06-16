@@ -11,6 +11,7 @@ Domain logic lives in focused modules:
   budget   — pure prompt-token-budgeting helpers (unit-tested)
 """
 import json
+import os
 import sqlite3
 import secrets
 import time
@@ -243,6 +244,44 @@ def get_session_history(session_id: str, request: Request):
 @app.get("/health")
 def health_check() -> Dict[str, str]:
     return {"status": "ok", "model": "qwen3.5-2b"}
+
+
+def _system_stats() -> Dict[str, Any]:
+    """Live host telemetry for the UI diagnostics panel. Dependency-free (/proc + os)."""
+    stats: Dict[str, Any] = {}
+    try:
+        load1 = os.getloadavg()[0]
+        cpus = os.cpu_count() or 1
+        stats["load1"] = round(load1, 2)
+        stats["cpus"] = cpus
+        stats["cpu_pct"] = min(100, round(load1 / cpus * 100))
+    except Exception:
+        pass
+    try:
+        meminfo: Dict[str, int] = {}
+        with open("/proc/meminfo") as f:
+            for line in f:
+                k, _, v = line.partition(":")
+                meminfo[k] = int(v.strip().split()[0])  # values are in kB
+        total, avail = meminfo.get("MemTotal", 0), meminfo.get("MemAvailable", 0)
+        if total:
+            stats["mem_total_mb"] = round(total / 1024)
+            stats["mem_used_mb"] = round((total - avail) / 1024)
+            stats["mem_pct"] = round((total - avail) / total * 100)
+    except Exception:
+        pass
+    try:
+        with open("/proc/uptime") as f:
+            stats["uptime_sec"] = int(float(f.read().split()[0]))
+    except Exception:
+        pass
+    return stats
+
+
+@app.get("/system")
+def system_stats(request: Request) -> Dict[str, Any]:
+    # Auth-gated by the middleware (not in the bypass list).
+    return _system_stats()
 
 
 # ----------------- Chat -----------------
