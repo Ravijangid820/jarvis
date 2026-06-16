@@ -462,6 +462,43 @@ button, input, textarea { font-family: inherit; outline: none; }
 @keyframes barFill { from { width: 0; } to { width: 100%; } }
 .boot-skip-hint { margin-top: 16px; font-family: var(--font-data); font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.25em; color: rgba(103,199,235,0.35); animation: logIn 0.5s 1.2s both; }
 
+/* ============================================================
+   MARK III — reactive reactor + glass depth
+   ============================================================ */
+
+/* Reactive arc reactor: while Jarvis generates, the ambient core glow and the
+   sidebar reactor ramp up; they settle back when idle. Ties motion to real work. */
+.app-container.thinking::before { animation: reactorBreathActive 2.4s ease-in-out infinite; }
+@keyframes reactorBreathActive { 0%,100% { opacity: 0.85; } 50% { opacity: 1; } }
+
+.reactor-logo { transition: filter 0.5s ease; }
+.app-container.thinking .reactor-logo { animation: reactorPulse 1.15s ease-in-out infinite; }
+@keyframes reactorPulse {
+  0%,100% { filter: drop-shadow(0 0 7px var(--holo-cyan-glow)); transform: scale(1); }
+  50%     { filter: drop-shadow(0 0 16px var(--holo-cyan)) drop-shadow(0 0 30px var(--holo-cyan-glow)); transform: scale(1.09); }
+}
+/* The connection badge reads "thinking" with a quicker reactor-blue pulse. */
+.app-container.thinking .conn-badge .status-dot.online { animation: dotPulse 0.9s ease-in-out infinite; }
+
+/* Glass depth: panels read as lit, layered glass — top highlight + soft float
+   shadow + a faint vertical sheen. Cheap (no extra blur), modern-device wow. */
+.hud-panel {
+  background: linear-gradient(180deg, rgba(103,199,235,0.035), transparent 70%);
+  box-shadow: inset 0 1px 0 rgba(103,199,235,0.10);
+}
+.msg-body {
+  background:
+    linear-gradient(180deg, rgba(103,199,235,0.05), rgba(103,199,235,0.015) 40%),
+    rgba(103,199,235,0.02);
+  box-shadow: inset 0 1px 0 rgba(103,199,235,0.14), 0 10px 28px rgba(0,0,0,0.38);
+}
+.msg-avatar.jarvis { box-shadow: 0 0 15px var(--holo-cyan), inset 0 1px 2px rgba(255,255,255,0.4); }
+.input-wrap { box-shadow: 0 0 30px rgba(0,0,0,0.8), inset 0 1px 0 rgba(103,199,235,0.18), inset 0 0 20px rgba(103,199,235,0.05); }
+.sug-btn {
+  background: linear-gradient(180deg, rgba(103,199,235,0.06), rgba(103,199,235,0.02));
+  box-shadow: inset 0 1px 0 rgba(103,199,235,0.12);
+}
+
 /* Respect reduced-motion */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.001s !important; animation-iteration-count: 1 !important; }

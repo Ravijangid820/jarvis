@@ -476,7 +476,7 @@ function App() {
   }
 
   return (
-    <div className="app-container">
+    <div className={`app-container ${processing ? 'thinking' : ''}`}>
       <div className="hud-frame" aria-hidden="true">
         <span className="hud-corner tl" /><span className="hud-corner tr" />
         <span className="hud-corner bl" /><span className="hud-corner br" />
