@@ -52,6 +52,24 @@ curl -X POST http://localhost:5000/inbox \
 └── orchestrator/               ← Deployed orchestrator (venv + code)
 ```
 
+## Vendored build dependencies
+
+These live under `/srv/jarvis/` but are **gitignored** (large/built-from-source, not part of
+this repo). To reproduce the box, clone and build them yourself:
+
+| Dependency | Version | Source | Build notes |
+|---|---|---|---|
+| **whisper.cpp** | `v1.8.6` (commit `23ee0350`) | https://github.com/ggerganov/whisper.cpp | Built with `-DGGML_AVX=ON -DWHISPER_SDL2=ON` (Sandy Bridge has AVX but **no** AVX2) |
+| **Piper TTS** | `en_GB-alan-medium` voice | https://github.com/rhasspy/piper | Installed via [src/scripts/piper_setup.sh](src/scripts/piper_setup.sh) |
+| **llama.cpp** | — | https://github.com/ggml-org/llama.cpp | Built AVX-only (Sandy Bridge); binary at `/root/llama.cpp/build/bin/llama-server` |
+
+```bash
+# whisper.cpp (matches the deployed build)
+git clone --branch v1.8.6 https://github.com/ggerganov/whisper.cpp /srv/jarvis/whisper
+cmake -S /srv/jarvis/whisper -B /srv/jarvis/whisper/build -DGGML_AVX=ON -DWHISPER_SDL2=ON
+cmake --build /srv/jarvis/whisper/build -j
+```
+
 ## Architecture
 
 ```
