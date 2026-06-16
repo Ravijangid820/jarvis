@@ -4,7 +4,8 @@
    WORLD CLASS HUD
    ============================================================ */
 
-@import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
+/* Self-hosted fonts — served same-origin from /static/fonts/, no external request. */
+@import url('fonts/fonts.css');
 
 :root {
   --holo-cyan: #67C7EB;
