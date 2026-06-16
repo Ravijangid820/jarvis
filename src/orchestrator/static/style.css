@@ -24,6 +24,27 @@
   --clip-angle: polygon(12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%, 0 12px);
   --clip-angle-sm: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
   --clip-angle-rev: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 12px 100%, 0 calc(100% - 12px));
+
+  /* Aliases for the admin HUD (admin.html) — map its token names onto the
+     holographic palette above so both pages share one visual language.
+     Without these the admin page falls back to unstyled browser defaults. */
+  --accent-cyan: var(--holo-cyan);
+  --accent-gold: #FFD66B;
+  --accent-gold-dim: rgba(255, 214, 107, 0.12);
+  --accent-red: var(--action-red);
+  --bg-primary: var(--bg-void);
+  --bg-surface: var(--bg-glass);
+  --bg-input: rgba(4, 10, 16, 0.8);
+  --border-glass: rgba(103, 199, 235, 0.2);
+  --text-primary: #d0effc;
+  --text-secondary: rgba(103, 199, 235, 0.6);
+  --text-muted: rgba(103, 199, 235, 0.4);
+  --font-sans: var(--font-hud);
+  --font-mono: var(--font-data);
+  --radius-sm: 2px;
+  --transition-fast: 0.2s;
+  --shadow-glow: 0 0 15px var(--holo-cyan-glow);
+  --shadow-gold: 0 0 15px rgba(255, 214, 107, 0.35);
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
