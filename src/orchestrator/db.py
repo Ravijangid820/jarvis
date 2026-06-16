@@ -6,13 +6,14 @@ from config import DB_PATH
 
 
 def get_db() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, timeout=5.0)
+    conn = sqlite3.connect(DB_PATH, timeout=30.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
-    # Wait up to 5s for a competing writer instead of failing instantly with
-    # "database is locked" (the background workers + request threads can overlap).
-    conn.execute("PRAGMA busy_timeout=5000")
+    # Wait up to 30s for a competing writer instead of failing with "database is
+    # locked": three writer sources (request threads + embedding + memory workers)
+    # can overlap, and 5s was occasionally too short under load.
+    conn.execute("PRAGMA busy_timeout=30000")
     return conn
 
 
@@ -27,7 +28,8 @@ def _safe_exec(conn: sqlite3.Connection, sql: str):
 def init_db():
     schema_path = Path("/srv/jarvis/config/schema.sql")
     if not schema_path.exists():
-        return
+        # Fail loudly — a silent no-op leaves every query failing with "no such table".
+        raise RuntimeError(f"schema.sql not found at {schema_path}; cannot initialize the database")
     conn = get_db()
     try:
         with open(schema_path, "r") as f:

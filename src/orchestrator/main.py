@@ -28,7 +28,7 @@ from pydantic import BaseModel, Field
 
 import chat
 import memory
-from auth import hash_password, verify_password
+from auth import hash_password, hash_token, verify_password
 from budget import is_default_session
 from config import (ADMIN_HTML, ADMIN_MAX_INPUT, ALLOWED_ORIGINS, COMPLETION_RESERVE_DEFAULT,
                     CONFIG, INDEX_HTML, RATE_LIMIT_RPM, REACT_DIST_DIR, REGULAR_MAX_INPUT,
@@ -71,6 +71,20 @@ def check_rate_limit(key: str) -> bool:
     return True
 
 
+# Stricter, IP-keyed limiter for the unauthenticated login endpoint (brute-force guard).
+_login_store: Dict[str, List[float]] = defaultdict(list)
+LOGIN_MAX_PER_MIN = 8
+
+
+def check_login_rate(ip: str) -> bool:
+    now = time.time()
+    _login_store[ip] = [t for t in _login_store[ip] if t > now - 60.0]
+    if len(_login_store[ip]) >= LOGIN_MAX_PER_MIN:
+        return False
+    _login_store[ip].append(now)
+    return True
+
+
 def _apply_security_headers(response: Response, cache: str = "no-store") -> Response:
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
@@ -97,10 +111,10 @@ async def security_middleware(request: Request, call_next):
     conn = get_db()
     is_authenticated = False
     try:
-        # 1. Web-login session token
+        # 1. Web-login session token (stored hashed at rest; look up by hash).
         row = conn.execute(
             "SELECT user_id, u.role FROM auth_sessions s JOIN users u ON s.user_id = u.id "
-            "WHERE s.token = ? AND s.expires_at > datetime('now')", (token,)).fetchone()
+            "WHERE s.token = ? AND s.expires_at > datetime('now')", (hash_token(token),)).fetchone()
         if row:
             request.state.user_id = row["user_id"]
             request.state.is_admin = (row["role"] == "admin")
@@ -177,7 +191,12 @@ class KnowledgeFactRequest(BaseModel):
 
 # ----------------- Auth endpoints -----------------
 @app.post("/auth/login")
-def login(req: LoginRequest):
+def login(req: LoginRequest, request: Request):
+    # Throttle by client IP — login is unauthenticated and bypasses the per-user
+    # limiter, so without this it's an unbounded password-guessing oracle.
+    client_ip = request.client.host if request.client else "unknown"
+    if not check_login_rate(client_ip):
+        raise HTTPException(status_code=429, detail="Too many attempts; try again shortly")
     conn = get_db()
     try:
         row = conn.execute("SELECT id, password_hash, role FROM users WHERE username = ?", (req.username,)).fetchone()
@@ -185,8 +204,9 @@ def login(req: LoginRequest):
             raise HTTPException(status_code=401, detail="Invalid username or password")
         token = secrets.token_hex(32)
         expires = (datetime.now(timezone.utc) + timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
+        # Store only the hash; the plaintext token is returned to the client once.
         conn.execute("INSERT INTO auth_sessions (token, user_id, expires_at) VALUES (?, ?, ?)",
-                     (token, row["id"], expires))
+                     (hash_token(token), row["id"], expires))
         conn.execute("DELETE FROM auth_sessions WHERE expires_at <= datetime('now')")  # opportunistic purge
         conn.commit()
         return {"token": token, "role": row["role"]}
@@ -202,7 +222,7 @@ def logout(request: Request):
     if token:
         conn = get_db()
         try:
-            conn.execute("DELETE FROM auth_sessions WHERE token = ?", (token,))
+            conn.execute("DELETE FROM auth_sessions WHERE token = ?", (hash_token(token),))
             conn.commit()
         finally:
             conn.close()

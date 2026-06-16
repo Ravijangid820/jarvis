@@ -4,6 +4,28 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-16 — Security & reliability hardening
+
+### Security
+- **Session tokens are now hashed at rest** (SHA-256). The plaintext is returned to
+  the client once at login; the DB stores only the hash, so a DB/backup leak no longer
+  yields usable live tokens. *One-time effect: existing sessions are invalidated, so
+  everyone re-logs-in once after this deploy.* (API keys: still plaintext — follow-up.)
+- **`/auth/login` is rate-limited** by client IP (8/min). Login is unauthenticated and
+  bypasses the per-user limiter, so this closes an unbounded password-guessing oracle.
+- Fixed a cross-user **IDOR**: `DELETE /sessions/{id}` now authorizes ownership first.
+
+### Reliability
+- SQLite `busy_timeout` raised 5s → 30s (three writer sources can overlap; 5s was
+  occasionally too short under load).
+- `init_db()` now fails loudly if `schema.sql` is missing instead of silently leaving
+  every query to fail with "no such table".
+
+### Tests
+- Added `tests/test_auth.py` (password + token hashing); CI-safe (no config/model needed).
+
+---
+
 ## 2026-06-16 — UI overhaul & follow-up fixes
 
 ### UI / frontend
