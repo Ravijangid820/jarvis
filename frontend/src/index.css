@@ -4,7 +4,9 @@
    WORLD CLASS HUD
    ============================================================ */
 
-@import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
+/* Fonts are loaded via <link rel="preconnect"> + stylesheet in index.html so the
+   fetch starts during HTML parse and in parallel — a render-blocking @import here
+   would only be discovered after this CSS downloads, delaying first paint. */
 
 :root {
   --holo-cyan: #67C7EB;
@@ -423,6 +425,7 @@ button, input, textarea { font-family: inherit; outline: none; }
 .boot-bar { margin-top: 22px; width: 264px; height: 2px; background: rgba(103,199,235,0.15); overflow: hidden; }
 .boot-bar-fill { height: 100%; width: 0; background: var(--holo-cyan); box-shadow: 0 0 10px var(--holo-cyan); animation: barFill 2.1s ease forwards; }
 @keyframes barFill { from { width: 0; } to { width: 100%; } }
+.boot-skip-hint { margin-top: 16px; font-family: var(--font-data); font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.25em; color: rgba(103,199,235,0.35); animation: logIn 0.5s 1.2s both; }
 
 /* Respect reduced-motion */
 @media (prefers-reduced-motion: reduce) {

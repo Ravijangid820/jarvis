@@ -41,8 +41,12 @@ function App() {
   const [voice, setVoice] = useState(false)
   const [sysPrompt, setSysPrompt] = useState("")
 
-  // Cinematic boot sequence — shown once per browser session.
+  // Cinematic boot sequence — shown once per browser session, click to skip.
   const [booting, setBooting] = useState(() => !sessionStorage.getItem("jarvis_booted"))
+  const skipBoot = () => {
+    sessionStorage.setItem("jarvis_booted", "1")
+    setBooting(false)
+  }
 
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
@@ -66,8 +70,11 @@ function App() {
   }, [booting])
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [messages])
+    // While streaming this fires on every token, so use an instant scroll — a
+    // smooth-scroll animation restarted dozens of times/sec is the main chat jank.
+    // Smooth only once the response has settled.
+    messagesEndRef.current?.scrollIntoView({ behavior: processing ? "auto" : "smooth" })
+  }, [messages, processing])
 
   const checkHealth = async () => {
     try {
@@ -354,7 +361,7 @@ function App() {
 
   if (booting) {
     return (
-      <div className="boot-overlay">
+      <div className="boot-overlay" onClick={skipBoot} style={{ cursor: 'pointer' }} title="Click to skip">
         <div className="boot-grid" />
         <svg className="boot-reactor" width="160" height="160" viewBox="0 0 160 160">
           <circle cx="80" cy="80" r="76" fill="none" stroke="#67C7EB" strokeWidth="1" opacity="0.2" />
@@ -386,6 +393,7 @@ function App() {
           <span style={{animationDelay: '1.9s', color: 'var(--alert-orange)'}}>▸ All systems online.</span>
         </div>
         <div className="boot-bar"><div className="boot-bar-fill" /></div>
+        <div className="boot-skip-hint">Click anywhere to skip</div>
       </div>
     )
   }
