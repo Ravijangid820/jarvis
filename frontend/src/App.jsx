@@ -24,8 +24,15 @@ function App() {
   const [modelName, setModelName] = useState("—")
   const [uplink, setUplink] = useState("N/A")
 
-  // Sidebar Mobile Toggle
+  // Sidebar: `open` drives the mobile slide-in drawer; `collapsed` hides it on desktop.
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  // The ☰ button means different things per layout: drawer toggle on mobile,
+  // collapse/expand on desktop (where the sidebar is docked, not an overlay).
+  const toggleSidebar = () => {
+    if (window.innerWidth <= 768) setSidebarOpen(o => !o)
+    else setSidebarCollapsed(c => !c)
+  }
 
   // Parameters
   const [advancedOpen, setAdvancedOpen] = useState(false)
@@ -50,6 +57,17 @@ function App() {
 
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
+  const messagesContainerRef = useRef(null)
+  // Whether the chat is "pinned" to the bottom. Auto-scroll only happens while
+  // pinned, so streaming never yanks the user back down when they scroll up to read.
+  const stickToBottomRef = useRef(true)
+  const prevMsgCountRef = useRef(0)
+
+  const onMessagesScroll = () => {
+    const el = messagesContainerRef.current
+    if (!el) return
+    stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120
+  }
 
   // --- Initialization ---
   useEffect(() => {
@@ -70,10 +88,22 @@ function App() {
   }, [booting])
 
   useEffect(() => {
-    // While streaming this fires on every token, so use an instant scroll — a
-    // smooth-scroll animation restarted dozens of times/sec is the main chat jank.
-    // Smooth only once the response has settled.
-    messagesEndRef.current?.scrollIntoView({ behavior: processing ? "auto" : "smooth" })
+    const el = messagesContainerRef.current
+    if (!el) return
+    // A new message (you sent one, or a session loaded) re-pins to the bottom;
+    // streaming-token updates keep the count steady and only scroll if still pinned.
+    const newMessage = messages.length !== prevMsgCountRef.current
+    prevMsgCountRef.current = messages.length
+    if (newMessage) {
+      // You sent a message or switched session — snap instantly to the latest.
+      stickToBottomRef.current = true
+      el.scrollTop = el.scrollHeight
+      return
+    }
+    if (!stickToBottomRef.current) return
+    // Streaming-token updates: instant so per-token scrolls don't fight a smooth
+    // animation; smooth only for the small settle once the reply finishes.
+    el.scrollTo({ top: el.scrollHeight, behavior: processing ? "auto" : "smooth" })
   }, [messages, processing])
 
   const checkHealth = async () => {
@@ -429,7 +459,7 @@ function App() {
       </div>
       <div className={`sidebar-overlay ${sidebarOpen ? 'visible' : ''}`} onClick={() => setSidebarOpen(false)}></div>
       
-      <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
+      <aside className={`sidebar ${sidebarOpen ? 'open' : ''} ${sidebarCollapsed ? 'collapsed' : ''}`}>
         <div className="sidebar-inner">
           <div className="sidebar-header">
             <svg className="reactor-logo" width="38" height="38" viewBox="0 0 38 38">
@@ -560,7 +590,7 @@ function App() {
       
       <main className="main-area">
         <div className="top-bar">
-          <button className="sidebar-toggle" onClick={() => setSidebarOpen(true)} aria-label="Open menu" title="Menu">☰</button>
+          <button className="sidebar-toggle" onClick={toggleSidebar} aria-label="Toggle menu" title="Toggle sidebar">☰</button>
           <span className="top-title">{currentTitle}</span>
           <span className="top-model">QW-2B</span>
           <span className="top-speed">{speed}</span>
@@ -571,7 +601,7 @@ function App() {
           </div>
         </div>
 
-        <div className="messages-container">
+        <div className="messages-container" ref={messagesContainerRef} onScroll={onMessagesScroll}>
           <div className="messages-inner">
             {messages.length === 0 && (
               <div className="welcome-screen">
