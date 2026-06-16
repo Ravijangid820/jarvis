@@ -36,6 +36,7 @@ function App() {
 
   // Parameters
   const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [themeOpen, setThemeOpen] = useState(false)   // theme picker collapsed by default
   const [temp, setTemp] = useState(0.7)
   const [topK, setTopK] = useState(40)
   const [topP, setTopP] = useState(0.9)
@@ -493,9 +494,6 @@ function App() {
       { tag: "CFG", label: `${advancedOpen ? "Hide" : "Show"} advanced parameters`, run: () => setAdvancedOpen(o => !o) },
       { tag: "IN", label: "Focus message input", run: () => inputRef.current?.focus() },
       { tag: "SND", label: `Sound: ${sound ? "on" : "off"} — toggle`, run: () => setSound(s => !s) },
-      ...["stark", "cyberpunk", "emerald", "ember"].map(t => ({
-        tag: "THM", label: `Theme: ${t.charAt(0).toUpperCase() + t.slice(1)}${theme === t ? " ✓" : ""}`, run: () => setTheme(t),
-      })),
       ...(role === "admin" ? [{ tag: "ADM", label: "Open admin console", run: () => { window.location.href = "/admin" } }] : []),
       { tag: "OUT", label: "Disconnect", run: () => doLogout() },
       ...sessions.map(s => ({ tag: "GO", label: `Go to: ${s.title}`, run: () => loadHistory(s.id) })),
@@ -514,6 +512,60 @@ function App() {
     else if (e.key === "ArrowUp") { e.preventDefault(); setPaletteIndex(i => Math.max(i - 1, 0)) }
     else if (e.key === "Enter") { e.preventDefault(); runPaletteItem(items[paletteIndex]) }
   }
+
+  // Detailed arc reactor behind the chat: glowing gradient core, a ring of coil
+  // segments, a tick-marked bezel, and counter-rotating detail rings.
+  const renderChatReactor = () => (
+    <div className="chat-reactor-bg" aria-hidden="true">
+      <svg viewBox="0 0 400 400" width="580" height="580">
+        <defs>
+          <radialGradient id="reactorCore">
+            <stop offset="0%" stopColor="#eafcff" stopOpacity="1" />
+            <stop offset="38%" stopColor="#67C7EB" stopOpacity="0.85" />
+            <stop offset="100%" stopColor="#67C7EB" stopOpacity="0" />
+          </radialGradient>
+          <radialGradient id="reactorHalo">
+            <stop offset="0%" stopColor="#67C7EB" stopOpacity="0.22" />
+            <stop offset="100%" stopColor="#67C7EB" stopOpacity="0" />
+          </radialGradient>
+        </defs>
+        <circle cx="200" cy="200" r="150" fill="url(#reactorHalo)" />
+        {/* outer bezel + tick marks */}
+        <circle cx="200" cy="200" r="192" fill="none" stroke="#67C7EB" strokeWidth="1" opacity="0.4" />
+        <circle cx="200" cy="200" r="184" fill="none" stroke="#67C7EB" strokeWidth="0.5" opacity="0.3" />
+        <g stroke="#67C7EB" opacity="0.55">
+          {Array.from({ length: 72 }).map((_, i) => (
+            <line key={i} x1="200" y1="14" x2="200" y2={i % 6 === 0 ? "26" : "20"}
+              strokeWidth={i % 6 === 0 ? 1.4 : 0.6} transform={`rotate(${i * 5} 200 200)`} />
+          ))}
+        </g>
+        {/* rotating dashed scan ring */}
+        <circle cx="200" cy="200" r="160" fill="none" stroke="#67C7EB" strokeWidth="1.5" strokeDasharray="2 12" opacity="0.6">
+          <animateTransform attributeName="transform" type="rotate" from="0 200 200" to="360 200 200" dur="60s" repeatCount="indefinite" />
+        </circle>
+        {/* signature coil-segment ring */}
+        <g opacity="0.7">
+          {Array.from({ length: 10 }).map((_, i) => (
+            <g key={i} transform={`rotate(${i * 36} 200 200)`}>
+              <rect x="188" y="78" width="24" height="46" rx="5" fill="rgba(103,199,235,0.06)" stroke="#67C7EB" strokeWidth="1.4" />
+              <line x1="200" y1="84" x2="200" y2="118" stroke="#67C7EB" strokeWidth="0.6" opacity="0.6" />
+            </g>
+          ))}
+          <animateTransform attributeName="transform" type="rotate" from="0 200 200" to="360 200 200" dur="120s" repeatCount="indefinite" />
+        </g>
+        {/* inner rings */}
+        <circle cx="200" cy="200" r="66" fill="none" stroke="#67C7EB" strokeWidth="2" opacity="0.85" />
+        <circle cx="200" cy="200" r="54" fill="none" stroke="#67C7EB" strokeWidth="1" strokeDasharray="4 7" opacity="0.5">
+          <animateTransform attributeName="transform" type="rotate" from="360 200 200" to="0 200 200" dur="26s" repeatCount="indefinite" />
+        </circle>
+        {/* glowing core */}
+        <circle cx="200" cy="200" r="46" fill="url(#reactorCore)">
+          <animate attributeName="opacity" values="0.7;1;0.7" dur="3s" repeatCount="indefinite" />
+        </circle>
+        <circle cx="200" cy="200" r="15" fill="#eafcff" opacity="0.95" />
+      </svg>
+    </div>
+  )
 
   // --- Rendering Helpers ---
   const fmtUptime = (s) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`
@@ -682,6 +734,7 @@ function App() {
             </div>
           </div>
 
+          <div className="sidebar-scroll">
           <div className="hud-panel">
             <div className="hud-label">Diagnostics</div>
             <div className="stat-row">
@@ -704,6 +757,28 @@ function App() {
               <button className="hud-btn" onClick={doLogout}>Disconnect</button>
               {role === "admin" && <button className="hud-btn warn" onClick={() => window.location.href='/admin'}>Admin</button>}
             </div>
+          </div>
+
+          <div className="hud-panel">
+            <div className="hud-label">
+              Interface Theme
+              <button className="adv-btn" onClick={() => setThemeOpen(o => !o)}>{themeOpen ? '▾ Hide' : '▸ Show'}</button>
+            </div>
+            {themeOpen && (
+              <div className="theme-grid">
+                {[
+                  { id: "stark", name: "Stark", color: "#67C7EB" },
+                  { id: "cyberpunk", name: "Cyberpunk", color: "#ff4dd2" },
+                  { id: "emerald", name: "Emerald", color: "#2fe6a0" },
+                  { id: "ember", name: "Ember", color: "#ffae42" },
+                ].map(t => (
+                  <button key={t.id} className={`theme-chip ${theme === t.id ? "active" : ""}`} onClick={() => setTheme(t.id)}>
+                    <span className="theme-dot" style={{ background: t.color }} />
+                    {t.name}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="hud-panel">
@@ -796,6 +871,7 @@ function App() {
               </div>
             ))}
           </div>
+          </div>
 
           <div className="sidebar-footer">
             <div className="sidebar-footer-text">J.A.R.V.I.S · {modelName} · Private Server</div>
@@ -805,26 +881,7 @@ function App() {
       
       <main className="main-area">
         {/* Interactive arc reactor behind the chat — parallax-tilts to the cursor, ramps while thinking. */}
-        <div className="chat-reactor-bg" aria-hidden="true">
-          <svg viewBox="0 0 400 400" width="540" height="540">
-            <circle cx="200" cy="200" r="192" fill="none" stroke="#67C7EB" strokeWidth="1" opacity="0.5" />
-            <circle cx="200" cy="200" r="160" fill="none" stroke="#67C7EB" strokeWidth="1.5" strokeDasharray="22 14" opacity="0.6">
-              <animateTransform attributeName="transform" type="rotate" from="0 200 200" to="360 200 200" dur="55s" repeatCount="indefinite" />
-            </circle>
-            <circle cx="200" cy="200" r="124" fill="none" stroke="#67C7EB" strokeWidth="1" strokeDasharray="6 11" opacity="0.5">
-              <animateTransform attributeName="transform" type="rotate" from="360 200 200" to="0 200 200" dur="40s" repeatCount="indefinite" />
-            </circle>
-            <circle cx="200" cy="200" r="90" fill="none" stroke="#67C7EB" strokeWidth="2" opacity="0.7" />
-            <circle cx="200" cy="200" r="62" fill="none" stroke="#67C7EB" strokeWidth="1" strokeDasharray="3 9" opacity="0.5">
-              <animateTransform attributeName="transform" type="rotate" from="0 200 200" to="360 200 200" dur="24s" repeatCount="indefinite" />
-            </circle>
-            <circle cx="200" cy="200" r="40" fill="none" stroke="#67C7EB" strokeWidth="1.5" opacity="0.8" />
-            <g stroke="#67C7EB" strokeWidth="1" opacity="0.5">
-              <line x1="200" y1="8" x2="200" y2="40" /><line x1="200" y1="360" x2="200" y2="392" />
-              <line x1="8" y1="200" x2="40" y2="200" /><line x1="360" y1="200" x2="392" y2="200" />
-            </g>
-          </svg>
-        </div>
+        {renderChatReactor()}
         <div className="top-bar">
           <button className="sidebar-toggle" onClick={toggleSidebar} aria-label="Toggle menu" title="Toggle sidebar">☰</button>
           <span className="top-title">{currentTitle}</span>
