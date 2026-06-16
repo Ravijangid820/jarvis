@@ -481,6 +481,10 @@ function App() {
         <span className="hud-corner tl" /><span className="hud-corner tr" />
         <span className="hud-corner bl" /><span className="hud-corner br" />
       </div>
+      {/* Ambient parallax particle field — three drifting layers for depth. */}
+      <div className="ambient-particles" aria-hidden="true">
+        <span className="pfield p1" /><span className="pfield p2" /><span className="pfield p3" />
+      </div>
       <div className={`sidebar-overlay ${sidebarOpen ? 'visible' : ''}`} onClick={() => setSidebarOpen(false)}></div>
       
       <aside className={`sidebar ${sidebarOpen ? 'open' : ''} ${sidebarCollapsed ? 'collapsed' : ''}`}>
@@ -607,7 +611,7 @@ function App() {
           </div>
 
           <div className="sidebar-footer">
-            <div className="sidebar-footer-text">J.A.R.V.I.S · Qwen3.5-2B · Private Server</div>
+            <div className="sidebar-footer-text">J.A.R.V.I.S · {modelName} · Private Server</div>
           </div>
         </div>
       </aside>
@@ -616,7 +620,7 @@ function App() {
         <div className="top-bar">
           <button className="sidebar-toggle" onClick={toggleSidebar} aria-label="Toggle menu" title="Toggle sidebar">☰</button>
           <span className="top-title">{currentTitle}</span>
-          <span className="top-model">QW-2B</span>
+          <span className="top-model">{modelName}</span>
           <span className="top-speed">{speed}</span>
           <div className="top-spacer"></div>
           <div className="conn-badge">
