@@ -4,6 +4,34 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-16 — UI overhaul & follow-up fixes
+
+### UI / frontend
+- Cinematic Stark/JARVIS HUD: boot sequence (click-to-skip), arc-reactor motifs, holographic
+  panels, login/welcome/chat states.
+- **Admin panel now renders in the HUD theme.** It referenced CSS variables (`--accent-cyan`,
+  `--font-mono`, …) that `style.css` never defined, so it fell back to unstyled browser
+  defaults; aliased those names onto the holographic palette.
+- **Self-hosted fonts** (Rajdhani + JetBrains Mono, SIL OFL, Latin subset) under
+  `static/fonts/`, served same-origin. The UI no longer fetches from Google Fonts — it renders
+  correctly fully offline with zero third-party requests. Generator: `src/scripts/fetch_fonts.py`.
+- Faster first paint (non-blocking font `<link>` instead of CSS `@import`), instant-while-
+  streaming auto-scroll, page `<title>` set to J.A.R.V.I.S.
+- **Working sidebar toggle** — collapse/expand on desktop, drawer on mobile (was wired only to
+  open, dead on desktop).
+- **Non-fighting chat scroll** — sticks to the bottom only when you're already near it, so
+  scrolling up mid-reply no longer yanks you back down; new messages/session loads snap.
+- **Functional Stop button** — cancels an in-flight generation via `AbortController`, keeps the
+  partial reply, and frees the server's LLM slot (the upstream stream is closed).
+
+### Security / correctness
+- **Fixed a cross-user IDOR**: `DELETE /sessions/{id}` deleted conversation history and vectors
+  by `session_id` with no ownership check; now authorizes via `require_owned_session` first.
+- Serve `/favicon.svg` (previously 404 on every page load); cache content-hashed `/assets`
+  bundles immutably instead of `no-store`.
+
+---
+
 ## 2026-06-16 — Hardening, refactor & documentation
 
 ### Security

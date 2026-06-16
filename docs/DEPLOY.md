@@ -23,23 +23,33 @@ cd /srv/jarvis
 sudo cp systemd/llama-fast.service systemd/jarvis-orchestrator.service /etc/systemd/system/
 sudo systemctl daemon-reload
 
-# 2) Stop the orchestrator so the vector re-embed can run without races
+# 2) Build the frontend — REQUIRED whenever anything under frontend/ changed.
+#    The server serves frontend/dist (gitignored, not built automatically); without
+#    this, GET / returns 404 and you keep serving the old bundle.
+cd frontend && npm ci && npm run build && cd ..
+
+# 3) Stop the orchestrator so the vector re-embed can run without races
 sudo systemctl stop jarvis-orchestrator
 
-# 3) Restart the LLM with the larger context window (-c 4096)
+# 4) Restart the LLM with the larger context window (-c 4096)
 sudo systemctl restart llama-fast
 
-# 4) One-time memory migration: rebuild the vector store into the cosine collection
+# 5) One-time memory migration: rebuild the vector store into the cosine collection
 uv run python src/scripts/reembed_memory.py
 
-# 5) Start the orchestrator (init_db drops the legacy FTS tables, starts the workers)
+# 6) Start the orchestrator (init_db drops the legacy FTS tables, starts the workers)
 sudo systemctl start jarvis-orchestrator
 
-# 6) Verify
+# 7) Verify
 curl -s http://localhost:5000/health
 sudo systemctl status jarvis-orchestrator --no-pager | head -20
 journalctl -u jarvis-orchestrator -n 40 --no-pager
 ```
+
+Steps 4–5 (LLM restart, vector re-embed) are one-time migrations. For a **routine update**
+the cycle is: pull, rebuild the frontend if `frontend/` changed (step 2), then
+`sudo systemctl restart jarvis-orchestrator`. A backend-only change needs just the restart;
+a frontend-only change needs just the rebuild (the bundle is served fresh, no restart needed).
 
 ## Network exposure: Tailscale + localhost only
 
