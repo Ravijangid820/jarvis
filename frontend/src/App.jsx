@@ -56,7 +56,7 @@ function App() {
   const [repeatPenalty, setRepeatPenalty] = useState(1.1)
   const [presencePenalty, setPresencePenalty] = useState(0.0)
   const [freqPenalty, setFreqPenalty] = useState(0.0)
-  const [nPredict, setNPredict] = useState(1024)
+  const [nPredict, setNPredict] = useState(2048)   // backend clamps this to fit the 4096-token context
   const [seed, setSeed] = useState(-1)
   const [voice, setVoice] = useState(false)
   const [sysPrompt, setSysPrompt] = useState("")
@@ -541,15 +541,17 @@ function App() {
     else if (e.key === "Enter") { e.preventDefault(); runPaletteItem(items[paletteIndex]) }
   }
 
-  // Detailed arc reactor behind the chat: glowing gradient core, a ring of coil
-  // segments, a tick-marked bezel, and counter-rotating detail rings.
+  // Realistic Stark-style arc reactor behind the chat: a metallic bezel with bolts,
+  // a ring of wound copper coils (trapezoids with winding detail), radial spokes,
+  // the iconic center triangle, and a hot gradient core.
   const renderChatReactor = () => (
     <div className="chat-reactor-bg" aria-hidden="true">
-      <svg viewBox="0 0 400 400" width="580" height="580">
+      <svg viewBox="0 0 400 400" width="600" height="600">
         <defs>
           <radialGradient id="reactorCore">
-            <stop offset="0%" stopColor="#eafcff" stopOpacity="1" />
-            <stop offset="38%" stopColor="#67C7EB" stopOpacity="0.85" />
+            <stop offset="0%" stopColor="#ffffff" stopOpacity="1" />
+            <stop offset="22%" stopColor="#dff6ff" stopOpacity="0.95" />
+            <stop offset="55%" stopColor="#67C7EB" stopOpacity="0.7" />
             <stop offset="100%" stopColor="#67C7EB" stopOpacity="0" />
           </radialGradient>
           <radialGradient id="reactorHalo">
@@ -557,40 +559,63 @@ function App() {
             <stop offset="100%" stopColor="#67C7EB" stopOpacity="0" />
           </radialGradient>
         </defs>
-        <circle cx="200" cy="200" r="150" fill="url(#reactorHalo)" />
-        {/* outer bezel + tick marks */}
-        <circle cx="200" cy="200" r="192" fill="none" stroke="#67C7EB" strokeWidth="1" opacity="0.4" />
-        <circle cx="200" cy="200" r="184" fill="none" stroke="#67C7EB" strokeWidth="0.5" opacity="0.3" />
-        <g stroke="#67C7EB" opacity="0.55">
+        <circle cx="200" cy="200" r="155" fill="url(#reactorHalo)" />
+
+        {/* metallic bezel: double ring + tick marks + bolts */}
+        <circle cx="200" cy="200" r="194" fill="none" stroke="#67C7EB" strokeWidth="2" opacity="0.45" />
+        <circle cx="200" cy="200" r="186" fill="none" stroke="#67C7EB" strokeWidth="0.6" opacity="0.3" />
+        <g stroke="#67C7EB" opacity="0.5">
           {Array.from({ length: 72 }).map((_, i) => (
             <line key={i} x1="200" y1="14" x2="200" y2={i % 6 === 0 ? "26" : "20"}
-              strokeWidth={i % 6 === 0 ? 1.4 : 0.6} transform={`rotate(${i * 5} 200 200)`} />
+              strokeWidth={i % 6 === 0 ? 1.4 : 0.5} transform={`rotate(${i * 5} 200 200)`} />
           ))}
         </g>
+        <g fill="#67C7EB" opacity="0.55">
+          {Array.from({ length: 12 }).map((_, i) => (
+            <circle key={i} cx="200" cy="22" r="2.6" transform={`rotate(${i * 30} 200 200)`} />
+          ))}
+        </g>
+
         {/* rotating dashed scan ring */}
-        <circle cx="200" cy="200" r="160" fill="none" stroke="#67C7EB" strokeWidth="1.5" strokeDasharray="2 12" opacity="0.6">
+        <circle cx="200" cy="200" r="162" fill="none" stroke="#67C7EB" strokeWidth="1.5" strokeDasharray="2 13" opacity="0.55">
           <animateTransform attributeName="transform" type="rotate" from="0 200 200" to="360 200 200" dur="60s" repeatCount="indefinite" />
         </circle>
-        {/* signature coil-segment ring */}
-        <g opacity="0.7">
+
+        {/* wound copper-coil ring (the signature reactor look) */}
+        <g opacity="0.75">
           {Array.from({ length: 10 }).map((_, i) => (
             <g key={i} transform={`rotate(${i * 36} 200 200)`}>
-              <rect x="188" y="78" width="24" height="46" rx="5" fill="rgba(103,199,235,0.06)" stroke="#67C7EB" strokeWidth="1.4" />
-              <line x1="200" y1="84" x2="200" y2="118" stroke="#67C7EB" strokeWidth="0.6" opacity="0.6" />
+              <path d="M182 78 L218 78 L212 124 L188 124 Z" fill="rgba(103,199,235,0.07)" stroke="#67C7EB" strokeWidth="1.6" strokeLinejoin="round" />
+              <line x1="185.5" y1="90" x2="214.5" y2="90" stroke="#67C7EB" strokeWidth="0.7" opacity="0.7" />
+              <line x1="186.5" y1="101" x2="213.5" y2="101" stroke="#67C7EB" strokeWidth="0.7" opacity="0.7" />
+              <line x1="187.5" y1="112" x2="212.5" y2="112" stroke="#67C7EB" strokeWidth="0.7" opacity="0.7" />
             </g>
           ))}
-          <animateTransform attributeName="transform" type="rotate" from="0 200 200" to="360 200 200" dur="120s" repeatCount="indefinite" />
+          <animateTransform attributeName="transform" type="rotate" from="0 200 200" to="360 200 200" dur="140s" repeatCount="indefinite" />
         </g>
-        {/* inner rings */}
-        <circle cx="200" cy="200" r="66" fill="none" stroke="#67C7EB" strokeWidth="2" opacity="0.85" />
-        <circle cx="200" cy="200" r="54" fill="none" stroke="#67C7EB" strokeWidth="1" strokeDasharray="4 7" opacity="0.5">
+
+        {/* radial spokes between coils */}
+        <g stroke="#67C7EB" strokeWidth="0.8" opacity="0.4">
+          {Array.from({ length: 10 }).map((_, i) => (
+            <line key={i} x1="200" y1="76" x2="200" y2="128" transform={`rotate(${i * 36 + 18} 200 200)`} />
+          ))}
+        </g>
+
+        {/* inner housing rings */}
+        <circle cx="200" cy="200" r="72" fill="none" stroke="#67C7EB" strokeWidth="2.5" opacity="0.85" />
+        <circle cx="200" cy="200" r="64" fill="none" stroke="#67C7EB" strokeWidth="0.6" opacity="0.4" />
+        <circle cx="200" cy="200" r="52" fill="none" stroke="#67C7EB" strokeWidth="1" strokeDasharray="4 7" opacity="0.5">
           <animateTransform attributeName="transform" type="rotate" from="360 200 200" to="0 200 200" dur="26s" repeatCount="indefinite" />
         </circle>
-        {/* glowing core */}
-        <circle cx="200" cy="200" r="46" fill="url(#reactorCore)">
-          <animate attributeName="opacity" values="0.7;1;0.7" dur="3s" repeatCount="indefinite" />
+
+        {/* iconic center triangle */}
+        <path d="M200 168 L227 214 L173 214 Z" fill="none" stroke="#9fe4ff" strokeWidth="1.6" strokeLinejoin="round" opacity="0.7" />
+
+        {/* hot core */}
+        <circle cx="200" cy="200" r="50" fill="url(#reactorCore)">
+          <animate attributeName="opacity" values="0.75;1;0.75" dur="3s" repeatCount="indefinite" />
         </circle>
-        <circle cx="200" cy="200" r="15" fill="#eafcff" opacity="0.95" />
+        <circle cx="200" cy="200" r="13" fill="#ffffff" opacity="0.97" />
       </svg>
     </div>
   )
