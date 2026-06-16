@@ -58,8 +58,15 @@ TEMPERATURE: float = CONFIG["llm"]["default_temperature"]
 MAX_INPUT_LENGTH: int = CONFIG["orchestrator"]["max_input_length"]
 RATE_LIMIT_RPM: int = CONFIG["orchestrator"]["rate_limit_requests_per_minute"]
 ALLOWED_ORIGINS: List[str] = CONFIG["orchestrator"].get("allowed_origins", [])
-DB_PATH: str = CONFIG["memory"]["db_path"]
-CHROMA_DB_PATH: str = CONFIG["memory"].get("chroma_db_path", str(BASE_DIR / "memory" / "chroma_db"))
+def _resolve(p: str) -> str:
+    """Absolute paths pass through; relative ones resolve against BASE_DIR (so a fresh
+    checkout keeps its data under the repo, while the deployed absolute paths are unchanged)."""
+    path = Path(p)
+    return str(path if path.is_absolute() else (BASE_DIR / path))
+
+
+DB_PATH: str = _resolve(CONFIG["memory"]["db_path"])
+CHROMA_DB_PATH: str = _resolve(CONFIG["memory"].get("chroma_db_path", "memory/chroma_db"))
 MAX_CONTEXT_MESSAGES: int = CONFIG["memory"]["max_context_messages"]
 SYSTEM_PROMPT: str = CONFIG["system_prompt"]
 

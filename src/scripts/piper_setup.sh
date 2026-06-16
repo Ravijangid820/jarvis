@@ -1,8 +1,9 @@
 #!/bin/bash
-# Script to install Piper TTS and the default British Male voice
+# Script to install Piper TTS and the default British Male voice.
+# Path derives from the repo location, so it works in any checkout/container.
 set -e
 
-PIPER_DIR="/srv/jarvis/piper"
+PIPER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/piper"
 mkdir -p "$PIPER_DIR"
 cd "$PIPER_DIR"
 

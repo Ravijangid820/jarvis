@@ -4,6 +4,22 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-16 — Setup scripts (fresh-clone / container bootstrap)
+
+- `src/scripts/setup.sh` — one-shot, idempotent bootstrap: `uv sync`, config from example,
+  frontend build, DB init, admin user, native builds, model downloads. Toggles: `SKIP_NATIVE`,
+  `SKIP_MODELS`, `ADMIN_USER`/`ADMIN_PASS`.
+- `src/scripts/download_models.sh` — embedding model (HF cache), Piper, whisper `base.en`, and
+  the LLM GGUF (`LLM_GGUF_URL`, since the source isn't pinned). Non-fatal per step.
+- `src/scripts/build_native.sh` — clone + build whisper.cpp (v1.8.6) and llama.cpp (AVX-only)
+  into the repo.
+- `piper_setup.sh` made repo-relative (was hardcoded to /srv/jarvis).
+- Data paths are now portable: relative `db_path`/`chroma_db_path` resolve against `BASE_DIR`
+  (example config switched to relative paths); `init_db()` creates the data dir. Absolute paths
+  on the deployed box are unchanged. README gains a "From a fresh clone" Quick Start.
+
+---
+
 ## 2026-06-16 — Lazy model load, offline HF, end-to-end auth tests
 
 - **Embedding model loads lazily at startup, not at import.** `memory.init_embeddings()`

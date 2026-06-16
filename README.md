@@ -22,6 +22,29 @@ text-to-speech — running entirely on a 2011-era laptop in a Proxmox LXC. No cl
 
 ## Quick Start
 
+### From a fresh clone (system or container)
+
+```bash
+# One-shot bootstrap: uv env, config, frontend build, DB, native engines, models.
+# Idempotent. Toggles: SKIP_NATIVE=1, SKIP_MODELS=1, ADMIN_USER=… ADMIN_PASS=…
+bash src/scripts/setup.sh
+
+# Or run the pieces individually:
+uv sync                                   # Python env from pyproject + uv.lock
+cp config/jarvis.example.json config/jarvis.json   # then review it
+bash src/scripts/build_native.sh          # whisper.cpp + llama.cpp (AVX-only)
+bash src/scripts/download_models.sh       # embedding (HF) · Piper · whisper base.en · LLM GGUF
+(cd frontend && npm ci && npm run build)  # SPA bundle (served at /)
+uv run python src/scripts/manage.py create-admin <user> <pass>
+```
+
+Paths are repo-relative (data lands under the checkout). The **LLM GGUF source isn't pinned**
+in the repo — set `LLM_GGUF_URL=<url>` for the download, or drop the file under `models/`. The
+embedding model is gated (Gemma license): accept its terms and `uv run huggingface-cli login`
+(or set `HF_TOKEN`).
+
+### On an already-provisioned box
+
 ```bash
 # Start both services (auto-enabled on boot)
 systemctl start llama-fast jarvis-orchestrator

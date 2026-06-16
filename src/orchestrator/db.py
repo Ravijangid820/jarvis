@@ -1,5 +1,6 @@
 """SQLite access: connection factory + schema initialization."""
 import sqlite3
+from pathlib import Path
 
 from auth import hash_token
 from config import DB_PATH, SCHEMA_PATH
@@ -58,6 +59,8 @@ def init_db():
     if not SCHEMA_PATH.exists():
         # Fail loudly — a silent no-op leaves every query failing with "no such table".
         raise RuntimeError(f"schema.sql not found at {SCHEMA_PATH}; cannot initialize the database")
+    # The data dir is gitignored, so it won't exist on a fresh checkout — create it.
+    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     conn = get_db()
     try:
         with open(SCHEMA_PATH, "r") as f:
