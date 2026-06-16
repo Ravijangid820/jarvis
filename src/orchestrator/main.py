@@ -70,19 +70,23 @@ def check_rate_limit(key: str) -> bool:
     return True
 
 
-def _apply_security_headers(response: Response) -> Response:
+def _apply_security_headers(response: Response, cache: str = "no-store") -> Response:
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
-    response.headers["Cache-Control"] = "no-store"
+    response.headers["Cache-Control"] = cache
     return response
 
 
 @app.middleware("http")
 async def security_middleware(request: Request, call_next):
     path = request.url.path
-    if (request.method == "OPTIONS" or path in ["/health", "/", "/admin", "/auth/login"]
+    if (request.method == "OPTIONS" or path in ["/health", "/", "/admin", "/auth/login", "/favicon.svg"]
             or path.startswith("/static/") or path.startswith("/assets/")):
-        return _apply_security_headers(await call_next(request))
+        resp = await call_next(request)
+        # Vite emits content-hashed bundles under /assets — safe to cache forever.
+        if path.startswith("/assets/"):
+            return _apply_security_headers(resp, "public, max-age=31536000, immutable")
+        return _apply_security_headers(resp)
 
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
@@ -535,6 +539,16 @@ def serve_admin():
     if not ADMIN_HTML.exists():
         raise HTTPException(status_code=404)
     return FileResponse(ADMIN_HTML, media_type="text/html")
+
+
+@app.get("/favicon.svg")
+def serve_favicon():
+    # index.html links /favicon.svg, but only /assets and /static are mounted, so
+    # the dist-root favicon would 404 on every page load without this route.
+    favicon = REACT_DIST_DIR / "favicon.svg"
+    if not favicon.exists():
+        raise HTTPException(status_code=404)
+    return FileResponse(favicon, media_type="image/svg+xml")
 
 
 if REACT_DIST_DIR.exists():
