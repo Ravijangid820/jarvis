@@ -198,7 +198,7 @@ button, input, textarea { font-family: inherit; outline: none; }
 .copy-btn { background: rgba(103, 199, 235, 0.1); border: 1px solid var(--holo-cyan); color: var(--holo-cyan); font-family: var(--font-data); font-size: 0.6rem; padding: 2px 6px; cursor: pointer; text-transform: uppercase; transition: 0.2s; clip-path: var(--clip-angle-sm); }
 .copy-btn:hover { background: var(--holo-cyan); color: var(--bg-void); }
 
-.msg-content { font-size: 0.95rem; line-height: 1.6; color: #d0effc; font-family: system-ui, sans-serif; white-space: pre-wrap; }
+.msg-content { font-size: 0.95rem; line-height: 1.6; color: #d0effc; font-family: system-ui, sans-serif; }
 .msg-content p { margin-bottom: 10px; }
 .msg-content code { font-family: var(--font-data); font-size: 0.85rem; background: rgba(103, 199, 235, 0.1); color: var(--holo-cyan); padding: 2px 6px; border-radius: 3px; }
 .msg-content pre { font-family: var(--font-data); font-size: 0.85rem; background: #010810; border: 1px solid rgba(103, 199, 235, 0.3); padding: 15px; margin: 15px 0; overflow-x: auto; clip-path: var(--clip-angle-sm); }
@@ -641,6 +641,42 @@ html[data-theme="ember"]    body { filter: hue-rotate(-156deg) saturate(1.2); }
 .tg-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; }
 .tg-val { font-family: var(--font-data); font-size: 1.1rem; color: var(--holo-cyan); text-shadow: 0 0 8px var(--holo-cyan-glow); }
 .tg-lbl { font-size: 0.5rem; letter-spacing: 0.2em; color: rgba(103,199,235,0.5); }
+
+/* ============================================================
+   MARK VII — neural oscilloscope · richer markdown
+   ============================================================ */
+
+/* Sidebar "neural activity" oscilloscope: idles low, spikes while thinking. */
+.oscilloscope {
+  height: 50px; margin-top: 14px; overflow: hidden; position: relative;
+  border: 1px solid rgba(103,199,235,0.15); background: rgba(103,199,235,0.025);
+  clip-path: var(--clip-angle-sm);
+}
+.osc-svg { width: 100%; height: 100%; display: block; --osc-amp: 0.4; }
+.app-container.thinking .osc-svg { --osc-amp: 1; }
+.osc-wave {
+  filter: drop-shadow(0 0 4px var(--holo-cyan-glow));
+  transform-box: fill-box; transform-origin: center;
+  animation: oscScroll 7s linear infinite;
+}
+@keyframes oscScroll {
+  from { transform: translateX(0) scaleY(var(--osc-amp)); }
+  to   { transform: translateX(-50%) scaleY(var(--osc-amp)); }
+}
+.app-container.thinking .osc-wave { animation-duration: 1.8s; }
+
+/* Richer markdown in replies. */
+.md-line { min-height: 0.4em; }
+.md-gap { height: 0.55em; }
+.md-h { font-weight: 700; color: #eaffff; margin: 10px 0 5px; text-shadow: 0 0 8px var(--holo-cyan-glow); }
+.md-h1 { font-size: 1.15rem; letter-spacing: 0.02em; }
+.md-h2 { font-size: 1.05rem; }
+.md-h3 { font-size: 0.98rem; color: var(--holo-cyan); }
+.md-list { margin: 6px 0 6px 20px; }
+.md-list li { margin: 3px 0; }
+.md-list li::marker { color: var(--holo-cyan); }
+.msg-content a { color: var(--holo-cyan); text-decoration: underline; text-underline-offset: 2px; }
+.msg-content a:hover { text-shadow: 0 0 8px var(--holo-cyan-glow); }
 
 /* Respect reduced-motion */
 @media (prefers-reduced-motion: reduce) {

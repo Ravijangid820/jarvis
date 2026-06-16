@@ -3,6 +3,18 @@ import './index.css'
 
 const API = ""
 
+// Static "neural activity" waveform path (two harmonics; seamless loop over the tile).
+const OSC_PATH = (() => {
+  const w = 480, mid = 30, amp = 18, P = 8, steps = 240
+  let d = `M0 ${mid}`
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps, x = t * w
+    const y = mid + amp * (0.7 * Math.sin(t * 2 * Math.PI * P) + 0.3 * Math.sin(t * 2 * Math.PI * P * 2))
+    d += ` L${x.toFixed(1)} ${y.toFixed(1)}`
+  }
+  return d
+})()
+
 function App() {
   const [token, setToken] = useState(localStorage.getItem("jarvis_token"))
   const [role, setRole] = useState(localStorage.getItem("jarvis_role") || "user")
@@ -588,24 +600,56 @@ function App() {
     setTimeout(() => { btn.textContent = "Copy"; btn.classList.remove("ok") }, 1200)
   }
 
-  // Very basic markdown rendering for React (code blocks, bold, etc)
+  // Inline markdown: **bold**, `code`, and [links](url). Builds React text nodes
+  // only (no dangerouslySetInnerHTML), so it's XSS-safe by construction.
+  const renderInline = (text) => {
+    const nodes = []
+    const re = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)\s]+\))/g
+    let last = 0, m, i = 0
+    while ((m = re.exec(text)) !== null) {
+      if (m.index > last) nodes.push(text.slice(last, m.index))
+      const tok = m[0]
+      if (tok.startsWith("**")) nodes.push(<strong key={i}>{tok.slice(2, -2)}</strong>)
+      else if (tok.startsWith("`")) nodes.push(<code key={i}>{tok.slice(1, -1)}</code>)
+      else {
+        const mm = tok.match(/\[([^\]]+)\]\(([^)\s]+)\)/)
+        const href = /^https?:\/\//i.test(mm[2]) ? mm[2] : "#"   // only allow http(s) links
+        nodes.push(<a key={i} href={href} target="_blank" rel="noopener noreferrer">{mm[1]}</a>)
+      }
+      last = m.index + tok.length; i++
+    }
+    if (last < text.length) nodes.push(text.slice(last))
+    return nodes
+  }
+
+  // Block markdown: fenced code, #/##/### headings, -/* and 1. lists, paragraphs.
   const renderMessageContent = (content) => {
     if (!content) return null
-    const parts = content.split(/(```[\s\S]*?```)/g)
-    return parts.map((part, idx) => {
+    return content.split(/(```[\s\S]*?```)/g).map((part, idx) => {
       if (part.startsWith("```") && part.endsWith("```")) {
         const code = part.slice(3, -3).replace(/^\w+\n/, "")
         return <pre key={idx}><code>{code}</code></pre>
       }
-      const inlineParts = part.split(/(`[^`]+`)/g)
-      return <span key={idx}>{inlineParts.map((inline, iIdx) => {
-        if (inline.startsWith("`") && inline.endsWith("`")) return <code key={iIdx}>{inline.slice(1, -1)}</code>
-        const bolds = inline.split(/(\*\*[^*]+\*\*)/g)
-        return <span key={iIdx}>{bolds.map((b, bIdx) => {
-          if (b.startsWith("**") && b.endsWith("**")) return <strong key={bIdx}>{b.slice(2, -2)}</strong>
-          return b.split("\n").map((line, lIdx) => <React.Fragment key={lIdx}>{line}{lIdx < b.split("\n").length - 1 && <br/>}</React.Fragment>)
-        })}</span>
-      })}</span>
+      const blocks = []
+      let list = null
+      const flush = () => {
+        if (!list) return
+        const Tag = list.type
+        blocks.push(<Tag key={blocks.length} className="md-list">{list.items.map((it, i) => <li key={i}>{renderInline(it)}</li>)}</Tag>)
+        list = null
+      }
+      part.split("\n").forEach(line => {
+        const h = line.match(/^(#{1,3})\s+(.*)$/)
+        const ul = line.match(/^\s*[-*]\s+(.*)$/)
+        const ol = line.match(/^\s*\d+\.\s+(.*)$/)
+        if (h) { flush(); blocks.push(<div key={blocks.length} className={`md-h md-h${h[1].length}`}>{renderInline(h[2])}</div>) }
+        else if (ul) { if (!list || list.type !== "ul") { flush(); list = { type: "ul", items: [] } } list.items.push(ul[1]) }
+        else if (ol) { if (!list || list.type !== "ol") { flush(); list = { type: "ol", items: [] } } list.items.push(ol[1]) }
+        else if (line.trim() === "") { flush(); blocks.push(<div key={blocks.length} className="md-gap" />) }
+        else { flush(); blocks.push(<div key={blocks.length} className="md-line">{renderInline(line)}</div>) }
+      })
+      flush()
+      return <span key={idx}>{blocks}</span>
     })
   }
 
@@ -748,6 +792,11 @@ function App() {
             <div className="stat-row">
               <span>Uplink</span>
               <span className="stat-val">{uplink}</span>
+            </div>
+            <div className="oscilloscope">
+              <svg className="osc-svg" viewBox="0 0 240 60" preserveAspectRatio="none">
+                <path className="osc-wave" d={OSC_PATH} fill="none" stroke="var(--holo-cyan)" strokeWidth="1.5" />
+              </svg>
             </div>
           </div>
 
