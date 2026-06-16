@@ -29,6 +29,12 @@ try:
     memory_collection = chroma_client.get_or_create_collection(
         name="jarvis_memory_cos", metadata={"hnsw:space": "cosine"}
     )
+    # Surface the embedding dimension + collection size at startup. If EMBED_MODEL_NAME
+    # ever changes to a different dimension, get_or_create returns the OLD collection and
+    # the first add() would fail inside the worker — logging this makes that diagnosable.
+    logger.info("Embeddings: %s (dim=%d), collection 'jarvis_memory_cos' has %d vectors",
+                EMBED_MODEL_NAME, _embed_model.get_sentence_embedding_dimension(),
+                memory_collection.count())
 except Exception as e:
     logger.error("Failed to initialize ChromaDB / embedding model: %s", e)
     _embed_model = None
@@ -167,11 +173,17 @@ def get_user_knowledge_list(user_id: int) -> List[Dict[str, Any]]:
         conn.close()
 
 
-def _find_duplicate_fact(content: str, existing_rows: List[Any]) -> Optional[int]:
-    """Return the id of an existing fact that's a restatement of `content`, else None."""
+def _find_duplicate_fact(content: str, existing_rows: List[Any], use_embeddings: bool = True) -> Optional[int]:
+    """Return the id of an existing fact that's a restatement of `content`, else None.
+
+    use_embeddings=False forces the cheap word-overlap path — used on the request
+    thread (POST /knowledge) so we never run the 300M model inline (it would burn a
+    threadpool worker and contend with the LLM for CPU). The background fact worker
+    keeps the embedding-based semantic dedup.
+    """
     if not existing_rows:
         return None
-    if _embed_model is not None:
+    if use_embeddings and _embed_model is not None:
         # One batched embedding call: [new, *existing]; vectors are normalized so dot = cosine.
         vecs = _embed_documents([content] + [r["content"] for r in existing_rows])
         new_vec = vecs[0]
@@ -192,15 +204,19 @@ def _find_duplicate_fact(content: str, existing_rows: List[Any]) -> Optional[int
     return None
 
 
-def store_fact(user_id: int, category: str, content: str, source: str = "auto") -> int:
-    """Store a fact, updating an existing one if this is a semantic restatement of it."""
+def store_fact(user_id: int, category: str, content: str, source: str = "auto",
+               use_embeddings: bool = True) -> int:
+    """Store a fact, updating an existing one if this is a semantic restatement of it.
+
+    use_embeddings=False (request path) skips inline embedding for dedup; see _find_duplicate_fact.
+    """
     conn = get_db()
     try:
         existing = conn.execute(
             "SELECT id, content FROM user_knowledge WHERE user_id = ? AND category = ?",
             (user_id, category)
         ).fetchall()
-        dup_id = _find_duplicate_fact(content, existing)
+        dup_id = _find_duplicate_fact(content, existing, use_embeddings=use_embeddings)
         if dup_id is not None:
             conn.execute(
                 "UPDATE user_knowledge SET content = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",

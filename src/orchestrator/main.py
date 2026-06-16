@@ -553,7 +553,9 @@ def add_knowledge(req: KnowledgeFactRequest, request: Request):
     category = req.category.lower().strip()
     if category not in VALID_FACT_CATEGORIES:
         category = "other"
-    fact_id = memory.store_fact(request.state.user_id, category, content, source="manual")
+    # Request path: skip inline embedding (word-overlap dedup only) to avoid burning
+    # a worker on the 300M model and contending with the LLM.
+    fact_id = memory.store_fact(request.state.user_id, category, content, source="manual", use_embeddings=False)
     return {"id": fact_id, "status": "ok"}
 
 

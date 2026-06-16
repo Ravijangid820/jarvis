@@ -4,6 +4,18 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-16 — Reliability polish
+
+- `POST /knowledge` no longer runs the 300M embedding model inline on the request
+  thread — manual fact-dedup uses the cheap word-overlap path; the background fact
+  worker keeps the embedding-based semantic dedup. (Avoids CPU contention with the LLM.)
+- `_safe_exec` now only swallows benign "already applied" migration errors and re-raises
+  genuine failures (syntax/locked/etc.) instead of masking them.
+- Log the embedding model dimension + vector count at startup so a future model/dimension
+  change (which would silently break indexing) is diagnosable.
+
+---
+
 ## 2026-06-16 — API-key hashing & React admin console
 
 ### Security

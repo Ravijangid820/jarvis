@@ -19,11 +19,19 @@ def get_db() -> sqlite3.Connection:
 
 
 def _safe_exec(conn: sqlite3.Connection, sql: str):
-    """Run a best-effort migration statement (e.g. ALTER that may already be applied)."""
+    """Run a best-effort migration statement (e.g. ALTER that may already be applied).
+
+    Only swallow the "already applied" cases (duplicate column / already exists / no such
+    object on DROP IF EXISTS); re-raise anything else so a genuinely broken migration is
+    not silently masked into later "no such table"-style failures.
+    """
     try:
         conn.execute(sql)
-    except sqlite3.OperationalError:
-        pass  # column/table already in the expected state
+    except sqlite3.OperationalError as e:
+        msg = str(e).lower()
+        if "duplicate column" in msg or "already exists" in msg or "no such" in msg:
+            return  # already in the expected state — benign
+        raise
 
 
 def _migrate_plaintext_api_keys(conn: sqlite3.Connection):
