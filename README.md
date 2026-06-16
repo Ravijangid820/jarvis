@@ -142,15 +142,26 @@ deployed, and verified live. Highlights worth a look:
 - **Refactored a 1,300-line `main.py`** into an acyclic module graph, under a pytest + ruff + CI
   safety net.
 
+## Documentation
+
+Full docs live in **[docs/](docs/README.md)**:
+
+| Doc | What's in it |
+|---|---|
+| [Architecture](docs/ARCHITECTURE.md) | Components, module graph, design decisions, security model |
+| [Workflows](docs/WORKFLOWS.md) | Chat lifecycle, prompt token-budgeting, RAG, fact extraction, voice loop |
+| [API Reference](docs/API.md) | Every HTTP endpoint, auth, request/response shapes |
+| [Specs](docs/SPECS.md) | Hardware, models, performance, config reference, DB schema |
+| [Deploy](docs/DEPLOY.md) | Runbook: units, migrations, firewall, the admin CLI |
+| [Audit](docs/AUDIT.md) | The 81-finding self-audit and fixes |
+
 ## Status
 
 - ✅ LLM Layer (Qwen3.5-2B, llama.cpp, `-c 4096` with prompt token-budgeting)
 - ✅ Speech-to-Text (whisper.cpp, base.en)
-- ✅ Orchestrator (FastAPI, secured — see [docs/AUDIT.md](docs/AUDIT.md))
+- ✅ Orchestrator (FastAPI, modular + secured + tested)
 - ✅ Memory (SQLite + ChromaDB cosine RAG, embeddinggemma-300m, background embedding)
 - ✅ Text-to-Speech (Piper TTS — wired into both `/inbox` and the streaming web UI)
-- ⬜ Home Automation (MQTT + Home Assistant)
+- ⬜ Tool / function calling · ⬜ Home Automation (MQTT + Home Assistant)
 
-See [docs/AUDIT.md](docs/AUDIT.md) for the full code/security audit and
-[docs/DEPLOY.md](docs/DEPLOY.md) for the deploy runbook.
 Checks: `uv run pytest` · `uv run ruff check src/orchestrator src/scripts tests`.

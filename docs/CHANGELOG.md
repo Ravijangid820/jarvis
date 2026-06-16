@@ -4,6 +4,35 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-16 — Hardening, refactor & documentation
+
+### Security
+- **Removed the master API key entirely.** Auth is now web-login sessions or per-user, revocable
+  `api_keys`. The voice listener uses a real key (`config/voice_listener.key`); added
+  `src/scripts/manage.py` (create-admin / reset-password / mint-key) for bootstrap & recovery.
+- Real server-side logout (`/auth/logout`), expired-session purge, per-user rate limiting
+  (admins included), admin-panel XSS escaping, configurable CORS, `system_prompt` length cap.
+
+### Correctness / memory
+- **Fixed the critical context-window bug**: `-c 4096` + char-based prompt token-budgeting that
+  clamps history and completion so context is never silently evicted.
+- Merged system prompt + profile + RAG into a single system message (Qwen template requirement).
+- Wired Piper TTS into the streaming endpoint; surfaced stream errors instead of storing them as
+  replies; never lose the user's turn on failure.
+- Reworked the shared `default` session into per-user sessions with strict ownership checks.
+- RAG: cosine space + correct embeddinggemma query/document prefixes, semantic fact dedup,
+  user-scoped recall, background (off-request-path) embedding; one-time `reembed_memory.py` migration.
+
+### Engineering
+- **Split the 1,300-line `main.py`** into an acyclic module graph
+  (`config → {db, auth, llm} → memory → chat → main`).
+- Added pytest + ruff + GitHub Actions CI; reconciled `schema.sql` (dropped unused FTS5 tables);
+  lifespan handler; safe LLM-response parsing; SQLite `busy_timeout`; log rotation; systemd hardening.
+- First clean git history (secrets + multi-GB binaries gitignored); full self-audit in `AUDIT.md`.
+- Rewrote the documentation set: `ARCHITECTURE`, `WORKFLOWS`, `API`, `SPECS`, `DEPLOY`, docs index.
+
+---
+
 ## 2026-06-02 — Major Improvement Session
 
 ### Added
