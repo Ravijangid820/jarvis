@@ -57,6 +57,7 @@ function App() {
 
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
+  const abortRef = useRef(null)   // AbortController for the in-flight /chat/stream request
   const messagesContainerRef = useRef(null)
   // Whether the chat is "pinned" to the bottom. Auto-scroll only happens while
   // pinned, so streaming never yanks the user back down when they scroll up to read.
@@ -233,6 +234,12 @@ function App() {
     } catch (e) {}
   }
 
+  // Abort the in-flight stream. Closing the connection also lets the server stop
+  // the upstream LLM (its streaming generator is closed), freeing the model slot.
+  const stopGeneration = () => {
+    abortRef.current?.abort()
+  }
+
   // --- Send Message ---
   const send = async (queryOverride) => {
     const userText = (queryOverride || input).trim()
@@ -271,12 +278,16 @@ function App() {
       system_prompt: sysPrompt || undefined
     }
 
+    const controller = new AbortController()
+    abortRef.current = controller
+
     try {
       const startTime = performance.now()
       const res = await fetch(API + "/chat/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
+        signal: controller.signal
       })
 
       if (!res.ok) {
@@ -342,17 +353,30 @@ function App() {
         }
       }
     } catch (e) {
-      console.error(e)
-      // Replace the empty streaming placeholder with a visible error so the UI isn't stuck.
-      setMessages(prev => {
-        const newMsgs = [...prev]
-        const last = newMsgs[newMsgs.length - 1]
-        if (last && last.role === "jarvis" && !last.content) {
-          newMsgs[newMsgs.length - 1] = { role: "jarvis", content: "⚠️ Could not reach Jarvis. Check the connection and try again.", isStreaming: false }
-        }
-        return newMsgs
-      })
+      if (e.name === "AbortError") {
+        // User pressed Stop — keep whatever streamed so far, just end the stream state.
+        setMessages(prev => {
+          const newMsgs = [...prev]
+          const last = newMsgs[newMsgs.length - 1]
+          if (last && last.role === "jarvis") {
+            newMsgs[newMsgs.length - 1] = { ...last, content: last.content || "⏹ Generation stopped.", isStreaming: false }
+          }
+          return newMsgs
+        })
+      } else {
+        console.error(e)
+        // Replace the empty streaming placeholder with a visible error so the UI isn't stuck.
+        setMessages(prev => {
+          const newMsgs = [...prev]
+          const last = newMsgs[newMsgs.length - 1]
+          if (last && last.role === "jarvis" && !last.content) {
+            newMsgs[newMsgs.length - 1] = { role: "jarvis", content: "⚠️ Could not reach Jarvis. Check the connection and try again.", isStreaming: false }
+          }
+          return newMsgs
+        })
+      }
     } finally {
+      abortRef.current = null
       setProcessing(false)
       loadSessions()
       if (inputRef.current) inputRef.current.focus()
@@ -691,7 +715,7 @@ function App() {
               rows={1}
             />
             <span className="char-ct">{input.length}</span>
-            <button className={`send-btn ${processing ? 'stop' : ''}`} onClick={() => send()}
+            <button className={`send-btn ${processing ? 'stop' : ''}`} onClick={() => processing ? stopGeneration() : send()}
               aria-label={processing ? 'Stop' : 'Send message'} title={processing ? 'Stop' : 'Send'}>
               {processing ? '■' : '▶'}
             </button>
