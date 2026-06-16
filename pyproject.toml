@@ -1,0 +1,35 @@
+[project]
+name = "jarvis"
+version = "0.1.0"
+description = "Jarvis AI Orchestrator"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "chromadb>=1.5.9",
+    "fastapi",
+    "sentence-transformers>=5.5.1",
+    "uvicorn",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src/orchestrator"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.lint]
+# Pragmatic set: pyflakes (F) + syntax errors (E9) + bugbear (B).
+select = ["F", "E9", "B"]
+ignore = [
+    "E501",  # line length — not enforced
+    "B904",  # raise-from in handlers: HTTPException translations are intentional, chaining adds noise
+    "B905",  # zip without strict=: used only over sequences of known-equal length
+]

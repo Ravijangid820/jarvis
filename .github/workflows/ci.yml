@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        run: uv python install 3.13
+
+      - name: Install dev dependencies
+        # Only the dev group is needed for lint + the pure unit tests (no model download).
+        run: uv sync --only-group dev
+
+      - name: Ruff
+        run: uv run ruff check src/orchestrator src/scripts tests
+
+      - name: Pytest
+        run: uv run pytest -q

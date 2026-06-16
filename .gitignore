@@ -1,0 +1,46 @@
+# ---- Python ----
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# ---- Virtual environments ----
+.venv
+venv/
+
+# ---- Secrets & runtime config (NEVER commit) ----
+# jarvis.json holds the master API key. Commit jarvis.example.json instead.
+config/jarvis.json
+
+# ---- Runtime data (DB w/ password hashes + auth tokens, vectors, logs) ----
+memory/
+logs/
+backups/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# ---- Large binaries / vendored builds (rebuild from source; see docs) ----
+# Model weights (GGUF, ONNX) — multi-GB, do not version
+models/
+*.gguf
+*.onnx
+*.bin
+# whisper.cpp — vendored upstream, built from source
+whisper/
+# Piper TTS binary + voices — installed via src/scripts/piper_setup.sh
+piper/
+
+# ---- Frontend ----
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# ---- Editor / OS ----
+.DS_Store
+*.swp
+.idea/

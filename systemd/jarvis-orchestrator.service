@@ -1,0 +1,46 @@
+[Unit]
+Description=Jarvis AI Orchestrator - FastAPI Service
+After=network.target llama-fast.service
+# Wants (not Requires): if the LLM backend is down the orchestrator can still start
+# and return 503s for chat while the rest of the API (auth, history) keeps working.
+Wants=llama-fast.service
+Documentation=file:///srv/jarvis/src/orchestrator/main.py
+# Crash-loop backstop: stop retrying if it fails 5 times within 60s.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=/srv/jarvis/src/orchestrator
+Environment="PATH=/root/.local/bin:/home/ubuntu/.local/bin:/usr/local/bin:/usr/bin:/bin"
+# host 0.0.0.0 so loopback (voice listener) AND the Tailscale interface both work;
+# a host firewall restricts tcp:5000 to lo + tailscale0 (see docs/DEPLOY.md).
+ExecStart=/usr/bin/env uv run uvicorn main:app \
+    --host 0.0.0.0 \
+    --port 5000 \
+    --workers 1
+Restart=always
+RestartSec=5
+SyslogIdentifier=jarvis-orchestrator
+
+# --- Security hardening ---
+# ProtectSystem=full (not strict) keeps /usr, /boot, /etc read-only but leaves /srv and
+# /root writable, so uv's sync, the venv, the HuggingFace model cache, the SQLite DB and
+# logs all work without re-downloading the model. Tightening to strict + a dedicated
+# non-root User= is a documented future step (see docs/AUDIT.md, finding 78).
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+
+# --- Resource limits ---
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

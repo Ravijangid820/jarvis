@@ -1,0 +1,24 @@
+{
+    "api_key": "REPLACE_WITH_secrets.token_hex(32)_OUTPUT",
+    "llm": {
+        "fast_brain_url": "http://127.0.0.1:8081/v1/chat/completions",
+        "reasoning_brain_url": "http://127.0.0.1:8080/v1/chat/completions",
+        "active_model": "fast",
+        "request_timeout_seconds": 120,
+        "default_temperature": 0.4,
+        "max_context_tokens": 4096
+    },
+    "orchestrator": {
+        "host": "127.0.0.1",
+        "port": 5000,
+        "max_input_length": 500,
+        "rate_limit_requests_per_minute": 30,
+        "allowed_origins": []
+    },
+    "memory": {
+        "db_path": "/srv/jarvis/memory/jarvis.db",
+        "chroma_db_path": "/srv/jarvis/memory/chroma_db",
+        "max_context_messages": 100
+    },
+    "system_prompt": "You are Jarvis, a highly efficient AI assistant. Keep responses brief and precise. You are running on limited hardware so be concise. /no_think"
+}
