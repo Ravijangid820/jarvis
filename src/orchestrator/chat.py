@@ -120,6 +120,9 @@ def rename_session(session_id: str, title: str, user_id: int):
 
 
 def delete_session(session_id: str, user_id: int):
+    # Authorize first: without this the history/vector deletes below run on any
+    # session_id, letting one user wipe another user's messages (IDOR).
+    require_owned_session(session_id, user_id)
     conn = get_db()
     try:
         msg_ids = [str(r["id"]) for r in conn.execute(
