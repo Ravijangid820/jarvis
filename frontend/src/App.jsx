@@ -831,6 +831,8 @@ function App() {
           <span className="top-model">{modelName}</span>
           <span className="top-speed">{speed}</span>
           <div className="top-spacer"></div>
+          <button className="cmd-btn" onClick={() => { setPaletteQuery(""); setPaletteIndex(0); setPaletteOpen(true) }}
+            title="Command palette (Ctrl/Cmd+K)" aria-label="Open command palette">⌘K</button>
           <div className="telemetry" aria-hidden="true">
             <span className="tele-item" title="generation speed (tok/s), last 24 replies">{renderSparkline(tokHistory)}</span>
             <span className="tele-item"><span className="tele-k">MSGS</span>{messages.length}</span>
@@ -937,7 +939,7 @@ function App() {
               {processing ? '■' : '▶'}
             </button>
           </div>
-          <div className="input-hint">Enter to transmit · Shift+Enter new line · <span className="kbd">⌘K</span> commands</div>
+          <div className="input-hint">Enter to transmit · Shift+Enter new line · <span className="kbd" role="button" tabIndex={0} onClick={() => { setPaletteQuery(""); setPaletteIndex(0); setPaletteOpen(true) }} style={{cursor:'pointer'}}>⌘K</span> commands</div>
         </div>
       </main>
     </div>

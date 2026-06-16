@@ -546,6 +546,14 @@ button, input, textarea { font-family: inherit; outline: none; }
    ============================================================ */
 .kbd { font-family: var(--font-data); font-size: 0.85em; border: 1px solid rgba(103,199,235,0.3); border-radius: 3px; padding: 0 4px; color: rgba(103,199,235,0.7); }
 
+/* Visible command-palette trigger in the top bar. */
+.cmd-btn {
+  background: rgba(103,199,235,0.08); border: 1px solid rgba(103,199,235,0.3);
+  color: var(--holo-cyan); font-family: var(--font-data); font-size: 0.62rem; letter-spacing: 0.1em;
+  padding: 4px 9px; cursor: pointer; clip-path: var(--clip-angle-sm); transition: all 0.2s; flex-shrink: 0;
+}
+.cmd-btn:hover { background: var(--holo-cyan); color: var(--bg-void); box-shadow: 0 0 12px var(--holo-cyan-glow); }
+
 .palette-overlay {
   position: fixed; inset: 0; z-index: 9998;
   background: rgba(2,5,8,0.6); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
