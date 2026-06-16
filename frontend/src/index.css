@@ -455,12 +455,22 @@ button, input, textarea { font-family: inherit; outline: none; }
   margin-top: 18px; display: flex; flex-direction: column; gap: 6px;
   font-family: var(--font-data); font-size: 0.72rem; color: rgba(103,199,235,0.8); text-align: left;
 }
-.boot-log span { opacity: 0; animation: logIn 0.45s forwards; }
+.boot-line { display: flex; justify-content: space-between; gap: 32px; min-width: 264px; opacity: 0; animation: logIn 0.45s forwards; }
+.bl-ok { color: #00ff88; font-weight: 700; letter-spacing: 0.12em; text-shadow: 0 0 6px rgba(0,255,136,0.5); }
 @keyframes logIn { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: translateX(0); } }
 .boot-bar { margin-top: 22px; width: 264px; height: 2px; background: rgba(103,199,235,0.15); overflow: hidden; }
 .boot-bar-fill { height: 100%; width: 0; background: var(--holo-cyan); box-shadow: 0 0 10px var(--holo-cyan); animation: barFill 2.1s ease forwards; }
 @keyframes barFill { from { width: 0; } to { width: 100%; } }
-.boot-skip-hint { margin-top: 16px; font-family: var(--font-data); font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.25em; color: rgba(103,199,235,0.35); animation: logIn 0.5s 1.2s both; }
+.boot-status { display: flex; justify-content: space-between; align-items: center; width: 264px; margin-top: 12px; }
+.boot-pct { font-family: var(--font-data); font-size: 0.72rem; font-weight: 700; color: var(--holo-cyan); text-shadow: 0 0 8px var(--holo-cyan-glow); }
+.boot-skip-hint { font-family: var(--font-data); font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.25em; color: rgba(103,199,235,0.35); animation: logIn 0.5s 1.2s both; }
+/* One-shot scan sweep across the boot overlay. */
+.boot-overlay::after {
+  content: ""; position: absolute; left: 0; right: 0; height: 2px; top: 0;
+  background: linear-gradient(90deg, transparent, var(--holo-cyan), transparent);
+  box-shadow: 0 0 14px var(--holo-cyan); animation: bootScan 1.8s ease-in-out; opacity: 0;
+}
+@keyframes bootScan { 0% { top: 0; opacity: 0; } 12% { opacity: 0.9; } 88% { opacity: 0.9; } 100% { top: 100%; opacity: 0; } }
 
 /* ============================================================
    MARK III — reactive reactor + glass depth
@@ -497,6 +507,38 @@ button, input, textarea { font-family: inherit; outline: none; }
 .sug-btn {
   background: linear-gradient(180deg, rgba(103,199,235,0.06), rgba(103,199,235,0.02));
   box-shadow: inset 0 1px 0 rgba(103,199,235,0.12);
+}
+
+/* ============================================================
+   MARK IV — streaming materialize · telemetry · pointer parallax
+   ============================================================ */
+
+/* Holographic "scan-in": a glowing band sweeps down the reply while tokens arrive. */
+.msg-body.streaming { border-color: rgba(103,199,235,0.35); }
+.msg-body.streaming::after {
+  opacity: 1;
+  background: linear-gradient(180deg, transparent, rgba(103,199,235,0.14) 50%, transparent);
+  background-size: 100% 64px; background-repeat: no-repeat;
+  animation: scanDown 1.5s linear infinite;
+}
+@keyframes scanDown { from { background-position: 0 -64px; } to { background-position: 0 calc(100% + 64px); } }
+
+/* Telemetry strip in the top bar: live tok/s sparkline + counters. */
+.telemetry { display: flex; align-items: center; gap: 14px; }
+.telemetry .spark { color: var(--stark-gold); filter: drop-shadow(0 0 4px var(--stark-gold-glow)); display: block; }
+.tele-item { font-family: var(--font-data); font-size: 0.6rem; letter-spacing: 0.08em; color: rgba(103,199,235,0.75); white-space: nowrap; display: inline-flex; align-items: center; }
+.tele-k { color: rgba(103,199,235,0.4); margin-right: 4px; }
+@media (max-width: 880px) { .telemetry { display: none; } }
+
+/* Pointer-reactive depth (fine-pointer desktop only). --mx/--my published from JS. */
+.ambient-particles { transform: translate3d(calc(var(--mx, 0) * -10px), calc(var(--my, 0) * -10px), 0); transition: transform 0.25s ease-out; }
+@media (hover: hover) and (min-width: 769px) {
+  .welcome-reactor {
+    transform: perspective(900px) rotateY(calc(var(--mx, 0) * 6deg)) rotateX(calc(var(--my, 0) * -6deg));
+    transition: transform 0.18s ease-out;
+  }
+  .welcome-grid { transform: perspective(1000px) rotateX(calc(var(--my, 0) * -1.5deg)); transition: transform 0.2s ease-out; }
+  .message { transform: perspective(1200px) rotateY(calc(var(--mx, 0) * 0.7deg)); transition: transform 0.2s ease-out; }
 }
 
 /* Respect reduced-motion */

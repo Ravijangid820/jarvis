@@ -55,10 +55,16 @@ function App() {
     setBooting(false)
   }
 
+  // Telemetry strip (real data): tok/s history (sparkline), live uptime, boot progress.
+  const [tokHistory, setTokHistory] = useState([])
+  const [uptime, setUptime] = useState(0)
+  const [bootPct, setBootPct] = useState(0)
+
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
   const abortRef = useRef(null)   // AbortController for the in-flight /chat/stream request
   const messagesContainerRef = useRef(null)
+  const sessionStartRef = useRef(Date.now())
   // Whether the chat is "pinned" to the bottom. Auto-scroll only happens while
   // pinned, so streaming never yanks the user back down when they scroll up to read.
   const stickToBottomRef = useRef(true)
@@ -106,6 +112,42 @@ function App() {
     // animation; smooth only for the small settle once the reply finishes.
     el.scrollTo({ top: el.scrollHeight, behavior: processing ? "auto" : "smooth" })
   }, [messages, processing])
+
+  // Live uptime ticker (drives the telemetry readout).
+  useEffect(() => {
+    const id = setInterval(() => setUptime(Math.floor((Date.now() - sessionStartRef.current) / 1000)), 1000)
+    return () => clearInterval(id)
+  }, [])
+
+  // Boot progress counter, synced to the ~2.1s boot bar.
+  useEffect(() => {
+    if (!booting) return
+    const start = Date.now()
+    const id = setInterval(() => {
+      const pct = Math.min(100, Math.round((Date.now() - start) / 2100 * 100))
+      setBootPct(pct)
+      if (pct >= 100) clearInterval(id)
+    }, 60)
+    return () => clearInterval(id)
+  }, [booting])
+
+  // Pointer-reactive parallax/tilt (desktop only). Publishes cursor offset (-1..1)
+  // as --mx/--my CSS vars; the stylesheet maps them to subtle depth transforms.
+  useEffect(() => {
+    if (window.matchMedia("(hover: none)").matches) return
+    let raf = 0
+    const onMove = (e) => {
+      if (raf) return
+      raf = requestAnimationFrame(() => {
+        raf = 0
+        const root = document.documentElement
+        root.style.setProperty("--mx", ((e.clientX / window.innerWidth - 0.5) * 2).toFixed(3))
+        root.style.setProperty("--my", ((e.clientY / window.innerHeight - 0.5) * 2).toFixed(3))
+      })
+    }
+    window.addEventListener("pointermove", onMove, { passive: true })
+    return () => { window.removeEventListener("pointermove", onMove); if (raf) cancelAnimationFrame(raf) }
+  }, [])
 
   const checkHealth = async () => {
     try {
@@ -328,8 +370,9 @@ function App() {
                 const wallTimeSecs = (performance.now() - startTime) / 1000
                 // Honest, clearly-approximate estimate (~4 chars/token), guarded for div-by-zero.
                 if (answer && wallTimeSecs > 0) {
-                  const tokens = answer.length / 4
-                  setSpeed(`~${(tokens / wallTimeSecs).toFixed(1)} tok/s`)
+                  const tps = (answer.length / 4) / wallTimeSecs
+                  setSpeed(`~${tps.toFixed(1)} tok/s`)
+                  setTokHistory(h => [...h, tps].slice(-24))   // feed the telemetry sparkline
                 }
                 const finalText = answer || "⚠️ No response was generated."
                 setMessages(prev => {
@@ -384,6 +427,18 @@ function App() {
   }
 
   // --- Rendering Helpers ---
+  const fmtUptime = (s) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`
+
+  const renderSparkline = (data) => {
+    const w = 46, h = 14
+    if (data.length < 2) {
+      return <svg className="spark" width={w} height={h} viewBox={`0 0 ${w} ${h}`}><line x1="0" y1={h - 1} x2={w} y2={h - 1} stroke="currentColor" strokeWidth="1" opacity="0.4" /></svg>
+    }
+    const max = Math.max(...data), min = Math.min(...data), range = Math.max(max - min, 0.001)
+    const pts = data.map((v, i) => `${(i / (data.length - 1) * w).toFixed(1)},${(h - ((v - min) / range) * (h - 2) - 1).toFixed(1)}`).join(" ")
+    return <svg className="spark" width={w} height={h} viewBox={`0 0 ${w} ${h}`}><polyline points={pts} fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" /></svg>
+  }
+
   const copyText = (text, e) => {
     navigator.clipboard.writeText(text)
     const btn = e.target
@@ -440,14 +495,17 @@ function App() {
         </svg>
         <div className="boot-title">J.A.R.V.I.S</div>
         <div className="boot-log">
-          <span style={{animationDelay: '0.2s'}}>▸ Initializing neural core…</span>
-          <span style={{animationDelay: '0.6s'}}>▸ Mounting memory banks…</span>
-          <span style={{animationDelay: '1.0s'}}>▸ Calibrating language model…</span>
-          <span style={{animationDelay: '1.4s'}}>▸ Establishing secure uplink…</span>
-          <span style={{animationDelay: '1.9s', color: 'var(--alert-orange)'}}>▸ All systems online.</span>
+          <span className="boot-line" style={{animationDelay: '0.2s'}}><span>▸ Neural core</span><span className="bl-ok">ONLINE</span></span>
+          <span className="boot-line" style={{animationDelay: '0.6s'}}><span>▸ Memory banks</span><span className="bl-ok">MOUNTED</span></span>
+          <span className="boot-line" style={{animationDelay: '1.0s'}}><span>▸ Language model</span><span className="bl-ok">CALIBRATED</span></span>
+          <span className="boot-line" style={{animationDelay: '1.4s'}}><span>▸ Secure uplink</span><span className="bl-ok">ESTABLISHED</span></span>
+          <span className="boot-line" style={{animationDelay: '1.9s'}}><span style={{color: 'var(--alert-orange)'}}>▸ All systems</span><span className="bl-ok" style={{color: 'var(--alert-orange)'}}>ONLINE</span></span>
         </div>
         <div className="boot-bar"><div className="boot-bar-fill" /></div>
-        <div className="boot-skip-hint">Click anywhere to skip</div>
+        <div className="boot-status">
+          <span className="boot-pct">{bootPct}%</span>
+          <span className="boot-skip-hint">Click anywhere to skip</span>
+        </div>
       </div>
     )
   }
@@ -623,6 +681,11 @@ function App() {
           <span className="top-model">{modelName}</span>
           <span className="top-speed">{speed}</span>
           <div className="top-spacer"></div>
+          <div className="telemetry" aria-hidden="true">
+            <span className="tele-item" title="generation speed (tok/s), last 24 replies">{renderSparkline(tokHistory)}</span>
+            <span className="tele-item"><span className="tele-k">MSGS</span>{messages.length}</span>
+            <span className="tele-item"><span className="tele-k">UP</span>{fmtUptime(uptime)}</span>
+          </div>
           <div className="conn-badge">
             <div className={`status-dot ${isOnline ? 'online' : 'offline'}`}></div>
             <span>{isOnline ? 'Active' : 'Down'}</span>
@@ -675,7 +738,7 @@ function App() {
             {messages.map((m, i) => (
               <div key={i} className="message">
                 <div className={`msg-avatar ${m.role}`}>{m.role === 'user' ? 'U' : 'J'}</div>
-                <div className="msg-body">
+                <div className={`msg-body ${m.isStreaming ? 'streaming' : ''}`}>
                   <div className="msg-head">
                     <span className={`msg-sender ${m.role}`}>{m.role === 'user' ? 'You' : 'Jarvis'}</span>
                     <div className="msg-actions">
