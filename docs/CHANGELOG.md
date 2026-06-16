@@ -4,6 +4,25 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-16 — API-key hashing & React admin console
+
+### Security
+- **API keys are now hashed at rest** (SHA-256 + a short display prefix), like session
+  tokens. Existing keys keep working — a one-time migration hashes them in place, and
+  holders still authenticate by presenting the plaintext (we hash and match), so the
+  voice listener doesn't break. `manage.py mint-key` and the admin create-key path store
+  only the hash; the plaintext is shown once. `admin_create_key` now validates the user.
+
+### Admin console
+- **Ported the admin panel from standalone `admin.html` into the React SPA.** It now
+  inherits the HUD styling, fonts, and theme switcher (Cyberpunk/Emerald/Ember all apply),
+  reuses the SPA auth, and is XSS-safe via React. `/admin` serves the SPA and renders the
+  admin view client-side. Removed `admin.html` and the now-unused `static/style.css`.
+- API-key list returns a display prefix + row `id` (no recoverable full key); deletion is
+  by `id`.
+
+---
+
 ## 2026-06-16 — Security & reliability hardening
 
 ### Security

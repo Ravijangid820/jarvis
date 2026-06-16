@@ -92,9 +92,9 @@ Valid categories: `personal, family, preferences, location, work, education, int
 | `POST` | `/admin/users` | `{ username, password, role? }` | `{ "status": "ok" }` (`400` if username exists) |
 | `GET` | `/admin/users` | — | `{ "users": [{id, username, role, created_at, total_chats, total_messages}] }` |
 | `DELETE` | `/admin/users/{id}` | — | `{ "status": "ok" }` (cannot delete self) |
-| `POST` | `/admin/api_keys` | `{ user_id, description }` | `{ "key": "jk-…" }` (shown once) |
-| `GET` | `/admin/api_keys` | — | `{ "keys": [{key_string(masked), full_key, user_id, description, usage_count, last_used_at, created_at}] }` |
-| `DELETE` | `/admin/api_keys/{key_string}` | — | `{ "status": "ok" }` |
+| `POST` | `/admin/api_keys` | `{ user_id, description }` | `{ "key": "jk-…" }` (full key shown once; stored hashed) |
+| `GET` | `/admin/api_keys` | — | `{ "keys": [{id, key_string(prefix only), user_id, description, usage_count, last_used_at, created_at}] }` |
+| `DELETE` | `/admin/api_keys/{id}` | — | `{ "status": "ok" }` |
 | `GET` | `/admin/stats` | — | `{ "users": int, "chats": int, "messages": int }` |
 
 ---
@@ -106,7 +106,7 @@ Valid categories: `personal, family, preferences, location, work, education, int
 | `GET` | `/health` | `{ "status": "ok", "model": "qwen3.5-2b" }` |
 | `GET` | `/system` | **auth** · live host telemetry: `{ load1, cpus, cpu_pct, mem_used_mb, mem_total_mb, mem_pct, uptime_sec }` (dependency-free, from `/proc` + `os`) |
 | `GET` | `/` | React SPA (`frontend/dist/index.html`) |
-| `GET` | `/admin` | Admin panel HTML (its data endpoints are still auth-gated) |
+| `GET` | `/admin` | Serves the React SPA, which renders the admin console (admin-gated client-side + on every `/admin/*` endpoint) |
 | `GET` | `/favicon.svg` | App icon (served from the dist root) |
 | — | `/assets/*`, `/static/*` | Static frontend + admin assets (`/assets/*` cached immutably) |
 

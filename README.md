@@ -50,7 +50,7 @@ uv run pytest -q && uv run ruff check src/orchestrator src/scripts tests
 │   ├── chat.py                 ← sessions, message persistence, prompt assembly
 │   ├── budget.py               ← pure token-budgeting helpers (unit-tested)
 │   ├── main.py                 ← app, auth middleware, route handlers
-│   └── static/                 ← admin panel + self-hosted fonts (offline, no Google Fonts)
+│   └── static/                 ← self-hosted fonts (offline, no Google Fonts)
 ├── src/scripts/
 │   ├── run_listener.sh         ← whisper voice listener → orchestrator bridge
 │   ├── manage.py               ← admin CLI (create-admin / reset-password / mint-key)

@@ -30,7 +30,7 @@ import chat
 import memory
 from auth import hash_password, hash_token, verify_password
 from budget import is_default_session
-from config import (ADMIN_HTML, ADMIN_MAX_INPUT, ALLOWED_ORIGINS, COMPLETION_RESERVE_DEFAULT,
+from config import (ADMIN_MAX_INPUT, ALLOWED_ORIGINS, COMPLETION_RESERVE_DEFAULT,
                     CONFIG, INDEX_HTML, RATE_LIMIT_RPM, REACT_DIST_DIR, REGULAR_MAX_INPUT,
                     STATIC_DIR, VALID_FACT_CATEGORIES, logger)
 from db import get_db, init_db
@@ -120,17 +120,18 @@ async def security_middleware(request: Request, call_next):
             request.state.is_admin = (row["role"] == "admin")
             is_authenticated = True
         else:
-            # 2. Per-user API key (machine integrations, e.g. the voice listener)
+            # 2. Per-user API key (machine integrations, e.g. the voice listener).
+            #    Stored hashed at rest, like session tokens — look up by hash.
             row = conn.execute(
                 "SELECT user_id, u.role FROM api_keys k JOIN users u ON k.user_id = u.id "
-                "WHERE k.key_string = ?", (token,)).fetchone()
+                "WHERE k.key_string = ?", (hash_token(token),)).fetchone()
             if row:
                 request.state.user_id = row["user_id"]
                 request.state.is_admin = (row["role"] == "admin")
                 is_authenticated = True
                 try:
                     conn.execute("UPDATE api_keys SET usage_count = usage_count + 1, "
-                                 "last_used_at = datetime('now') WHERE key_string = ?", (token,))
+                                 "last_used_at = datetime('now') WHERE key_string = ?", (hash_token(token),))
                     conn.commit()
                 except Exception as e:
                     logger.warning("api_keys usage bump failed: %s", e)
@@ -485,9 +486,12 @@ def admin_create_key(req: CreateKeyRequest, request: Request):
     _require_admin(request)
     conn = get_db()
     try:
+        if not conn.execute("SELECT 1 FROM users WHERE id = ?", (req.user_id,)).fetchone():
+            raise HTTPException(status_code=400, detail="No such user")
         new_key = "jk-" + secrets.token_hex(16)
-        conn.execute("INSERT INTO api_keys (key_string, user_id, description) VALUES (?, ?, ?)",
-                     (new_key, req.user_id, req.description))
+        # Store only the hash + a short display prefix; the plaintext is shown once.
+        conn.execute("INSERT INTO api_keys (key_string, key_prefix, user_id, description) VALUES (?, ?, ?, ?)",
+                     (hash_token(new_key), new_key[:10], req.user_id, req.description))
         conn.commit()
         return {"key": new_key}
     finally:
@@ -499,27 +503,21 @@ def admin_list_keys(request: Request):
     _require_admin(request)
     conn = get_db()
     try:
-        try:
-            keys = conn.execute("SELECT key_string, user_id, description, created_at, usage_count, last_used_at FROM api_keys").fetchall()
-        except sqlite3.OperationalError:
-            keys = conn.execute("SELECT key_string, user_id, description, created_at, 0 as usage_count, NULL as last_used_at FROM api_keys").fetchall()
-        masked = []
-        for k in keys:
-            km = dict(k)
-            km["full_key"] = km["key_string"]
-            km["key_string"] = km["key_string"][:6] + "..." + km["key_string"][-4:]
-            masked.append(km)
-        return {"keys": masked}
+        keys = conn.execute(
+            "SELECT rowid AS id, key_prefix, user_id, description, created_at, usage_count, last_used_at "
+            "FROM api_keys ORDER BY created_at DESC").fetchall()
+        # Display the prefix only — the full key is never recoverable (hash at rest).
+        return {"keys": [{**dict(k), "key_string": (k["key_prefix"] or "jk-") + "…"} for k in keys]}
     finally:
         conn.close()
 
 
-@app.delete("/admin/api_keys/{key_string}")
-def admin_delete_key(key_string: str, request: Request):
+@app.delete("/admin/api_keys/{key_id}")
+def admin_delete_key(key_id: int, request: Request):
     _require_admin(request)
     conn = get_db()
     try:
-        conn.execute("DELETE FROM api_keys WHERE key_string = ?", (key_string,))
+        conn.execute("DELETE FROM api_keys WHERE rowid = ?", (key_id,))
         conn.commit()
         return {"status": "ok"}
     finally:
@@ -595,9 +593,11 @@ def serve_ui():
 
 @app.get("/admin")
 def serve_admin():
-    if not ADMIN_HTML.exists():
+    # The admin console is now a view inside the React SPA; serve the same bundle and
+    # let the client render it for /admin (admin-gated client-side and on every endpoint).
+    if not INDEX_HTML.exists():
         raise HTTPException(status_code=404)
-    return FileResponse(ADMIN_HTML, media_type="text/html")
+    return FileResponse(INDEX_HTML, media_type="text/html")
 
 
 @app.get("/favicon.svg")

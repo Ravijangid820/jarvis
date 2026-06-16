@@ -2,6 +2,7 @@
 import sqlite3
 from pathlib import Path
 
+from auth import hash_token
 from config import DB_PATH
 
 
@@ -25,6 +26,27 @@ def _safe_exec(conn: sqlite3.Connection, sql: str):
         pass  # column/table already in the expected state
 
 
+def _migrate_plaintext_api_keys(conn: sqlite3.Connection):
+    """One-time: hash any API keys still stored in plaintext, in place.
+
+    Holders keep their existing keys (they present the plaintext; we hash and match),
+    but the value at rest becomes a SHA-256 hash. A stored hash is 64 hex chars; any
+    row whose key_string isn't already that shape is treated as a legacy plaintext key.
+    """
+    try:
+        rows = conn.execute("SELECT rowid, key_string, key_prefix FROM api_keys").fetchall()
+    except sqlite3.OperationalError:
+        return
+    hexset = set("0123456789abcdef")
+    for r in rows:
+        ks = r["key_string"] or ""
+        already_hashed = len(ks) == 64 and all(c in hexset for c in ks.lower())
+        if already_hashed:
+            continue
+        conn.execute("UPDATE api_keys SET key_string = ?, key_prefix = ? WHERE rowid = ?",
+                     (hash_token(ks), r["key_prefix"] or ks[:10], r["rowid"]))
+
+
 def init_db():
     schema_path = Path("/srv/jarvis/config/schema.sql")
     if not schema_path.exists():
@@ -38,6 +60,8 @@ def init_db():
         _safe_exec(conn, "ALTER TABLE chat_sessions ADD COLUMN user_id INTEGER DEFAULT 1 REFERENCES users(id)")
         _safe_exec(conn, "ALTER TABLE api_keys ADD COLUMN usage_count INTEGER DEFAULT 0")
         _safe_exec(conn, "ALTER TABLE api_keys ADD COLUMN last_used_at DATETIME")
+        _safe_exec(conn, "ALTER TABLE api_keys ADD COLUMN key_prefix TEXT")
+        _migrate_plaintext_api_keys(conn)
         _safe_exec(conn, "ALTER TABLE conversation_history ADD COLUMN facts_extracted BOOLEAN DEFAULT 0")
         # Drop the legacy FTS5 search infra + unused table (superseded by ChromaDB vectors).
         for stmt in (

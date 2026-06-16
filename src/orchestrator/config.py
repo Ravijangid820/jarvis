@@ -109,6 +109,5 @@ PIPER_MODEL = Path("/srv/jarvis/piper/voices/en_GB-alan-medium.onnx")
 REACT_DIST_DIR = Path("/srv/jarvis/frontend/dist")
 STATIC_DIR = Path(__file__).parent / "static"
 INDEX_HTML = REACT_DIST_DIR / "index.html"
-ADMIN_HTML = STATIC_DIR / "admin.html"
 ADMIN_MAX_INPUT = 10000
 REGULAR_MAX_INPUT = 500

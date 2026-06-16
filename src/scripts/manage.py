@@ -72,9 +72,11 @@ def mint_key(username, description="cli-minted"):
         if not row:
             sys.exit(f"No such user '{username}'.")
         key = "jk-" + secrets.token_hex(16)
+        # Store only the SHA-256 hash + a short display prefix (matches the orchestrator).
+        key_hash = hashlib.sha256(key.encode()).hexdigest()
         c.execute(
-            "INSERT INTO api_keys (key_string, user_id, description) VALUES (?, ?, ?)",
-            (key, row["id"], description),
+            "INSERT INTO api_keys (key_string, key_prefix, user_id, description) VALUES (?, ?, ?, ?)",
+            (key_hash, key[:10], row["id"], description),
         )
     print(key)  # printed alone so it's easy to capture: KEY=$(... mint-key ...)
 

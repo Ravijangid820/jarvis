@@ -40,7 +40,8 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
 );
 
 CREATE TABLE IF NOT EXISTS api_keys (
-    key_string TEXT PRIMARY KEY,
+    key_string TEXT PRIMARY KEY,          -- SHA-256 hash of the key (never the plaintext)
+    key_prefix TEXT,                      -- short prefix shown in the admin UI
     user_id INTEGER NOT NULL,
     description TEXT,
     usage_count INTEGER DEFAULT 0,

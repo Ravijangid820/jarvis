@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import './index.css'
+import Admin from './Admin'
 
 const API = ""
 
@@ -762,6 +763,12 @@ function App() {
         </div>
       </div>
     )
+  }
+
+  // Admin console lives at /admin within the SPA (so it inherits HUD styling + theme).
+  if (window.location.pathname === "/admin") {
+    if (role !== "admin") { window.location.href = "/"; return null }
+    return <Admin token={token} onExit={() => { window.location.href = "/" }} />
   }
 
   return (
