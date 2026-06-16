@@ -106,7 +106,8 @@ Valid categories: `personal, family, preferences, location, work, education, int
 | `GET` | `/health` | `{ "status": "ok", "model": "qwen3.5-2b" }` |
 | `GET` | `/` | React SPA (`frontend/dist/index.html`) |
 | `GET` | `/admin` | Admin panel HTML (its data endpoints are still auth-gated) |
-| — | `/assets/*`, `/static/*` | Static frontend + admin assets |
+| `GET` | `/favicon.svg` | App icon (served from the dist root) |
+| — | `/assets/*`, `/static/*` | Static frontend + admin assets (`/assets/*` cached immutably) |
 
 ---
 
