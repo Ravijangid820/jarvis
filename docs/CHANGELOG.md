@@ -4,6 +4,20 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-16 — Edge vision agent (Raspberry Pi) — scaffold
+
+- New `edge/` subdirectory: an on-device camera agent for a Raspberry Pi that runs recognition
+  **locally** and POSTs small JSON **events** (no video) to the orchestrator via a machine API
+  key — keeping the server light and imagery on-device. Its own isolated env (separate from the
+  server's pyproject).
+- Foundation implemented: camera abstraction (picamera2/OpenCV), motion detection (MOG2),
+  event client (background POST + retry), and a **motion-gated, one-heavy-task scheduler**
+  tuned for the Pi 3 B+ (1 GB RAM) reality. Heavy detectors (faces/pose/gestures via MediaPipe
+  + ONNX) are stubs with interfaces + on-Pi tuning notes. Setup script + README + config example.
+- Untested on hardware (Pi not yet connected). Pending server side: a `POST /events` endpoint.
+
+---
+
 ## 2026-06-16 — Frontend lint cleanup
 
 - `npm run lint` is clean (0 errors/warnings). Removed the unused `React` import, fixed the

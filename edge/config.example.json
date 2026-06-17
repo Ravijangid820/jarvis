@@ -1,0 +1,21 @@
+{
+  "device_id": "pi-livingroom",
+  "server": {
+    "url": "http://192.168.0.101:5000",
+    "events_endpoint": "/events",
+    "api_key_file": "config/edge.key"
+  },
+  "camera": {
+    "backend": "auto",
+    "device": 0,
+    "width": 480,
+    "height": 360,
+    "fps": 8
+  },
+  "detectors": {
+    "motion":   { "enabled": true,  "min_area": 1500, "cooldown_s": 3 },
+    "faces":    { "enabled": false, "interval_s": 5 },
+    "pose":     { "enabled": false, "interval_s": 3 },
+    "gestures": { "enabled": false, "interval_s": 2 }
+  }
+}

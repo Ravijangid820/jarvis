@@ -1,0 +1,5 @@
+# Runtime config + device API key (never commit); keep config.example.json at edge/ root.
+config/
+.venv/
+__pycache__/
+*.pyc
