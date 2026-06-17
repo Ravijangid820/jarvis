@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import './index.css'
 import Admin from './Admin'
 
@@ -109,6 +109,7 @@ function App() {
       loadSessions()
       loadHistory("default")
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run on auth change only
   }, [token])
 
   useEffect(() => {
@@ -225,7 +226,7 @@ function App() {
         setIsOnline(false)
         setUplink("N/A")
       }
-    } catch (e) {
+    } catch {
       setIsOnline(false)
       setUplink("N/A")
     }
@@ -281,7 +282,7 @@ function App() {
         const data = await res.json()
         setSessions(data.sessions || [])
       } else if (res.status === 401 || res.status === 403) doLogout()
-    } catch (e) {}
+    } catch { /* ignore */ }
   }
 
   const loadHistory = async (sid) => {
@@ -299,7 +300,7 @@ function App() {
         }
         setSidebarOpen(false)
       }
-    } catch (e) {}
+    } catch { /* ignore */ }
   }
 
   const createSession = async () => {
@@ -312,7 +313,7 @@ function App() {
         await loadSessions()
         await loadHistory(data.id)
       }
-    } catch (e) {}
+    } catch { /* ignore */ }
   }
 
   const renameSession = async (e, sid) => {
@@ -327,7 +328,7 @@ function App() {
       })
       if (sid === currentSessionId) setCurrentTitle(newName)
       loadSessions()
-    } catch (e) {}
+    } catch { /* ignore */ }
   }
 
   const deleteSession = async (e, sid) => {
@@ -337,7 +338,7 @@ function App() {
       await fetch(API + "/sessions/" + sid, { method: "DELETE", headers: { "Authorization": "Bearer " + token } })
       if (sid === currentSessionId) loadHistory("default")
       loadSessions()
-    } catch (e) {}
+    } catch { /* ignore */ }
   }
 
   // Abort the in-flight stream. Closing the connection also lets the server stop
@@ -361,7 +362,7 @@ function App() {
           setCurrentSessionId(sid)
           setCurrentTitle(sData.title)
         }
-      } catch (e) {}
+      } catch { /* ignore */ }
     }
 
     if (!queryOverride) setInput("")
@@ -454,10 +455,10 @@ function App() {
                   try {
                     const audio = new Audio("data:audio/wav;base64," + data.audio)
                     audio.play().catch(() => {})
-                  } catch (e) {}
+                  } catch { /* ignore */ }
                 }
               }
-            } catch (e) {}
+            } catch { /* ignore */ }
           }
         }
       }

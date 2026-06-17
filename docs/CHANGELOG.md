@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-16 — Frontend lint cleanup
+
+- `npm run lint` is clean (0 errors/warnings). Removed the unused `React` import, fixed the
+  empty `catch` blocks (dropped unused bindings), and silenced the intentional
+  init-effect dep warning. Turned off the React-Compiler-only rules (`react-hooks/immutability`,
+  `purity`, `set-state-in-effect`) — they target builds using `babel-plugin-react-compiler`
+  (which this app doesn't) and flagged legitimate patterns; kept rules-of-hooks + exhaustive-deps.
+- Logged a **Dockerfile + Compose** containerization task in `docs/FUTURE_IDEAS.md`.
+
+---
+
 ## 2026-06-16 — Setup scripts (fresh-clone / container bootstrap)
 
 - `src/scripts/setup.sh` — one-shot, idempotent bootstrap: `uv sync`, config from example,
