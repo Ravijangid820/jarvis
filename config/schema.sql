@@ -65,3 +65,14 @@ CREATE TABLE IF NOT EXISTS user_knowledge (
 
 CREATE INDEX IF NOT EXISTS idx_knowledge_user ON user_knowledge(user_id);
 CREATE INDEX IF NOT EXISTS idx_knowledge_category ON user_knowledge(user_id, category);
+
+-- Vision/edge events posted by edge devices (Raspberry Pi camera agent). `data` is JSON.
+CREATE TABLE IF NOT EXISTS vision_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id TEXT NOT NULL,
+    type TEXT NOT NULL,
+    data TEXT,
+    user_id INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_vision_events_recent ON vision_events(id DESC);

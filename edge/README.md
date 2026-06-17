@@ -5,8 +5,9 @@ Jarvis orchestrator. All recognition runs **on the Pi** so the server isn't load
 imagery ever leaves the device — only small JSON events over the LAN.
 
 > Status: **scaffold, untested on hardware.** Written ahead of having the Pi connected. The
-> foundation (capture, motion, event client, agent loop) is standard; the heavy detectors
-> (faces/pose/gestures) are stubs to implement + tune **on the actual Pi**.
+> foundation (capture, motion, event client, agent loop) is standard. The heavy detectors
+> (faces/pose/gestures) are now **implemented** but unrun on this hardware — use `bench.py`
+> (below) on the Pi to measure real FPS and decide what to enable.
 
 ## Hardware reality (Raspberry Pi 3 B+, 1 GB RAM)
 
@@ -48,8 +49,23 @@ camera ─► capture.py ─► agent.py (loop)
   "ts": "2026-06-16T20:00:00Z", "data": { "...": "type-specific" } }
 ```
 
-The server `/events` endpoint is **not built yet** — see the roadmap. Until then the agent can
-run with `--dry-run` (logs events instead of POSTing).
+The server `POST /events` endpoint **exists** (auth via the orchestrator's middleware/API key);
+admins can review recent events at `GET /admin/events`. Run the agent with `--dry-run` to log
+events locally without sending.
+
+## Check Pi capability (do this first on the Pi)
+
+```bash
+# install mediapipe (pose/gestures) into the venv first if you want to bench them:
+#   .venv/bin/pip install mediapipe onnxruntime
+.venv/bin/python -m jarvis_edge.bench --frames 60
+#   motion   :  28.0 FPS  (  35.7 ms/frame)
+#   faces    :   6.5 FPS  ( 153.0 ms/frame)
+#   pose     :   2.3 FPS  ( 435.0 ms/frame)   ← decide if this is usable for you
+#   gestures :   3.1 FPS  ( 322.0 ms/frame)
+```
+
+Use the numbers to set each detector's `interval_s` (and whether to enable it) in config.
 
 ## Setup (on the Pi)
 
@@ -73,18 +89,25 @@ edge/
     capture.py         camera abstraction (picamera2 for CSI, OpenCV for USB)
     events.py          event client (POST + offline queue + retry)
     agent.py           main loop + motion-gated scheduler
+    bench.py           per-detector FPS benchmark (run on the Pi)
     detectors/
       base.py          Detector interface
-      motion.py        ✅ implemented (frame-diff)
-      faces.py         ⤵ stub — detect + identify (triggered)
-      pose.py          ⤵ stub — MediaPipe Pose
-      gestures.py      ⤵ stub — MediaPipe Hands
+      motion.py        MOG2 frame-diff (always available)
+      faces.py         OpenCV detect (Haar/DNN) + optional ONNX identity
+      pose.py          MediaPipe Pose → presence/zone/posture
+      gestures.py      MediaPipe Hands → open_palm/fist/thumb_up/down/point
 ```
 
+Optional model config (in each detector's config block): `faces` accepts `detector_proto` +
+`detector_model` (res10 DNN, else Haar), and `embed_model` (ONNX) + `enrolled_file` (JSON of
+`{name: [embedding]}`) to turn on identity. `pose`/`gestures` accept `model_complexity`.
+
 ## Roadmap
-1. **Foundation (this scaffold):** capture · motion · event client · agent loop · setup.
-2. **Server:** add `POST /events` to the orchestrator (auth via the existing middleware) + a
-   place to store/route events. (Contract above.)
-3. **Faces:** detection (OpenCV DNN) + identity (small ONNX embedding); enroll known faces.
-4. **Pose/gestures:** MediaPipe, motion-gated, off by default — tune FPS/res on the Pi.
-5. Map gestures → actions (define what "volume" targets: server media, a player, or Pi audio).
+1. ✅ **Foundation:** capture · motion · event client · agent loop · setup.
+2. ✅ **Server:** `POST /events` (auth via middleware) + `GET /admin/events`. Events stored in
+   `vision_events`. (Acting on them — notifications/automation — can hang off this.)
+3. ✅ **Faces / pose / gestures:** implemented (faces identity is optional, model-gated). **Now:
+   benchmark on the Pi** and tune `interval_s` / which to enable.
+4. **Enrollment:** add a helper to build `enrolled_file` embeddings from known-face images.
+5. **Actions:** map gestures → actions — define what "volume" targets (server media, a player,
+   or the Pi's own audio) before wiring.

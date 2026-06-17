@@ -113,3 +113,21 @@ def test_tokens_stored_hashed(client):
     c.close()
     assert tok not in rows                       # plaintext never persisted
     assert auth.hash_token(tok) in rows          # only the hash is stored
+
+
+def test_events_ingest_requires_auth(client):
+    assert client.post("/events", json={"device_id": "pi", "type": "motion"}).status_code == 401
+
+
+def test_events_ingest_and_admin_list(client):
+    tok = _tok(client, "pepper", "pw-user")   # any valid token/key may post (devices use API keys)
+    r = client.post("/events", headers={"Authorization": "Bearer " + tok},
+                    json={"device_id": "pi-test", "type": "face_seen", "data": {"name": "Ravi"}})
+    assert r.status_code == 200 and r.json()["status"] == "ok"
+    # admin can read it back, with data round-tripped from JSON
+    admin = _tok(client, "tony", "pw-admin")
+    got = client.get("/admin/events", headers={"Authorization": "Bearer " + admin}).json()
+    assert got["count"] >= 1
+    latest = got["events"][0]
+    assert latest["device_id"] == "pi-test" and latest["type"] == "face_seen"
+    assert latest["data"] == {"name": "Ravi"}

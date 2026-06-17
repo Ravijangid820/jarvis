@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-16 — Edge vision: /events endpoint + detector implementations
+
+- **Server:** `POST /events` ingests edge events (auth via the existing middleware; stored in a
+  new `vision_events` table), and `GET /admin/events` lists recent ones. Tests added (suite: 26).
+- **Edge detectors implemented** (were stubs): faces (OpenCV Haar/DNN detection + optional ONNX
+  identity), pose (MediaPipe → presence/zone/posture), gestures (MediaPipe Hands →
+  open_palm/fist/thumb_up/down/point). All lazy-import + degrade gracefully if a dep/model is missing.
+- **`bench.py`** — per-detector FPS/latency benchmark to run on the Pi and decide what's feasible.
+- Still untested on the Pi hardware (it's offline); the benchmark is the way to validate capability.
+
 ## 2026-06-16 — Edge vision agent (Raspberry Pi) — scaffold
 
 - New `edge/` subdirectory: an on-device camera agent for a Raspberry Pi that runs recognition

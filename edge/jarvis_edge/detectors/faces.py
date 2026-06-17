@@ -1,14 +1,19 @@
-"""Face detection + identity. STUB — implement/tune on the Pi.
+"""Face detection + optional identity.
 
-Plan (Pi 3 B+ friendly, triggered by motion, not every frame):
-  1. Detect faces with OpenCV's DNN SSD (res10) — light and decent.
-  2. For each face, compute a 128/512-d embedding with a small ONNX model (e.g. MobileFaceNet)
-     via onnxruntime; match against enrolled embeddings (cosine) → name or "unknown".
-  3. Emit {"type": "face_seen", "data": {"name": ..., "score": ...}}.
-Enroll known faces offline into a small embeddings file. Throttle via interval_s; on 1 GB RAM
-keep this the only heavy detector running at a time.
+Detection works out of the box (OpenCV Haar cascade ships with opencv-data; or a DNN SSD if
+you point `detector_proto`/`detector_model` at the res10 caffe files). Identity is optional and
+turns on when you provide `embed_model` (an ONNX face-embedding model, e.g. MobileFaceNet) and an
+`enrolled_file` (JSON: {name: [embedding floats]}). Without those it emits `face_seen` with the
+bounding box and name=null.
+
+Pi 3 B+: keep this motion-gated and throttled (interval_s). All heavy imports are lazy and the
+detector degrades to a no-op (with one warning) if a dependency/model is missing — so enabling it
+never crashes the agent.
 """
+import json
 import logging
+import math
+from pathlib import Path
 
 from .base import Detector
 
@@ -21,11 +26,85 @@ class FaceDetector(Detector):
 
     def __init__(self, cfg):
         super().__init__(cfg)
+        self._cv2 = None
+        self._net = None          # DNN detector (optional)
+        self._cascade = None      # Haar detector (fallback, always available)
+        self._embed = None        # ONNX embedding session (optional)
+        self._known = {}          # name -> embedding (list[float])
+        self._thresh = float(self.cfg.get("recognize_threshold", 0.45))
+        self._size = int(self.cfg.get("embed_size", 112))
+        self._ok = False
         self._warned = False
-        # TODO: load the OpenCV DNN face detector + ONNX embedding model + enrolled faces.
+        self._init()
+
+    def _init(self):
+        try:
+            import cv2
+            self._cv2 = cv2
+            proto, model = self.cfg.get("detector_proto"), self.cfg.get("detector_model")
+            if proto and model and Path(proto).exists() and Path(model).exists():
+                self._net = cv2.dnn.readNetFromCaffe(proto, model)
+                log.info("faces: using DNN detector")
+            else:
+                self._cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+                log.info("faces: using Haar cascade detector")
+            emb = self.cfg.get("embed_model")
+            if emb and Path(emb).exists():
+                import onnxruntime as ort
+                self._embed = ort.InferenceSession(emb, providers=["CPUExecutionProvider"])
+                ef = self.cfg.get("enrolled_file")
+                if ef and Path(ef).exists():
+                    self._known = json.loads(Path(ef).read_text())
+                log.info("faces: identity on (%d enrolled)", len(self._known))
+            self._ok = True
+        except Exception as e:
+            log.warning("faces init failed: %s", e)
+
+    def _detect(self, frame):
+        cv2 = self._cv2
+        if self._net is not None:
+            h, w = frame.shape[:2]
+            blob = cv2.dnn.blobFromImage(frame, 1.0, (300, 300), (104, 177, 123))
+            self._net.setInput(blob)
+            det = self._net.forward()
+            out = []
+            for i in range(det.shape[2]):
+                if det[0, 0, i, 2] >= 0.6:
+                    x1, y1, x2, y2 = (det[0, 0, i, 3:7] * [w, h, w, h]).astype(int)
+                    out.append((max(0, x1), max(0, y1), max(1, x2 - x1), max(1, y2 - y1)))
+            return out
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        return [tuple(map(int, b)) for b in self._cascade.detectMultiScale(gray, 1.2, 5, minSize=(60, 60))]
+
+    def _recognize(self, crop):
+        cv2 = self._cv2
+        face = cv2.resize(crop, (self._size, self._size)).astype("float32")
+        face = (face - 127.5) / 128.0
+        blob = face.transpose(2, 0, 1)[None, ...]          # NCHW
+        name_in = self._embed.get_inputs()[0].name
+        vec = self._embed.run(None, {name_in: blob})[0][0]
+        norm = math.sqrt(sum(v * v for v in vec)) or 1.0
+        vec = [v / norm for v in vec]
+        best, best_sim = None, -1.0
+        for nm, ev in self._known.items():
+            sim = sum(a * b for a, b in zip(vec, ev))      # both L2-normalized → cosine
+            if sim > best_sim:
+                best, best_sim = nm, sim
+        return (best, round(best_sim, 3)) if best_sim >= self._thresh else ("unknown", round(best_sim, 3))
 
     def process(self, frame):
-        if not self._warned:
-            log.warning("faces detector enabled but not implemented yet — no-op")
-            self._warned = True
-        return []
+        if not self._ok:
+            if not self._warned:
+                log.warning("faces unavailable (init failed) — no-op")
+                self._warned = True
+            return []
+        events = []
+        for (x, y, w, h) in self._detect(frame):
+            name, score = (None, None)
+            if self._embed is not None:
+                try:
+                    name, score = self._recognize(frame[y:y + h, x:x + w])
+                except Exception as e:
+                    log.debug("recognize failed: %s", e)
+            events.append({"type": "face_seen", "data": {"box": [int(x), int(y), int(w), int(h)], "name": name, "score": score}})
+        return events

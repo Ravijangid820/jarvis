@@ -85,6 +85,17 @@ Valid categories: `personal, family, preferences, location, work, education, int
 
 ---
 
+## Events (edge devices)
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| `POST` | `/events` | `{ device_id, type, ts?, data? }` | `{ "status": "ok", "id": int }` — ingest an edge/vision event (auth via the device's API key) |
+
+Used by the Raspberry Pi camera agent (`edge/`) to report high-level events (`motion`,
+`face_seen`, `pose`, `gesture`); `data` is type-specific JSON. No imagery is sent.
+
+---
+
 ## Admin  (all require an admin token)
 
 | Method | Path | Body | Returns |
@@ -96,6 +107,7 @@ Valid categories: `personal, family, preferences, location, work, education, int
 | `GET` | `/admin/api_keys` | — | `{ "keys": [{id, key_string(prefix only), user_id, description, usage_count, last_used_at, created_at}] }` |
 | `DELETE` | `/admin/api_keys/{id}` | — | `{ "status": "ok" }` |
 | `GET` | `/admin/stats` | — | `{ "users": int, "chats": int, "messages": int }` |
+| `GET` | `/admin/events?limit=N` | — | `{ "events": [{id, device_id, type, data, created_at}], "count": int }` (recent edge events, newest first) |
 
 ---
 

@@ -191,6 +191,13 @@ class KnowledgeFactRequest(BaseModel):
     category: str = "other"
 
 
+class EventRequest(BaseModel):
+    device_id: str = Field(..., min_length=1, max_length=64)
+    type: str = Field(..., min_length=1, max_length=32)
+    ts: Optional[str] = Field(default=None, max_length=40)
+    data: Optional[Dict[str, Any]] = None
+
+
 # ----------------- Auth endpoints -----------------
 @app.post("/auth/login")
 def login(req: LoginRequest, request: Request):
@@ -304,6 +311,26 @@ def _system_stats() -> Dict[str, Any]:
 def system_stats(request: Request) -> Dict[str, Any]:
     # Auth-gated by the middleware (not in the bypass list).
     return _system_stats()
+
+
+@app.post("/events")
+def ingest_event(req: EventRequest, request: Request):
+    """Ingest a high-level event from an edge device (e.g. the Pi camera agent).
+
+    Auth-gated by the middleware (the device authenticates with its machine API key).
+    Stores the event; `data` is kept as JSON text. Acting on events (notifications,
+    automation) can hang off this later — for now it's recorded and queryable.
+    """
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            "INSERT INTO vision_events (device_id, type, data, user_id) VALUES (?, ?, ?, ?)",
+            (req.device_id, req.type, json.dumps(req.data or {}), request.state.user_id),
+        )
+        conn.commit()
+        return {"status": "ok", "id": cur.lastrowid}
+    finally:
+        conn.close()
 
 
 # ----------------- Chat -----------------
@@ -535,6 +562,30 @@ def admin_stats(request: Request):
             "chats": conn.execute("SELECT COUNT(*) FROM chat_sessions").fetchone()[0],
             "messages": conn.execute("SELECT COUNT(*) FROM conversation_history").fetchone()[0],
         }
+    finally:
+        conn.close()
+
+
+@app.get("/admin/events")
+def admin_events(request: Request, limit: int = 50):
+    """Recent edge/vision events (most recent first), for monitoring the camera agent."""
+    _require_admin(request)
+    limit = max(1, min(limit, 500))
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT id, device_id, type, data, created_at FROM vision_events ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        events = []
+        for r in rows:
+            e = dict(r)
+            try:
+                e["data"] = json.loads(e["data"]) if e["data"] else {}
+            except (ValueError, TypeError):
+                e["data"] = {}
+            events.append(e)
+        return {"events": events, "count": len(events)}
     finally:
         conn.close()
 
