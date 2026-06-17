@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-16 — Docs: grouped setup guides under docs/setup/
+
+- Per-component setup docs now live together under **`docs/setup/`**: `server.md` (new,
+  consolidated), `raspberry-pi.md` (moved from `edge/README.md`), `volume-agent.md` (moved from
+  `clients/volume-agent/README.md`). The `edge/` and `clients/volume-agent/` dirs keep a short
+  pointer README. The docs index links all three under "Setup guides (by component)".
+
 ## 2026-06-16 — Secure device control: volume (pull-model agent)
 
 - **Authorized volume control**, security-first: `POST /devices/volume` enqueues a validated

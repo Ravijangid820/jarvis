@@ -5,14 +5,14 @@ pitch and quick start; the files here go deep on each area.
 
 ## Setup guides (by component)
 
-Each runnable piece has its own setup doc — pick the one you're deploying. They run on
-different machines and have independent environments.
+Each runnable piece has its own setup doc under [`setup/`](setup/) — pick the one you're
+deploying. They run on different machines and have independent environments.
 
 | Component | Runs on | Setup doc | Entry point |
 |---|---|---|---|
-| **Server** — orchestrator + web UI | the Proxmox LXC | [main README → Quick Start](../README.md#quick-start), then [DEPLOY.md](DEPLOY.md) | `bash src/scripts/setup.sh` |
-| **Raspberry Pi vision agent** — camera, motion/face/pose/gestures | the Pi | [edge/README.md](../edge/README.md) | `bash edge/setup.sh` → `python -m jarvis_edge.bench` |
-| **Windows volume agent** — controls the laptop/BT volume | the laptop | [clients/volume-agent/README.md](../clients/volume-agent/README.md) | `python volume_agent.py` |
+| **Server** — orchestrator + web UI | the Proxmox LXC | [setup/server.md](setup/server.md) (+ [DEPLOY.md](DEPLOY.md) for re-deploys) | `bash src/scripts/setup.sh` |
+| **Raspberry Pi vision agent** — camera, motion/face/pose/gestures | the Pi | [setup/raspberry-pi.md](setup/raspberry-pi.md) | `bash edge/setup.sh` → `python -m jarvis_edge.bench` |
+| **Windows volume agent** — controls the laptop/BT volume | the laptop | [setup/volume-agent.md](setup/volume-agent.md) | `python volume_agent.py` |
 
 ## Core docs
 
@@ -41,12 +41,12 @@ src/orchestrator/   FastAPI app — see ARCHITECTURE.md for the module graph
 src/scripts/        setup.sh + download_models.sh + build_native.sh (bootstrap), run_listener.sh
                     (voice), manage.py (admin CLI), reembed_memory.py (migration), fetch_fonts.py
 frontend/           React 19 + Vite chat UI (+ admin console)
-edge/               Raspberry Pi camera/vision agent — own env; see edge/README.md
+edge/               Raspberry Pi camera/vision agent — own env (setup: docs/setup/raspberry-pi.md)
 clients/            device agents on other machines — e.g. clients/volume-agent/ (Windows volume)
 config/             schema.sql + jarvis.example.json (real jarvis.json is gitignored)
 systemd/            llama-fast + jarvis-orchestrator service units
 tests/              pytest suite
 ```
 
-Setup/runtime docs co-locate with their code (`edge/README.md`, `clients/volume-agent/README.md`)
-so they stay in sync; this index links them under "Setup guides" above.
+The per-component setup guides live together under [`docs/setup/`](setup/); each code dir keeps a
+short README pointing to its guide.
