@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
     key_prefix TEXT,                      -- short prefix shown in the admin UI
     user_id INTEGER NOT NULL,
     description TEXT,
+    device_id TEXT,                       -- if set, key is bound to this device (pull/events scoped to it)
     usage_count INTEGER DEFAULT 0,
     last_used_at DATETIME,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,

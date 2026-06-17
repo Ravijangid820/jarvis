@@ -43,12 +43,26 @@ class Volume:
         self._vol.SetMute(1 if on else 0, None)
 
 
+def _int_or_none(v):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def apply_command(vol, cmd):
-    action, p = cmd.get("action"), cmd.get("params", {})
-    if action == "set":
-        vol.set_pct(int(p["value"]))
-    elif action == "step":
-        vol.set_pct(vol.get_pct() + int(p["value"]))
+    """Apply one command, validating the server's data defensively — never assume the
+    server/channel is honest: unknown actions and bad/missing values are rejected, and the
+    target is clamped to 0–100. The worst a malformed command can do is nothing."""
+    action = (cmd.get("action") or "").lower()
+    p = cmd.get("params") or {}
+    if action in ("set", "step"):
+        val = _int_or_none(p.get("value"))
+        if val is None:
+            log.warning("ignoring %s with bad/missing value: %r", action, p.get("value"))
+            return
+        target = val if action == "set" else vol.get_pct() + val
+        vol.set_pct(max(0, min(100, target)))
     elif action == "mute":
         vol.mute(True)
     elif action == "unmute":

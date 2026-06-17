@@ -1,4 +1,5 @@
 """SQLite access: connection factory + schema initialization."""
+import os
 import sqlite3
 from pathlib import Path
 
@@ -21,15 +22,16 @@ def get_db() -> sqlite3.Connection:
 def _safe_exec(conn: sqlite3.Connection, sql: str):
     """Run a best-effort migration statement (e.g. ALTER that may already be applied).
 
-    Only swallow the "already applied" cases (duplicate column / already exists / no such
-    object on DROP IF EXISTS); re-raise anything else so a genuinely broken migration is
-    not silently masked into later "no such table"-style failures.
+    Only swallow the "already applied" cases (duplicate column / already-exists); re-raise
+    anything else — including "no such table/column" — so a genuinely broken migration is not
+    silently masked. (DROP ... IF EXISTS never raises on a missing object, so it needs no
+    swallow here.)
     """
     try:
         conn.execute(sql)
     except sqlite3.OperationalError as e:
         msg = str(e).lower()
-        if "duplicate column" in msg or "already exists" in msg or "no such" in msg:
+        if "duplicate column" in msg or "already exists" in msg:
             return  # already in the expected state — benign
         raise
 
@@ -73,6 +75,7 @@ def init_db():
         _migrate_plaintext_api_keys(conn)
         _safe_exec(conn, "ALTER TABLE conversation_history ADD COLUMN facts_extracted BOOLEAN DEFAULT 0")
         _safe_exec(conn, "ALTER TABLE users ADD COLUMN can_control_devices INTEGER DEFAULT 0")
+        _safe_exec(conn, "ALTER TABLE api_keys ADD COLUMN device_id TEXT")
         # Drop the legacy FTS5 search infra + unused table (superseded by ChromaDB vectors).
         for stmt in (
             "DROP TRIGGER IF EXISTS conversation_ai",
@@ -85,3 +88,11 @@ def init_db():
         conn.commit()
     finally:
         conn.close()
+    # The DB holds password hashes, hashed tokens, chat history and knowledge — keep it
+    # owner-only (defence-in-depth; pair with UMask=0077 in the systemd unit). Best-effort:
+    # also tighten the WAL/SHM siblings, which carry recently-written data.
+    for p in (DB_PATH, f"{DB_PATH}-wal", f"{DB_PATH}-shm"):
+        try:
+            os.chmod(p, 0o600)
+        except OSError:
+            pass

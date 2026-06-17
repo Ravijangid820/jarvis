@@ -6,7 +6,7 @@ Run on the box (it talks straight to the SQLite DB; the orchestrator may be runn
     uv run python src/scripts/manage.py list-users
     uv run python src/scripts/manage.py create-admin <username> <password>
     uv run python src/scripts/manage.py reset-password <username> <password>
-    uv run python src/scripts/manage.py mint-key <username> [description]   # prints a new API key
+    uv run python src/scripts/manage.py mint-key <username> [description] [device_id]   # prints a new API key
 
 Password hashing matches the orchestrator (PBKDF2-HMAC-SHA256, 100k iterations).
 """
@@ -16,6 +16,8 @@ import secrets
 import sqlite3
 import sys
 from pathlib import Path
+
+PBKDF2_ITERATIONS = 600_000   # keep in sync with src/orchestrator/auth.py
 
 CONFIG = json.loads(Path("/srv/jarvis/config/jarvis.json").read_text())
 DB_PATH = CONFIG["memory"]["db_path"]
@@ -30,8 +32,8 @@ def _db():
 
 def hash_password(password: str) -> str:
     salt = secrets.token_hex(16)
-    key = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 100000)
-    return f"{salt}:{key.hex()}"
+    key = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), PBKDF2_ITERATIONS)
+    return f"pbkdf2_sha256${PBKDF2_ITERATIONS}${salt}${key.hex()}"
 
 
 def list_users():
@@ -66,7 +68,9 @@ def reset_password(username, password):
     print(f"Password reset for '{username}'.")
 
 
-def mint_key(username, description="cli-minted"):
+def mint_key(username, description="cli-minted", device_id=None):
+    """Mint an API key. If device_id is given, the key is BOUND to that device: it may
+    only pull commands for / post events as that device (enforced by the orchestrator)."""
     with _db() as c:
         row = c.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
         if not row:
@@ -75,8 +79,8 @@ def mint_key(username, description="cli-minted"):
         # Store only the SHA-256 hash + a short display prefix (matches the orchestrator).
         key_hash = hashlib.sha256(key.encode()).hexdigest()
         c.execute(
-            "INSERT INTO api_keys (key_string, key_prefix, user_id, description) VALUES (?, ?, ?, ?)",
-            (key_hash, key[:10], row["id"], description),
+            "INSERT INTO api_keys (key_string, key_prefix, user_id, description, device_id) VALUES (?, ?, ?, ?, ?)",
+            (key_hash, key[:10], row["id"], description, device_id),
         )
     print(key)  # printed alone so it's easy to capture: KEY=$(... mint-key ...)
 
@@ -92,7 +96,9 @@ def main(argv):
     elif cmd == "reset-password" and len(rest) == 2:
         reset_password(*rest)
     elif cmd == "mint-key" and len(rest) >= 1:
-        mint_key(rest[0], rest[1] if len(rest) > 1 else "cli-minted")
+        mint_key(rest[0],
+                 rest[1] if len(rest) > 1 else "cli-minted",
+                 rest[2] if len(rest) > 2 else None)
     else:
         sys.exit(__doc__)
 

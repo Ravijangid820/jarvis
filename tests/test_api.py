@@ -41,6 +41,19 @@ def _seed_user(username, password, role):
     c.close()
 
 
+def _seed_device_key(username, device_id):
+    """Mint an API key bound to a device for `username`; returns the plaintext key."""
+    c = sqlite3.connect(_DB)
+    c.row_factory = sqlite3.Row
+    uid = c.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()["id"]
+    key = f"devkey-{device_id}"
+    c.execute("INSERT INTO api_keys (key_string, key_prefix, user_id, description, device_id) "
+              "VALUES (?, ?, ?, ?, ?)", (auth.hash_token(key), key[:10], uid, "test", device_id))
+    c.commit()
+    c.close()
+    return key
+
+
 @pytest.fixture(scope="module")
 def client():
     with TestClient(main.app) as c:   # runs lifespan → init_db on the temp DB
@@ -119,18 +132,43 @@ def test_events_ingest_requires_auth(client):
     assert client.post("/events", json={"device_id": "pi", "type": "motion"}).status_code == 401
 
 
-def test_events_ingest_and_admin_list(client):
-    tok = _tok(client, "pepper", "pw-user")   # any valid token/key may post (devices use API keys)
+def test_events_plain_user_forbidden(client):
+    # A plain web user (no device-scoped key) may NOT post events (matters once events drive authz).
+    tok = _tok(client, "pepper", "pw-user")
     r = client.post("/events", headers={"Authorization": "Bearer " + tok},
+                    json={"device_id": "pi-test", "type": "motion"})
+    assert r.status_code == 403
+
+
+def test_events_admin_ingest_and_admin_list(client):
+    admin = _tok(client, "tony", "pw-admin")   # admins may post synthetic events as any device
+    r = client.post("/events", headers={"Authorization": "Bearer " + admin},
                     json={"device_id": "pi-test", "type": "face_seen", "data": {"name": "Ravi"}})
     assert r.status_code == 200 and r.json()["status"] == "ok"
-    # admin can read it back, with data round-tripped from JSON
-    admin = _tok(client, "tony", "pw-admin")
     got = client.get("/admin/events", headers={"Authorization": "Bearer " + admin}).json()
     assert got["count"] >= 1
     latest = got["events"][0]
     assert latest["device_id"] == "pi-test" and latest["type"] == "face_seen"
     assert latest["data"] == {"name": "Ravi"}
+
+
+def test_events_device_key_provenance(client):
+    # A device-scoped key records events under ITS OWN device_id — the body can't spoof another.
+    key = _seed_device_key("pepper", "pi-cam")
+    r = client.post("/events", headers={"Authorization": "Bearer " + key},
+                    json={"device_id": "SOMEONE-ELSE", "type": "face_seen"})
+    assert r.status_code == 200
+    admin = _tok(client, "tony", "pw-admin")
+    latest = client.get("/admin/events", headers={"Authorization": "Bearer " + admin}).json()["events"][0]
+    assert latest["device_id"] == "pi-cam"          # bound to the key, not the spoofed body value
+
+
+def test_events_data_too_large_rejected(client):
+    admin = _tok(client, "tony", "pw-admin")
+    big = {"blob": "x" * 5000}
+    r = client.post("/events", headers={"Authorization": "Bearer " + admin},
+                    json={"device_id": "pi", "type": "motion", "data": big})
+    assert r.status_code == 422
 
 
 def test_volume_authz_denies_unprivileged(client):
@@ -161,3 +199,70 @@ def test_volume_validation(client):
     assert client.post("/devices/volume", headers=h, json={"action": "set", "value": 200}).status_code == 422
     assert client.post("/devices/volume", headers=h, json={"action": "frobnicate"}).status_code == 400
     assert client.post("/devices/volume", headers=h, json={"action": "set"}).status_code == 400
+
+
+def test_device_commands_bound_to_key(client):
+    # Enqueue for "laptop" (admin), then: the laptop-bound key can pull it; a key bound to a
+    # DIFFERENT device cannot (F1 — a key can't drain another device's queue).
+    admin = _tok(client, "tony", "pw-admin")
+    client.post("/devices/volume", headers={"Authorization": "Bearer " + admin},
+                json={"action": "mute", "device": "laptop"})
+    other = _seed_device_key("pepper", "other-dev")
+    forbidden = client.get("/devices/commands?device=laptop&wait=0",
+                           headers={"Authorization": "Bearer " + other})
+    assert forbidden.status_code == 403                       # wrong device key → denied
+    laptop = _seed_device_key("pepper", "laptop")
+    pulled = client.get("/devices/commands?device=laptop&wait=0",
+                        headers={"Authorization": "Bearer " + laptop}).json()
+    assert any(c["action"] == "mute" for c in pulled["commands"])
+
+
+def test_login_throttle_is_per_username(client):
+    # Locking out one username must NOT block logins for a different account (no global lockout).
+    for _ in range(9):
+        _login(client, "tony", "nope")
+    assert _login(client, "tony", "nope").status_code == 429       # tony throttled
+    assert _login(client, "pepper", "pw-user").status_code == 200  # pepper unaffected
+
+
+def test_system_is_admin_only(client):
+    user = _tok(client, "pepper", "pw-user")
+    admin = _tok(client, "tony", "pw-admin")
+    assert client.get("/system", headers={"Authorization": "Bearer " + user}).status_code == 403
+    assert client.get("/system", headers={"Authorization": "Bearer " + admin}).status_code == 200
+
+
+def test_rename_unowned_session_forbidden(client):
+    ptok = _tok(client, "pepper", "pw-user")
+    ttok = _tok(client, "tony", "pw-admin")
+    sid = client.post("/sessions", headers={"Authorization": "Bearer " + ptok}).json()["id"]
+    r = client.put("/sessions/" + sid, headers={"Authorization": "Bearer " + ttok},
+                   json={"title": "hijacked"})
+    assert r.status_code == 403
+
+
+def test_delete_missing_knowledge_404(client):
+    tok = _tok(client, "pepper", "pw-user")
+    assert client.delete("/knowledge/999999", headers={"Authorization": "Bearer " + tok}).status_code == 404
+
+
+def test_create_user_role_must_be_valid(client):
+    admin = _tok(client, "tony", "pw-admin")
+    r = client.post("/admin/users", headers={"Authorization": "Bearer " + admin},
+                    json={"username": "x", "password": "y", "role": "superuser"})
+    assert r.status_code == 422            # role is constrained to user|admin
+
+
+def test_logout_all_revokes_sessions(client):
+    a = _tok(client, "pepper", "pw-user")
+    b = _tok(client, "pepper", "pw-user")    # second device/session
+    assert client.post("/auth/logout-all", headers={"Authorization": "Bearer " + a}).status_code == 200
+    # both tokens are now dead
+    assert client.get("/sessions", headers={"Authorization": "Bearer " + a}).status_code == 403
+    assert client.get("/sessions", headers={"Authorization": "Bearer " + b}).status_code == 403
+
+
+def test_security_headers_present(client):
+    r = client.get("/health")
+    assert "default-src 'self'" in r.headers.get("Content-Security-Policy", "")
+    assert r.headers.get("Referrer-Policy") == "no-referrer"

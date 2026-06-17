@@ -7,7 +7,8 @@ _Multi-agent audit (6 reviewers, adversarial verification), 2026-06-15._
 > Severity is post-verification (adjusted). Line numbers are best-effort against the audited revision.
 
 > **A follow-up whole-project review (2026-06-17)** — covering the device/edge/agent subsystems
-> added since — is appended at the **end of this file** (findings F1–F24, all OPEN for review).
+> added since — is appended at the **end of this file** (findings F1–F24). Most were resolved in a
+> hardening pass the same day; see the **Resolution status** table there.
 
 
 ## Security (13)
@@ -528,8 +529,38 @@ _Multi-agent audit (6 reviewers, adversarial verification), 2026-06-15._
 
 _4 parallel reviewers + manual verification of the highest-impact claims. Scope adds the newer
 `/events` + `/devices/*` endpoints, the Raspberry Pi edge agent (`edge/`), the Windows volume
-agent (`clients/volume-agent/`), install/supply-chain scripts, the frontend, and infra/config.
-All items are **OPEN / for review** unless noted._
+agent (`clients/volume-agent/`), install/supply-chain scripts, the frontend, and infra/config._
+
+### Resolution status (2026-06-17 hardening pass)
+
+| Finding | Status | Note |
+|---|---|---|
+| F1 device↔key binding | ✅ Fixed | `api_keys.device_id`; `mint-key <user> [desc] [device]`; middleware sets `request.state.device_id`; `/devices/commands` requires the key be bound to that device (or admin); `/events` records provenance from the key (body can't spoof) and plain users are denied. |
+| F2 login lockout (IP-keyed) | ✅ Fixed | Login throttle now keyed on **username** (no shared-IP global lockout); per-account. |
+| F3 root + 0.0.0.0 | ◑ Partial | `UMask=0077` added; non-root `User=` still needs a one-time chown of `/srv/jarvis` + HF cache (operator step) — left documented. |
+| F4 long-poll thread exhaustion | ✅ Fixed | `/devices/commands` is now `async` + `asyncio.sleep`, DB in threadpool, concurrency-capped (semaphore 16). |
+| F5 no CSP | ✅ Fixed | Strict CSP + `Referrer-Policy: no-referrer` on every response. |
+| F6 DB world-readable | ✅ Fixed | `init_db()` chmods DB+WAL/SHM to `0600`; `UMask=0077` keeps new files owner-only. |
+| F7 unbounded event data / no retention | ✅ Fixed | `data` capped at 4 KB; `vision_events` capped to last 5000; delivered `device_commands` purged after 1 day. |
+| F8 supply-chain downloads | ◑ Partial | GGUF: https check + optional `LLM_GGUF_SHA256` verify; `LLAMA_CPP_REF` pin override + commit logged; agent deps upper-bounded. Embedding/Piper revision-pinning + mandatory checksums still TODO. |
+| F9 self-scoped prompt injection | — Accepted | Self-only; delimited framing kept. |
+| F10 long-lived credentials | ◑ Partial | Added `/auth/logout-all` (revoke-all). Token lifetime (30 d) / rotation / key expiry unchanged. |
+| F11 0-row mutations return ok | ✅ Fixed | Rename → 403 on not-yours; knowledge update/delete → 404 on missing. |
+| F12 `/system` open to any user | ✅ Fixed | Now admin-only. |
+| F13 raw exception to client | ✅ Fixed | `admin_delete_user` logs + returns generic 500. |
+| F14 no length bounds on auth | ✅ Fixed | username ≤ 64, password ≤ 256. |
+| F15 free-string role | ✅ Fixed | `role` constrained to `user`/`admin`. |
+| F16 agents plaintext HTTP | — Accepted | Tied to TLS / trusted-LAN decision. |
+| F17 key files not 0600 | ◯ Deferred | Operator/setup step; low. |
+| F18 volume agent trusts server | ✅ Fixed | Client-side validate + clamp (0–100), unknown/bad commands ignored. |
+| F19 agent deps unpinned | ◑ Partial | Upper bounds added; hash-pinned lockfile still TODO. |
+| F20 PBKDF2 100k | ✅ Fixed | New hashes 600k (`pbkdf2_sha256$…`); legacy `salt:hex` still verifies. |
+| F21 `_safe_exec` over-broad | ✅ Fixed | No longer swallows `no such …`. |
+| F22 token in localStorage | ◯ Deferred | CSP (F5) added as mitigation; HttpOnly-cookie migration not done. |
+| F23 rate-limit dicts never evict | ✅ Fixed | Empty buckets swept; IP-keyed growth removed by F2. |
+| F24 voice listener misconfigured | ◯ Deferred | Functional redesign (needs the transcription→POST helper). |
+
+_Details of each finding below are unchanged from the original review._
 
 ## High
 

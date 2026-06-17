@@ -42,6 +42,9 @@ ProtectControlGroups=true
 RestrictSUIDSGID=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 LockPersonality=true
+# New files (SQLite DB, WAL/SHM, logs) are created owner-only — they hold password hashes,
+# hashed tokens, chat history and knowledge. init_db() also chmods the DB to 0600 on start.
+UMask=0077
 
 # --- Resource limits ---
 LimitNOFILE=65536

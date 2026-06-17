@@ -4,6 +4,21 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-17 — Security hardening pass (resolves most of F1–F24)
+
+Acted on the 2026-06-17 review ([AUDIT.md](AUDIT.md) — see the Resolution status table). Fully
+fixed (15): **F1** device↔API-key binding (`api_keys.device_id`; `mint-key … <device_id>`;
+`/devices/commands` requires the key be bound to that device; `/events` provenance from the key,
+plain users denied), **F2** login throttle keyed per-username (no shared-IP global lockout), **F4**
+async long-poll (no thread-pool exhaustion, concurrency-capped), **F5** CSP + Referrer-Policy,
+**F6** DB chmod 0600 + `UMask=0077`, **F7** event `data` cap + retention on events/commands, **F11**
+403/404 on cross-user/missing mutations, **F12** `/system` admin-only, **F13** generic 500, **F14**
+auth length bounds, **F15** role enum, **F18** volume agent client-side validation, **F20** PBKDF2
+600k (legacy hashes still verify), **F21** tighter `_safe_exec`, **F23** rate-limit bucket eviction.
+Partial: **F3** `UMask` added (non-root `User=` still an operator step), **F8** GGUF https/checksum
++ `LLAMA_CPP_REF` pin + dep upper-bounds, **F10** added `/auth/logout-all`, **F19** dep bounds.
+Deferred: F9/F16 (accepted), F17, F22 (CSP mitigates), F24 (functional). Tests: 29 → **42**.
+
 ## 2026-06-17 — Security review (whole project) logged
 
 - Ran a follow-up multi-reviewer security review across the newer surface (device `/events` +

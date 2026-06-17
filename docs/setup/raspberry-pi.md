@@ -74,7 +74,8 @@ Use the numbers to set each detector's `interval_s` (and whether to enable it) i
 ```bash
 bash edge/setup.sh          # 64-bit check, apt deps, venv, pip install, config
 # then on the SERVER, mint a key for this device and copy it to the Pi:
-#   uv run python src/scripts/manage.py mint-key <user> pi-vision   →  edge/config/edge.key
+#   uv run python src/scripts/manage.py mint-key <user> pi-vision <device_id>  →  edge/config/edge.key
+#   (the last arg binds the key to that device — it may then only post events as that device)
 cp edge/config.example.json edge/config/config.json   # review server.url / camera / detectors
 python -m jarvis_edge.agent --config edge/config/config.json        # or --dry-run
 ```

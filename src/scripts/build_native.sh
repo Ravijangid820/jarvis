@@ -18,9 +18,19 @@ cyan "whisper.cpp (v1.8.6)"
 cmake -S "$REPO/whisper" -B "$REPO/whisper/build" -DGGML_AVX=ON -DGGML_AVX2=OFF -DGGML_NATIVE=OFF -DWHISPER_SDL2=ON
 cmake --build "$REPO/whisper/build" -j
 
-# llama.cpp — AVX-only build of the server.
+# llama.cpp — AVX-only build of the server. Pin a release for a reproducible, tamper-evident
+# build by setting LLAMA_CPP_REF=<tag-or-commit> (recommended); unset tracks upstream HEAD.
 cyan "llama.cpp (llama-server)"
-[ -d "$REPO/llama.cpp/.git" ] || git clone --depth 1 https://github.com/ggml-org/llama.cpp "$REPO/llama.cpp"
+LLAMA_CPP_REF="${LLAMA_CPP_REF:-}"
+if [ ! -d "$REPO/llama.cpp/.git" ]; then
+  if [ -n "$LLAMA_CPP_REF" ]; then
+    git clone --branch "$LLAMA_CPP_REF" --depth 1 https://github.com/ggml-org/llama.cpp "$REPO/llama.cpp"
+  else
+    echo "  ! LLAMA_CPP_REF unset — cloning upstream HEAD (not pinned). Set LLAMA_CPP_REF=<tag> to pin." >&2
+    git clone --depth 1 https://github.com/ggml-org/llama.cpp "$REPO/llama.cpp"
+  fi
+fi
+echo "  llama.cpp at commit: $(git -C "$REPO/llama.cpp" rev-parse HEAD)"
 cmake -S "$REPO/llama.cpp" -B "$REPO/llama.cpp/build" -DGGML_AVX=ON -DGGML_AVX2=OFF -DGGML_NATIVE=OFF
 cmake --build "$REPO/llama.cpp/build" -j --target llama-server
 

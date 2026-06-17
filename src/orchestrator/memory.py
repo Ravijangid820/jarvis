@@ -261,30 +261,32 @@ def store_fact(user_id: int, category: str, content: str, source: str = "auto",
 
 
 def delete_fact(fact_id: int, user_id: int) -> bool:
+    """Delete the fact; returns False if no such fact is owned by user_id (caller should 404)."""
     conn = get_db()
     try:
-        conn.execute("DELETE FROM user_knowledge WHERE id = ? AND user_id = ?", (fact_id, user_id))
+        cur = conn.execute("DELETE FROM user_knowledge WHERE id = ? AND user_id = ?", (fact_id, user_id))
         conn.commit()
-        return True
+        return cur.rowcount > 0
     finally:
         conn.close()
 
 
 def update_fact(fact_id: int, user_id: int, content: str, category: str = None) -> bool:
+    """Update the fact; returns False if no such fact is owned by user_id (caller should 404)."""
     conn = get_db()
     try:
         if category:
-            conn.execute(
+            cur = conn.execute(
                 "UPDATE user_knowledge SET content = ?, category = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?",
                 (content, category, fact_id, user_id)
             )
         else:
-            conn.execute(
+            cur = conn.execute(
                 "UPDATE user_knowledge SET content = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?",
                 (content, fact_id, user_id)
             )
         conn.commit()
-        return True
+        return cur.rowcount > 0
     finally:
         conn.close()
 

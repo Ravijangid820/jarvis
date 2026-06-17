@@ -14,6 +14,21 @@ def test_password_roundtrip():
     assert not verify_password("wrong password", h)
 
 
+def test_new_hash_uses_pbkdf2_600k_format():
+    h = hash_password("pw")
+    assert h.startswith("pbkdf2_sha256$600000$")
+    assert verify_password("pw", h)
+
+
+def test_legacy_100k_hash_still_verifies():
+    # Pre-existing users were stored as "<salt>:<hex>" at 100k iterations — must still log in.
+    import hashlib
+    salt = "deadbeef"
+    legacy = f"{salt}:{hashlib.pbkdf2_hmac('sha256', b'secret', salt.encode(), 100000).hex()}"
+    assert verify_password("secret", legacy)
+    assert not verify_password("wrong", legacy)
+
+
 def test_password_hash_is_salted():
     # Same password hashes differently each time (random salt), but both verify.
     h1 = hash_password("same")

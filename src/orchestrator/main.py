@@ -10,6 +10,7 @@ Domain logic lives in focused modules:
   chat     — sessions, message persistence, context-window-aware prompt assembly
   budget   — pure prompt-token-budgeting helpers (unit-tested)
 """
+import asyncio
 import json
 import os
 import sqlite3
@@ -18,13 +19,14 @@ import time
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 import chat
 import memory
@@ -58,37 +60,62 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
 )
 
-# --- Rate limiting (in-process, per user) -----------------------------------
+# --- Rate limiting (in-process) ---------------------------------------------
 _rate_store: Dict[str, List[float]] = defaultdict(list)
+# Login brute-force guard, keyed on USERNAME (not client IP): behind the Tailscale subnet
+# router every request shares one source IP, so an IP bucket would be one global bucket that
+# any client could exhaust to lock everyone out. Per-username throttling targets the actual
+# brute-force surface and can't cause a cross-account lockout.
+_login_store: Dict[str, List[float]] = defaultdict(list)
+LOGIN_MAX_PER_MIN = 8
+_last_sweep = [0.0]
+
+
+def _sweep_rate_stores(now: float) -> None:
+    """Drop fully-expired buckets so the dicts don't grow unbounded with distinct keys."""
+    for store in (_rate_store, _login_store):
+        for k in [k for k, v in store.items() if not any(t > now - 60.0 for t in v)]:
+            del store[k]
+
+
+def _allow(store: Dict[str, List[float]], key: str, limit: int) -> bool:
+    now = time.time()
+    if now - _last_sweep[0] > 300.0:
+        _sweep_rate_stores(now)
+        _last_sweep[0] = now
+    bucket = [t for t in store[key] if t > now - 60.0]
+    if len(bucket) >= limit:
+        store[key] = bucket
+        return False
+    bucket.append(now)
+    store[key] = bucket
+    return True
 
 
 def check_rate_limit(key: str) -> bool:
-    now = time.time()
-    window_start = now - 60.0
-    _rate_store[key] = [t for t in _rate_store[key] if t > window_start]
-    if len(_rate_store[key]) >= RATE_LIMIT_RPM:
-        return False
-    _rate_store[key].append(now)
-    return True
+    return _allow(_rate_store, key, RATE_LIMIT_RPM)
 
 
-# Stricter, IP-keyed limiter for the unauthenticated login endpoint (brute-force guard).
-_login_store: Dict[str, List[float]] = defaultdict(list)
-LOGIN_MAX_PER_MIN = 8
+def check_login_rate(username: str) -> bool:
+    return _allow(_login_store, f"login:{username.lower()}", LOGIN_MAX_PER_MIN)
 
 
-def check_login_rate(ip: str) -> bool:
-    now = time.time()
-    _login_store[ip] = [t for t in _login_store[ip] if t > now - 60.0]
-    if len(_login_store[ip]) >= LOGIN_MAX_PER_MIN:
-        return False
-    _login_store[ip].append(now)
-    return True
+# Tight CSP: the SPA is a Vite build with an external module bundle (no inline <script>), so
+# script-src can stay 'self'. style-src needs 'unsafe-inline' for React inline styles; media/img
+# allow data: for TTS audio + inline SVG. This is the second line of defence behind the
+# render-as-React-nodes / http(s)-only-links invariants — it neutralises any future XSS regression.
+_CSP = (
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; font-src 'self'; media-src 'self' data: blob:; "
+    "connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+)
 
 
 def _apply_security_headers(response: Response, cache: str = "no-store") -> Response:
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Content-Security-Policy"] = _CSP
+    response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Cache-Control"] = cache
     return response
 
@@ -119,16 +146,19 @@ async def security_middleware(request: Request, call_next):
         if row:
             request.state.user_id = row["user_id"]
             request.state.is_admin = (row["role"] == "admin")
+            request.state.device_id = None     # web session → not a device-scoped principal
             is_authenticated = True
         else:
-            # 2. Per-user API key (machine integrations, e.g. the voice listener).
-            #    Stored hashed at rest, like session tokens — look up by hash.
+            # 2. Per-user API key (machine integrations, e.g. the voice listener / device agents).
+            #    Stored hashed at rest, like session tokens — look up by hash. `device_id`, if set,
+            #    binds the key to one device (enforced by /devices/* and /events).
             row = conn.execute(
-                "SELECT user_id, u.role FROM api_keys k JOIN users u ON k.user_id = u.id "
+                "SELECT user_id, u.role, k.device_id FROM api_keys k JOIN users u ON k.user_id = u.id "
                 "WHERE k.key_string = ?", (hash_token(token),)).fetchone()
             if row:
                 request.state.user_id = row["user_id"]
                 request.state.is_admin = (row["role"] == "admin")
+                request.state.device_id = row["device_id"]
                 is_authenticated = True
                 try:
                     conn.execute("UPDATE api_keys SET usage_count = usage_count + 1, "
@@ -171,14 +201,14 @@ class SessionRenameRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(..., min_length=1, max_length=64)
+    password: str = Field(..., min_length=1, max_length=256)
 
 
 class CreateUserRequest(BaseModel):
-    username: str
-    password: str
-    role: str = "user"
+    username: str = Field(..., min_length=1, max_length=64)
+    password: str = Field(..., min_length=1, max_length=256)
+    role: Literal["user", "admin"] = "user"
 
 
 class CreateKeyRequest(BaseModel):
@@ -197,6 +227,14 @@ class EventRequest(BaseModel):
     ts: Optional[str] = Field(default=None, max_length=40)
     data: Optional[Dict[str, Any]] = None
 
+    @field_validator("data")
+    @classmethod
+    def _cap_data(cls, v):
+        # Bound the stored JSON so a caller can't bloat the DB toward disk exhaustion.
+        if v is not None and len(json.dumps(v)) > 4096:
+            raise ValueError("event data too large (max 4 KB serialized)")
+        return v
+
 
 class VolumeRequest(BaseModel):
     action: str = Field(..., max_length=16)        # set | step | mute | unmute
@@ -207,10 +245,10 @@ class VolumeRequest(BaseModel):
 # ----------------- Auth endpoints -----------------
 @app.post("/auth/login")
 def login(req: LoginRequest, request: Request):
-    # Throttle by client IP — login is unauthenticated and bypasses the per-user
-    # limiter, so without this it's an unbounded password-guessing oracle.
-    client_ip = request.client.host if request.client else "unknown"
-    if not check_login_rate(client_ip):
+    # Throttle per-username (not per-IP): login bypasses the per-user limiter, so without this
+    # it's an unbounded password-guessing oracle. Keying on username also avoids the global
+    # lockout that an IP bucket would cause behind the shared subnet-router source IP.
+    if not check_login_rate(req.username):
         raise HTTPException(status_code=429, detail="Too many attempts; try again shortly")
     conn = get_db()
     try:
@@ -244,6 +282,19 @@ def logout(request: Request):
     return {"status": "ok"}
 
 
+@app.post("/auth/logout-all")
+def logout_all(request: Request):
+    """Revoke every session for the caller ("log out everywhere") — e.g. after a suspected
+    token leak. API keys are unaffected (revoke those via the admin panel / manage.py)."""
+    conn = get_db()
+    try:
+        cur = conn.execute("DELETE FROM auth_sessions WHERE user_id = ?", (request.state.user_id,))
+        conn.commit()
+        return {"status": "ok", "revoked": cur.rowcount}
+    finally:
+        conn.close()
+
+
 # ----------------- Session endpoints -----------------
 @app.get("/sessions")
 def list_sessions(request: Request):
@@ -258,6 +309,7 @@ def new_session(request: Request):
 
 @app.put("/sessions/{session_id}")
 def update_session(session_id: str, req: SessionRenameRequest, request: Request):
+    chat.require_owned_session(session_id, request.state.user_id)   # 403 on not-yours / missing
     chat.rename_session(session_id, req.title, request.state.user_id)
     return {"status": "ok"}
 
@@ -315,7 +367,8 @@ def _system_stats() -> Dict[str, Any]:
 
 @app.get("/system")
 def system_stats(request: Request) -> Dict[str, Any]:
-    # Auth-gated by the middleware (not in the bypass list).
+    # Admin-only: host telemetry (load/mem/uptime) is infrastructure detail, not for every user.
+    _require_admin(request)
     return _system_stats()
 
 
@@ -358,52 +411,86 @@ def queue_volume(req: VolumeRequest, request: Request):
     try:
         cur = conn.execute("INSERT INTO device_commands (device_id, action, params) VALUES (?, ?, ?)",
                            (req.device, action, json.dumps(params)))
+        # Retention: drop delivered commands older than a day so the queue doesn't grow forever.
+        conn.execute("DELETE FROM device_commands WHERE status='delivered' AND delivered_at < datetime('now','-1 day')")
         conn.commit()
         return {"status": "ok", "id": cur.lastrowid}
     finally:
         conn.close()
 
 
+# Cap concurrent long-polls so a flood of GET /devices/commands can't pile up unbounded.
+_poll_sem = asyncio.Semaphore(16)
+
+
+def _claim_commands(device: str) -> List[Dict[str, Any]]:
+    """Atomically fetch + mark-delivered pending commands for one device (sync; runs in a thread)."""
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT id, action, params FROM device_commands WHERE device_id = ? AND status = 'pending' ORDER BY id LIMIT 50",
+            (device,)).fetchall()
+        if not rows:
+            return []
+        ids = [r["id"] for r in rows]
+        ph = ",".join("?" * len(ids))
+        conn.execute(f"UPDATE device_commands SET status='delivered', delivered_at=datetime('now') WHERE id IN ({ph})", ids)
+        conn.commit()
+        return [{"id": r["id"], "action": r["action"], "params": json.loads(r["params"] or "{}")} for r in rows]
+    finally:
+        conn.close()
+
+
 @app.get("/devices/commands")
-def pull_device_commands(request: Request, device: str, wait: int = 20):
+async def pull_device_commands(request: Request, device: str, wait: int = 20):
     """Device agents PULL their pending commands here (outbound-only; no inbound port on the
-    device). Long-polls up to `wait` seconds, returns as soon as commands exist, marks them
-    delivered. Auth via the middleware (the agent uses its machine API key)."""
+    device). Long-polls up to `wait` seconds, returning as soon as commands exist.
+
+    `async` + `asyncio.sleep` so a waiting poll holds no worker thread (a sync handler would
+    exhaust the thread pool under many concurrent polls). The key must be bound to `device`
+    (or be an admin): a key for one device can't drain another device's queue (F1)."""
+    dev = getattr(request.state, "device_id", None)
+    if not getattr(request.state, "is_admin", False) and dev != device:
+        raise HTTPException(status_code=403, detail="This key is not bound to that device")
     wait = max(0, min(wait, 30))
     deadline = time.time() + wait
-    while True:
-        conn = get_db()
-        try:
-            rows = conn.execute(
-                "SELECT id, action, params FROM device_commands WHERE device_id = ? AND status = 'pending' ORDER BY id LIMIT 50",
-                (device,)).fetchall()
-            if rows:
-                ids = [r["id"] for r in rows]
-                ph = ",".join("?" * len(ids))
-                conn.execute(f"UPDATE device_commands SET status='delivered', delivered_at=datetime('now') WHERE id IN ({ph})", ids)
-                conn.commit()
-                return {"commands": [{"id": r["id"], "action": r["action"], "params": json.loads(r["params"] or "{}")} for r in rows]}
-        finally:
-            conn.close()
-        if time.time() >= deadline:
-            return {"commands": []}
-        time.sleep(0.5)
+    async with _poll_sem:
+        while True:
+            cmds = await run_in_threadpool(_claim_commands, device)
+            if cmds:
+                return {"commands": cmds}
+            if time.time() >= deadline:
+                return {"commands": []}
+            await asyncio.sleep(0.5)
+
+
+VISION_EVENTS_CAP = 5000   # keep only the most recent N events (disk-bound, never pruned otherwise)
 
 
 @app.post("/events")
 def ingest_event(req: EventRequest, request: Request):
     """Ingest a high-level event from an edge device (e.g. the Pi camera agent).
 
-    Auth-gated by the middleware (the device authenticates with its machine API key).
-    Stores the event; `data` is kept as JSON text. Acting on events (notifications,
-    automation) can hang off this later — for now it's recorded and queryable.
+    Provenance is bound to the API key (F1): a device-scoped key records events under ITS OWN
+    device_id regardless of the body, so a key can't spoof events as another device. Admins may
+    post as any device_id (for testing). Other principals (a plain web user) may not post events
+    — this matters because face/presence events will drive authorization later.
     """
+    is_admin = getattr(request.state, "is_admin", False)
+    dev = getattr(request.state, "device_id", None)
+    if dev:
+        device_id = dev                  # trust the key, not the client-supplied device_id
+    elif is_admin:
+        device_id = req.device_id        # admins may post synthetic/test events as any device
+    else:
+        raise HTTPException(status_code=403, detail="Only device-scoped API keys (or admins) may post events")
     conn = get_db()
     try:
         cur = conn.execute(
             "INSERT INTO vision_events (device_id, type, data, user_id) VALUES (?, ?, ?, ?)",
-            (req.device_id, req.type, json.dumps(req.data or {}), request.state.user_id),
+            (device_id, req.type, json.dumps(req.data or {}), request.state.user_id),
         )
+        conn.execute("DELETE FROM vision_events WHERE id <= ?", (cur.lastrowid - VISION_EVENTS_CAP,))
         conn.commit()
         return {"status": "ok", "id": cur.lastrowid}
     finally:
@@ -579,7 +666,8 @@ def admin_delete_user(user_id: int, request: Request):
         conn.commit()
     except Exception as e:
         conn.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("admin_delete_user(%s) failed: %s", user_id, e)
+        raise HTTPException(status_code=500, detail="Failed to delete user")
     finally:
         conn.close()
     memory.delete_vectors(all_msg_ids)
@@ -693,14 +781,16 @@ def edit_knowledge(fact_id: int, req: KnowledgeFactRequest, request: Request):
     content = req.content.strip()
     if not content:
         raise HTTPException(status_code=400, detail="Empty content")
-    memory.update_fact(fact_id, request.state.user_id, content,
-                       req.category.lower().strip() if req.category else None)
+    if not memory.update_fact(fact_id, request.state.user_id, content,
+                              req.category.lower().strip() if req.category else None):
+        raise HTTPException(status_code=404, detail="No such fact")
     return {"status": "ok"}
 
 
 @app.delete("/knowledge/{fact_id}")
 def remove_knowledge(fact_id: int, request: Request):
-    memory.delete_fact(fact_id, request.state.user_id)
+    if not memory.delete_fact(fact_id, request.state.user_id):
+        raise HTTPException(status_code=404, detail="No such fact")
     return {"status": "ok"}
 
 

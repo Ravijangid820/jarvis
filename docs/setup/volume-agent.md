@@ -25,8 +25,9 @@ vocabulary — so the worst case if anything went wrong is "the volume changes."
 # 1. Python 3 installed, then:
 pip install -r requirements.txt
 
-# 2. On the SERVER, mint a key for this device:
-#      uv run python src/scripts/manage.py mint-key <user> laptop-volume
+# 2. On the SERVER, mint a key BOUND to this device (last arg = device_id, must match
+#    config.json's device_id — the key can then only control this device):
+#      uv run python src/scripts/manage.py mint-key <user> laptop-volume laptop
 #    and save the printed key into this folder as  agent.key
 
 # 3. Configure and run:

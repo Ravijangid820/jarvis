@@ -23,8 +23,13 @@ Non-admin users are capped at 500 characters per message (admins/API keys: 10000
 Body: `{ "username": str, "password": str }` → `{ "token": str, "role": "user"|"admin" }`
 (token valid 30 days; expired tokens are purged opportunistically).
 
+Login is throttled per-username (brute-force guard). Username ≤ 64, password ≤ 256 chars.
+
 ### `POST /auth/logout`
 Revokes the caller's current session token server-side. → `{ "status": "ok" }`
+
+### `POST /auth/logout-all`
+Revokes **every** session for the caller ("log out everywhere"). → `{ "status": "ok", "revoked": int }`
 
 ---
 
@@ -89,7 +94,7 @@ Valid categories: `personal, family, preferences, location, work, education, int
 
 | Method | Path | Body | Returns |
 |---|---|---|---|
-| `POST` | `/events` | `{ device_id, type, ts?, data? }` | `{ "status": "ok", "id": int }` — ingest an edge/vision event (auth via the device's API key) |
+| `POST` | `/events` | `{ device_id, type, ts?, data? }` | `{ "status": "ok", "id": int }` — ingest an edge/vision event. **A device-scoped API key records the event under its own bound device (the body `device_id` can't spoof another); admins may post as any device; plain users are denied.** `data` ≤ 4 KB; only the last 5000 events are retained. |
 
 Used by the Raspberry Pi camera agent (`edge/`) to report high-level events (`motion`,
 `face_seen`, `pose`, `gesture`); `data` is type-specific JSON. No imagery is sent.
@@ -101,7 +106,7 @@ Used by the Raspberry Pi camera agent (`edge/`) to report high-level events (`mo
 | Method | Path | Body | Returns |
 |---|---|---|---|
 | `POST` | `/devices/volume` | `{ action: set\|step\|mute\|unmute, value?, device? }` | `{ "status": "ok", "id": int }` — enqueue a volume command. **Authorized** (admin, or user with `can_control_devices`); `set` needs `value` 0–100, `step` a signed delta. |
-| `GET` | `/devices/commands?device=&wait=` | — | `{ "commands": [{id, action, params}] }` — device agents **pull** their pending commands (long-poll up to `wait`s; delivered commands aren't re-served). |
+| `GET` | `/devices/commands?device=&wait=` | — | `{ "commands": [{id, action, params}] }` — device agents **pull** their pending commands (long-poll up to `wait`s; delivered commands aren't re-served). **The API key must be bound to that `device` (or be an admin)** — a key for one device can't drain another's queue. |
 
 The Windows volume agent (`clients/volume-agent/`) pulls + applies these. The orchestrator only
 ever enqueues — the agent opens no inbound port. Authorization is enforced server-side, never by
@@ -129,7 +134,7 @@ the LLM.
 | Method | Path | Returns |
 |---|---|---|
 | `GET` | `/health` | `{ "status": "ok", "model": "qwen3.5-2b" }` |
-| `GET` | `/system` | **auth** · live host telemetry: `{ load1, cpus, cpu_pct, mem_used_mb, mem_total_mb, mem_pct, uptime_sec }` (dependency-free, from `/proc` + `os`) |
+| `GET` | `/system` | **admin** · live host telemetry: `{ load1, cpus, cpu_pct, mem_used_mb, mem_total_mb, mem_pct, uptime_sec }` (dependency-free, from `/proc` + `os`) |
 | `GET` | `/` | React SPA (`frontend/dist/index.html`) |
 | `GET` | `/admin` | Serves the React SPA, which renders the admin console (admin-gated client-side + on every `/admin/*` endpoint) |
 | `GET` | `/favicon.svg` | App icon (served from the dist root) |

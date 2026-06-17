@@ -46,5 +46,6 @@ curl http://localhost:5000/health
 
 - **Deploying changes / network / TLS / firewall:** [DEPLOY.md](../DEPLOY.md).
 - **Edge devices that talk to this server:** the [Raspberry Pi agent](raspberry-pi.md) and the
-  [Windows volume agent](volume-agent.md) authenticate with machine API keys
-  (`manage.py mint-key <user> <name>`).
+  [Windows volume agent](volume-agent.md) authenticate with machine API keys. **Bind each key to
+  its device** so it can only pull/post for that device:
+  `manage.py mint-key <user> <description> <device_id>` (e.g. `… volume-agent laptop`).

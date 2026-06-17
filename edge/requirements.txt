@@ -5,9 +5,11 @@
 #   sudo apt install -y python3-opencv python3-picamera2 libatlas-base-dev
 # The venv is created with --system-site-packages so the apt-installed cv2/picamera2 are visible.
 
+# Bounded ranges (avoid silently pulling a future major). For a tamper-evident install,
+# compile these to a hash-pinned lockfile and use `pip install --require-hashes`.
 numpy<2
-requests>=2.31
+requests>=2.31,<3
 
 # Heavy / optional — install only when you enable the matching detector (Pi 3: expect a few FPS):
-# mediapipe>=0.10        # pose + hand gestures; 64-bit OS only, memory-tight on 1 GB
-# onnxruntime>=1.17      # face-identity embedding model (faces.py)
+# mediapipe>=0.10,<0.11    # pose + hand gestures; 64-bit OS only, memory-tight on 1 GB
+# onnxruntime>=1.17,<2     # face-identity embedding model (faces.py)

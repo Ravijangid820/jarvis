@@ -47,7 +47,19 @@ if [ -f "$GGUF_DEST" ]; then
   ok "present: $GGUF_DEST"
 elif [ -n "${LLM_GGUF_URL:-}" ]; then
   mkdir -p "$(dirname "$GGUF_DEST")"
-  if curl -L --fail -o "$GGUF_DEST" "$LLM_GGUF_URL"; then ok "downloaded GGUF"
+  case "$LLM_GGUF_URL" in
+    https://*|file://*) : ;;
+    *) warn "LLM_GGUF_URL is not https:// — model could be tampered in transit (set an https URL)";;
+  esac
+  if curl -L --fail -o "$GGUF_DEST" "$LLM_GGUF_URL"; then
+    ok "downloaded GGUF"
+    # Integrity check: set LLM_GGUF_SHA256=<hash> to verify the download (recommended).
+    if [ -n "${LLM_GGUF_SHA256:-}" ]; then
+      if echo "${LLM_GGUF_SHA256}  ${GGUF_DEST}" | sha256sum -c - >/dev/null 2>&1; then ok "GGUF checksum verified"
+      else warn "GGUF SHA-256 MISMATCH — deleting the suspect file"; rm -f "$GGUF_DEST"; fi
+    else
+      warn "GGUF not checksum-verified (set LLM_GGUF_SHA256=<hash> to verify)"
+    fi
   else warn "GGUF download from \$LLM_GGUF_URL failed"; fi
 else
   warn "GGUF missing. Set LLM_GGUF_URL=<url> and re-run, or place the file at: $GGUF_DEST"
