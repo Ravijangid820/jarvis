@@ -131,3 +131,33 @@ def test_events_ingest_and_admin_list(client):
     latest = got["events"][0]
     assert latest["device_id"] == "pi-test" and latest["type"] == "face_seen"
     assert latest["data"] == {"name": "Ravi"}
+
+
+def test_volume_authz_denies_unprivileged(client):
+    # pepper (plain user, can_control_devices=0) must NOT be able to queue a device command.
+    tok = _tok(client, "pepper", "pw-user")
+    r = client.post("/devices/volume", headers={"Authorization": "Bearer " + tok},
+                    json={"action": "set", "value": 30})
+    assert r.status_code == 403
+
+
+def test_volume_queue_and_pull(client):
+    admin = _tok(client, "tony", "pw-admin")   # admins may control devices
+    r = client.post("/devices/volume", headers={"Authorization": "Bearer " + admin},
+                    json={"action": "set", "value": 40, "device": "laptop"})
+    assert r.status_code == 200 and r.json()["status"] == "ok"
+    # the agent pulls its command (wait=0 so the test doesn't block), then the queue drains
+    pulled = client.get("/devices/commands?device=laptop&wait=0",
+                        headers={"Authorization": "Bearer " + admin}).json()
+    assert any(c["action"] == "set" and c["params"] == {"value": 40} for c in pulled["commands"])
+    again = client.get("/devices/commands?device=laptop&wait=0",
+                       headers={"Authorization": "Bearer " + admin}).json()
+    assert again["commands"] == []     # delivered commands aren't re-served
+
+
+def test_volume_validation(client):
+    admin = _tok(client, "tony", "pw-admin")
+    h = {"Authorization": "Bearer " + admin}
+    assert client.post("/devices/volume", headers=h, json={"action": "set", "value": 200}).status_code == 422
+    assert client.post("/devices/volume", headers=h, json={"action": "frobnicate"}).status_code == 400
+    assert client.post("/devices/volume", headers=h, json={"action": "set"}).status_code == 400

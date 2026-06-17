@@ -96,6 +96,19 @@ Used by the Raspberry Pi camera agent (`edge/`) to report high-level events (`mo
 
 ---
 
+## Devices (control)
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| `POST` | `/devices/volume` | `{ action: set\|step\|mute\|unmute, value?, device? }` | `{ "status": "ok", "id": int }` — enqueue a volume command. **Authorized** (admin, or user with `can_control_devices`); `set` needs `value` 0–100, `step` a signed delta. |
+| `GET` | `/devices/commands?device=&wait=` | — | `{ "commands": [{id, action, params}] }` — device agents **pull** their pending commands (long-poll up to `wait`s; delivered commands aren't re-served). |
+
+The Windows volume agent (`clients/volume-agent/`) pulls + applies these. The orchestrator only
+ever enqueues — the agent opens no inbound port. Authorization is enforced server-side, never by
+the LLM.
+
+---
+
 ## Admin  (all require an admin token)
 
 | Method | Path | Body | Returns |

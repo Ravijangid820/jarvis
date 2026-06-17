@@ -72,6 +72,7 @@ def init_db():
         _safe_exec(conn, "ALTER TABLE api_keys ADD COLUMN key_prefix TEXT")
         _migrate_plaintext_api_keys(conn)
         _safe_exec(conn, "ALTER TABLE conversation_history ADD COLUMN facts_extracted BOOLEAN DEFAULT 0")
+        _safe_exec(conn, "ALTER TABLE users ADD COLUMN can_control_devices INTEGER DEFAULT 0")
         # Drop the legacy FTS5 search infra + unused table (superseded by ChromaDB vectors).
         for stmt in (
             "DROP TRIGGER IF EXISTS conversation_ai",

@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-16 — Secure device control: volume (pull-model agent)
+
+- **Authorized volume control**, security-first: `POST /devices/volume` enqueues a validated
+  command (`set`/`step`/`mute`/`unmute`) — **authorized server-side** (admins, or users with the
+  new `can_control_devices` flag); the LLM is never the authz boundary. Device agents **pull**
+  their commands via `GET /devices/commands` (long-poll), so the device opens **no inbound port**.
+- **`clients/volume-agent/`** — outbound-only Windows agent: polls the orchestrator and sets the
+  master/Bluetooth volume via `pycaw` (no shell-out → no injection; runs as a normal user). New
+  `device_commands` table + `users.can_control_devices`. Tests added (suite: 29). Untested on the
+  Windows laptop. Lights via Home Assistant REST + an LLM `set_volume` tool are the next steps.
+
 ## 2026-06-16 — Edge vision: /events endpoint + detector implementations
 
 - **Server:** `POST /events` ingests edge events (auth via the existing middleware; stored in a

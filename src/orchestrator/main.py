@@ -198,6 +198,12 @@ class EventRequest(BaseModel):
     data: Optional[Dict[str, Any]] = None
 
 
+class VolumeRequest(BaseModel):
+    action: str = Field(..., max_length=16)        # set | step | mute | unmute
+    value: Optional[int] = Field(default=None, ge=-100, le=100)
+    device: str = Field(default="laptop", max_length=64)
+
+
 # ----------------- Auth endpoints -----------------
 @app.post("/auth/login")
 def login(req: LoginRequest, request: Request):
@@ -311,6 +317,77 @@ def _system_stats() -> Dict[str, Any]:
 def system_stats(request: Request) -> Dict[str, Any]:
     # Auth-gated by the middleware (not in the bypass list).
     return _system_stats()
+
+
+def _can_control_devices(request: Request) -> bool:
+    """Authorization for device actions (lights/volume): admins always; others need the
+    per-user can_control_devices flag. Enforced HERE, in code — never by the LLM."""
+    if getattr(request.state, "is_admin", False):
+        return True
+    conn = get_db()
+    try:
+        row = conn.execute("SELECT can_control_devices FROM users WHERE id = ?", (request.state.user_id,)).fetchone()
+        return bool(row and row["can_control_devices"])
+    finally:
+        conn.close()
+
+
+@app.post("/devices/volume")
+def queue_volume(req: VolumeRequest, request: Request):
+    """Enqueue a volume command for a device agent (e.g. the Windows volume agent).
+
+    Authorization is enforced here against the caller's identity/permissions; the command is
+    a tiny validated vocabulary (no shell, no free text). The device agent pulls + executes it.
+    Later, the LLM `set_volume` tool will call this same enqueue path.
+    """
+    if not _can_control_devices(request):
+        raise HTTPException(status_code=403, detail="Not authorized to control devices")
+    action = req.action.lower()
+    params: Dict[str, Any] = {}
+    if action == "set":
+        if req.value is None or not (0 <= req.value <= 100):
+            raise HTTPException(status_code=400, detail="set requires value 0–100")
+        params = {"value": req.value}
+    elif action == "step":
+        if req.value is None:
+            raise HTTPException(status_code=400, detail="step requires value (-100…100)")
+        params = {"value": req.value}
+    elif action not in ("mute", "unmute"):
+        raise HTTPException(status_code=400, detail="action must be set|step|mute|unmute")
+    conn = get_db()
+    try:
+        cur = conn.execute("INSERT INTO device_commands (device_id, action, params) VALUES (?, ?, ?)",
+                           (req.device, action, json.dumps(params)))
+        conn.commit()
+        return {"status": "ok", "id": cur.lastrowid}
+    finally:
+        conn.close()
+
+
+@app.get("/devices/commands")
+def pull_device_commands(request: Request, device: str, wait: int = 20):
+    """Device agents PULL their pending commands here (outbound-only; no inbound port on the
+    device). Long-polls up to `wait` seconds, returns as soon as commands exist, marks them
+    delivered. Auth via the middleware (the agent uses its machine API key)."""
+    wait = max(0, min(wait, 30))
+    deadline = time.time() + wait
+    while True:
+        conn = get_db()
+        try:
+            rows = conn.execute(
+                "SELECT id, action, params FROM device_commands WHERE device_id = ? AND status = 'pending' ORDER BY id LIMIT 50",
+                (device,)).fetchall()
+            if rows:
+                ids = [r["id"] for r in rows]
+                ph = ",".join("?" * len(ids))
+                conn.execute(f"UPDATE device_commands SET status='delivered', delivered_at=datetime('now') WHERE id IN ({ph})", ids)
+                conn.commit()
+                return {"commands": [{"id": r["id"], "action": r["action"], "params": json.loads(r["params"] or "{}")} for r in rows]}
+        finally:
+            conn.close()
+        if time.time() >= deadline:
+            return {"commands": []}
+        time.sleep(0.5)
 
 
 @app.post("/events")

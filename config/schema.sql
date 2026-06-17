@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS users (
     username TEXT UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
     role TEXT DEFAULT 'user',
+    can_control_devices INTEGER DEFAULT 0,   -- may trigger device actions (lights/volume); admins always may
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -76,3 +77,16 @@ CREATE TABLE IF NOT EXISTS vision_events (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_vision_events_recent ON vision_events(id DESC);
+
+-- Outbound command queue for device agents (e.g. the Windows volume agent). Agents PULL their
+-- pending commands (no inbound port on the device); the orchestrator only ever enqueues.
+CREATE TABLE IF NOT EXISTS device_commands (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    params TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    delivered_at DATETIME
+);
+CREATE INDEX IF NOT EXISTS idx_device_commands_pending ON device_commands(device_id, status, id);
