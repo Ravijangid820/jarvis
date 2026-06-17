@@ -51,73 +51,82 @@ the cycle is: pull, rebuild the frontend if `frontend/` changed (step 2), then
 `sudo systemctl restart jarvis-orchestrator`. A backend-only change needs just the restart;
 a frontend-only change needs just the rebuild (the bundle is served fresh, no restart needed).
 
-## Network exposure: Tailscale + localhost only
+## Network exposure (this deployment: Proxmox host + Tailscale subnet router)
 
-`uvicorn` binds `0.0.0.0` (so the local voice listener on loopback and remote devices on
-the Tailscale interface both work), and a host firewall limits `tcp:5000` to the `lo` and
-`tailscale0` interfaces — dropping plaintext access from the rest of the LAN.
+The actual topology here is three tiers, and Tailscale does **not** run in the orchestrator
+container:
 
-Example with `nftables` (adjust the Tailscale interface name if different):
-
-```bash
-sudo nft add table inet jarvis
-sudo nft add chain inet jarvis input '{ type filter hook input priority 0; }'
-# allow loopback + tailscale to port 5000, drop everyone else
-sudo nft add rule inet jarvis input iifname "lo" tcp dport 5000 accept
-sudo nft add rule inet jarvis input iifname "tailscale0" tcp dport 5000 accept
-sudo nft add rule inet jarvis input tcp dport 5000 drop
+```
+tailnet device ──WireGuard (encrypted)──► subnet-router LXC ──plain HTTP on 192.168.0.0/24──► app LXC :5000
+   (phone/laptop)                          (runs tailscaled,                 (192.168.0.101,
+                                            advertises 192.168.0.0/24)        uvicorn :5000)
 ```
 
-(Equivalent `ufw`: `ufw allow in on tailscale0 to any port 5000` + `ufw deny 5000`.)
+- The Proxmox host and a dedicated **subnet-router LXC** run Tailscale; the router advertises
+  `192.168.0.0/24` so the other VMs/containers reach the tailnet **without** installing Tailscale.
+- **Remote access is already encrypted** by WireGuard from the device up to the subnet router.
+  The only plaintext segment is the short **router → app** hop on the Proxmox bridge.
+
+The orchestrator binds `0.0.0.0:5000`, so without a firewall *any* host on `192.168.0.0/24`
+could hit it in plaintext. Restrict `:5000` to loopback (the local voice listener) + the subnet
+router. Persisted in `/etc/nftables.conf` on the **app container** (run as root):
+
+```nft
+#!/usr/sbin/nft -f
+flush ruleset
+table inet filter {
+    chain input {
+        type filter hook input priority filter;
+        # Jarvis :5000 — only loopback + the Tailscale subnet router (192.168.0.10).
+        tcp dport 5000 iif lo accept
+        tcp dport 5000 ip saddr 192.168.0.10 accept
+        tcp dport 5000 drop
+    }
+    chain forward { type filter hook forward priority filter; }
+    chain output  { type filter hook output priority filter; }
+}
+```
+
+```bash
+nft -f /etc/nftables.conf        # apply
+systemctl enable nftables        # load at boot
+```
+
+> NOTE: this assumes the subnet router **SNATs** routed traffic to its own LAN IP (the Tailscale
+> default), so packets arrive `from 192.168.0.10`. If you set `--snat-subnet-routes=false` on the
+> router, allow the tailnet CGNAT range instead: `tcp dport 5000 ip saddr 100.64.0.0/10 accept`.
 
 The LLM server (`llama-fast`) already binds `127.0.0.1` only and is never network-exposed.
 
 ## Adding TLS (HTTPS)
 
-The firewall above keeps the API off the open LAN, but traffic is still **plaintext HTTP**
-(bearer tokens in the clear) over `lo` + `tailscale0`. Put a TLS terminator in front and
-bind the orchestrator to **loopback only** so nothing speaks plaintext on a network interface.
-
-First, in `config/jarvis.json` set the orchestrator to loopback (the reverse proxy reaches it
-locally; the firewall rules above are then optional):
-
-```jsonc
-"orchestrator": { "host": "127.0.0.1", "port": 5000 }
-```
-
-### Option A — Tailscale Serve (recommended; you already run Tailscale)
-
-Tailscale provisions a valid Let's Encrypt cert for your tailnet name and proxies HTTPS to the
-local app — no domain, no certbot, no extra daemon:
+WireGuard already encrypts the device→router leg. To also encrypt the browser session end-to-end
+(so bearer tokens are never plaintext, even on the Proxmox bridge), terminate TLS **on the
+subnet-router LXC** — it has the `tailscale` CLI and your enabled `*.ts.net` certs — and proxy to
+the app container:
 
 ```bash
-sudo tailscale serve --bg --https=443 http://127.0.0.1:5000
-sudo tailscale serve status          # shows https://<machine>.<tailnet>.ts.net → 127.0.0.1:5000
+# run ON the subnet-router LXC (where tailscaled lives)
+tailscale serve --bg --https=443 http://192.168.0.101:5000
+tailscale serve status     # shows https://<router>.<tailnet>.ts.net → 192.168.0.101:5000
 ```
 
-Now reach Jarvis at `https://<machine>.<tailnet>.ts.net` from any tailnet device. Remove the
-`--https` mapping with `sudo tailscale serve --https=443 off`.
+Browse `https://<router>.<tailnet>.ts.net`. The router→app hop stays on the trusted local bridge
+(and the `:5000` firewall above limits it to the router). Removing it: `tailscale serve --https=443 off`.
 
-### Option B — Caddy (a real domain, automatic certs)
+Fully encrypting that last hop too would mean terminating TLS *inside* the app container, but it
+has no tailnet identity (it's behind the subnet router), so it can't get a `tailscale cert` —
+you'd need your own cert (internal CA / real domain). Usually not worth it if the bridge is trusted.
 
-```caddy
-# /etc/caddy/Caddyfile
-jarvis.example.com {
-    reverse_proxy 127.0.0.1:5000
-}
-```
-
-`sudo systemctl reload caddy` — Caddy fetches and renews the cert automatically. (nginx works
-too; point a `server { listen 443 ssl; location / { proxy_pass http://127.0.0.1:5000; } }` at
-your cert.)
+**Alternative — Caddy on the subnet router** (real domain): `jarvis.example.com { reverse_proxy 192.168.0.101:5000 }`.
 
 ### Note on the login rate limiter
 
-`/auth/login` is throttled per **connecting IP**. Behind a proxy that IP becomes the proxy's
-(`127.0.0.1`), so the limit applies globally (8 logins/min total) rather than per client — more
-restrictive, not less, so it's safe to leave. If you want per-client limiting through a proxy,
-have the proxy set `X-Forwarded-For` and we can teach the limiter to read it (only when behind a
-trusted proxy — never trust that header on a directly-exposed bind).
+`/auth/login` is throttled per **connecting IP**. Behind the subnet router that IP becomes the
+router's (`192.168.0.10`), so the limit applies globally (8 logins/min total) rather than per
+client — more restrictive, not less, so it's safe. For per-client limiting, have the proxy set
+`X-Forwarded-For` and teach the limiter to read it (only when behind a trusted proxy — never
+trust that header on a directly-exposed bind).
 
 ## Auth model & the admin CLI
 
