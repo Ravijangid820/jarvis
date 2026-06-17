@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-17 — Security review (whole project) logged
+
+- Ran a follow-up multi-reviewer security review across the newer surface (device `/events` +
+  `/devices/*` endpoints, the Pi edge agent, the Windows volume agent, install/supply-chain
+  scripts, frontend, infra) and recorded all findings in [docs/AUDIT.md](AUDIT.md) as F1–F24
+  (all OPEN for review — no fixes applied yet). Headline: the device command/event queue
+  self-asserts `device_id` (no API-key binding) and the login limiter is IP-keyed (global
+  lockout behind the subnet router). Also documented a corrected false positive (whisper `-cmd`
+  is a commands-file, not a shell template — no RCE) and the verified-clean list.
+
 ## 2026-06-16 — Docs: grouped setup guides under docs/setup/
 
 - Per-component setup docs now live together under **`docs/setup/`**: `server.md` (new,

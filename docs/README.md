@@ -23,7 +23,7 @@ deploying. They run on different machines and have independent environments.
 | [API.md](API.md) | Full HTTP endpoint reference (auth, chat, sessions, knowledge, admin, edge events, device control) |
 | [SPECS.md](SPECS.md) | Hardware, models, performance, the config reference, and the DB schema |
 | [DEPLOY.md](DEPLOY.md) | Deploy runbook: units, re-embed migration, Tailscale/localhost firewall, the admin CLI |
-| [AUDIT.md](AUDIT.md) | The 81-finding code/security self-audit and what was fixed |
+| [AUDIT.md](AUDIT.md) | The 81-finding self-audit (2026-06-15) + a 2026-06-17 follow-up review (F1–F24) covering the device/edge/agent subsystems |
 
 ## History / reference
 

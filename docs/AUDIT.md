@@ -6,6 +6,9 @@ _Multi-agent audit (6 reviewers, adversarial verification), 2026-06-15._
 
 > Severity is post-verification (adjusted). Line numbers are best-effort against the audited revision.
 
+> **A follow-up whole-project review (2026-06-17)** — covering the device/edge/agent subsystems
+> added since — is appended at the **end of this file** (findings F1–F24, all OPEN for review).
+
 
 ## Security (13)
 
@@ -519,3 +522,99 @@ _Multi-agent audit (6 reviewers, adversarial verification), 2026-06-15._
 - **[memory]** get_user_knowledge ordering bug: ORDER BY category, updated_at but grouped by dict insertion order — The code matches what the finding describes, but the finding does not identify an actual bug. Line 261 queries `ORDER BY category, updated_at DESC`, and lines 267-269 group by `r["category"].upper()` 
 - **[frontend]** Stored XSS in admin panel via innerHTML with unsanitized username / key description / dates — The DOM sink described is real: admin.html builds rows via innerHTML with unescaped interpolation of u.username/u.role/u.created_at (lines 296-299), the same in showUserModal (306-313), and k.key_stri
 - **[ops]** Synchronous Piper TTS subprocess (up to 30s) runs inline inside the /inbox request, blocking the response and a CPU core — The literal code mechanics are accurate: in /inbox, Piper runs via a blocking subprocess.run(timeout=30) after LLM generation and before the single (non-streaming) return, inside a sync `def` route. S
+---
+
+# Follow-up review — 2026-06-17 (whole-project, incl. device/edge/agent subsystems)
+
+_4 parallel reviewers + manual verification of the highest-impact claims. Scope adds the newer
+`/events` + `/devices/*` endpoints, the Raspberry Pi edge agent (`edge/`), the Windows volume
+agent (`clients/volume-agent/`), install/supply-chain scripts, the frontend, and infra/config.
+All items are **OPEN / for review** unless noted._
+
+## High
+
+### F1. [HIGH] Device command/event queue: `device_id` is self-asserted, never bound to the API key
+- **Location:** `main.py` GET `/devices/commands` (~368), POST `/events` (~394), POST `/devices/volume` (~336); `api_keys` has no device binding.
+- **Problem:** Any holder of *any* valid token/API key can (a) drain/read another device's command queue (`?device=laptop` → rows marked delivered, starving the real agent), (b) spoof events as any `device_id` (e.g. `type:"face_seen"`), (c) target any device with volume. Authz checks the *permission* (`_can_control_devices`), not the *device target*.
+- **Impact:** Cross-device interception/DoS now; privilege-escalation once `face_seen` drives authorization (planned). Authenticated abuse (needs a valid credential).
+- **Fix:** Add `device_id` to `api_keys` (set at mint); enforce `key.device_id == device` on the pull endpoint; bind event provenance; validate the volume `device` target.
+- **Status:** OPEN
+
+### F2. [HIGH] Login rate-limit keyed on client IP → global login-lockout DoS behind the subnet router
+- **Location:** `main.py` `check_login_rate` (~80), login (~212).
+- **Problem:** Behind the Tailscale subnet router, all tailnet logins arrive SNAT'd from `192.168.0.10`, so the per-IP 8/min becomes one shared global bucket. (Verified via topology.)
+- **Impact:** Any one client can exhaust the bucket and lock out everyone's login; per-attacker throttling is meaningless.
+- **Fix:** Per-username failure throttle + backoff; parse a trusted `X-Forwarded-For` only when behind a real proxy.
+- **Status:** OPEN
+
+### F3. [HIGH] Orchestrator runs as root and binds `0.0.0.0`; no app-layer TLS
+- **Location:** `systemd/jarvis-orchestrator.service` (no `User=`; `--host 0.0.0.0`). (Verified: no `User=`.)
+- **Problem:** Any app/dependency RCE is root in the container; tokens cross the bridge in plaintext. Overlaps the accepted LAN-trust + pending TLS, but running as root is a separate, fixable risk.
+- **Fix:** Dedicated non-root `User=`, `ProtectSystem=strict` + `ReadWritePaths=`, `UMask=0077`; complete TLS termination.
+- **Status:** OPEN
+
+## Medium
+
+### F4. [MEDIUM] Long-poll handler exhausts the thread pool
+- **Location:** `main.py` `pull_device_commands` (~368) — sync `def`, `time.sleep` loop up to 30 s.
+- **Problem:** Any user can launch ~40 concurrent polls (varied `?device=`) and starve all endpoints (login, chat). Each iteration also opens a DB connection.
+- **Fix:** Make it `async` + `await asyncio.sleep`; run the DB read via `run_in_threadpool`; cap concurrent polls per principal.
+- **Status:** OPEN
+
+### F5. [MEDIUM] No Content-Security-Policy (and no HSTS / Referrer-Policy)
+- **Location:** `main.py` `_apply_security_headers` (~89).
+- **Problem:** Frontend is XSS-safe by construction today, but there's no CSP backstop if that regresses (renderer change / dependency compromise).
+- **Fix:** Strict CSP (`default-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; …`), `Referrer-Policy: no-referrer`, HSTS at the TLS proxy.
+- **Status:** OPEN
+
+### F6. [MEDIUM] SQLite DB is world-readable (`0644`)
+- **Location:** `memory/jarvis.db` (verified `0644`); logs `0644`; `jarvis.json` `0644` (no secrets now); `voice_listener.key` correctly `0600`.
+- **Problem:** Any non-root local account can read password PBKDF2 hashes + all chat history + knowledge (and `-wal`/`-shm` siblings). Practical risk depends on whether the LXC has non-root users (likely root-only → low), but defense-in-depth.
+- **Fix:** `chmod 600` DB + logs; `UMask=0077` in the unit.
+- **Status:** OPEN
+
+### F7. [MEDIUM] Unbounded event `data` + no retention on `vision_events` / `device_commands`
+- **Location:** `EventRequest.data` (~198, arbitrary dict, no size cap); `schema.sql` (tables never pruned).
+- **Problem:** Authenticated disk-fill DoS; monotonic growth on a 1 GB box.
+- **Fix:** Cap `data` bytes; periodic purge (mirror the session purge); global request-size limit.
+- **Status:** OPEN
+
+### F8. [MEDIUM] Supply chain: unverified downloads + unpinned llama.cpp build
+- **Location:** `build_native.sh` (llama.cpp cloned with no pin; whisper.cpp *is* pinned), `download_models.sh` (GGUF + embedding model: no checksum/revision), `piper_setup.sh` (`releases/latest`, no checksum), `fetch_fonts.py` (no checksum; output filename derived from parsed CSS).
+- **Problem:** MITM/upstream-compromise → code or model execution on the host.
+- **Fix:** Pin commits/revisions; verify SHA-256; require `https`; sanitize derived filenames.
+- **Status:** OPEN
+
+### F9. [MEDIUM] Self-scoped stored prompt-injection via fact extraction
+- **Location:** `memory.py` `extract_facts_batch` → `user_knowledge` → re-injected into that user's system prompt.
+- **Problem:** A user can bias their *own* assistant context. Self-only — no cross-user leak (facts strictly `user_id`-scoped).
+- **Fix:** Keep delimited "data not instructions" framing; acceptable given scope.
+- **Status:** OPEN (accepted)
+
+### F10. [MEDIUM] Long-lived credentials
+- **Location:** `main.py` login (30-day tokens, no rotation, single-token logout); `api_keys` never expire, no self-revoke.
+- **Fix:** Shorter/rotating sessions, "revoke all", optional key expiry.
+- **Status:** OPEN
+
+## Low
+
+- **F11. [LOW]** Cross-user mutations silently no-op + return `ok` (`rename_session`, `update_fact`, `delete_fact` — `WHERE … AND user_id=?` protects data but returns success on 0 rows, unlike `delete_session` which 403s). Fix: route through an ownership check, 403 on 0 rows. **OPEN**
+- **F12. [LOW]** `/system` telemetry (load/CPU/RAM/uptime) exposed to any authed user, not admin-gated. Fix: admin-gate. **OPEN**
+- **F13. [LOW]** `admin_delete_user` returns `str(e)` to the client (~582) — internal/schema leak (admin-only). Fix: generic 500 + log. **OPEN**
+- **F14. [LOW]** `LoginRequest`/`CreateUserRequest` have no length bounds → multi-MB password forces heavy PBKDF2 (CPU amplification). Fix: `max_length` on username/password. **OPEN**
+- **F15. [LOW]** `CreateUserRequest.role` is a free string (footgun; fails closed — only exact `"admin"` is privileged). Fix: enum. **OPEN**
+- **F16. [LOW]** Agents send API keys over plaintext HTTP (edge + volume + voice); `face_seen` sends person names (PII) in clear. Accepted LAN-trust. Fix: HTTPS once TLS lands. **OPEN**
+- **F17. [LOW]** Key files not created `0600` (`mint-key` → stdout → redirect with default umask; agents don't check perms). Fix: write `0600`; agents warn if group/other-readable. **OPEN**
+- **F18. [LOW]** Volume agent trusts server-returned params (no client-side validate/clamp). Defense-in-depth. Fix: validate+clamp client-side too. **OPEN**
+- **F19. [LOW]** Agent deps unpinned (`requirements.txt` `>=`, no hashes) — supply-chain drift on the Pi/laptop. Fix: pin + hashes. **OPEN**
+- **F20. [LOW]** PBKDF2 100k iterations (OWASP now ~600k). Token SHA-256 correct (256-bit random). Fix: raise iterations. **OPEN**
+- **F21. [LOW]** `_safe_exec` swallows broad `"no such"` OperationalError (could mask a real broken migration). Fix: tighten to the specific benign cases. **OPEN**
+- **F22. [LOW]** Session token in `localStorage` (XSS→theft, 30-day). Mitigated by no-XSS-by-construction + (proposed) CSP. Fix: HttpOnly cookie + CSRF, or shorter lifetime. **OPEN**
+- **F23. [LOW]** In-memory rate-limit dicts never evict keys (`_login_store` grows with distinct IPs) — slow memory growth on the small box. Fix: evict empty buckets / TTL. **OPEN**
+- **F24. [LOW]** `run_listener.sh` is misconfigured (see Corrected, below) — won't bridge voice→API as written. Functional bug, not security. Fix: a small Python helper taking the transcript via argv/stdin (no shell) that POSTs JSON. **OPEN**
+
+## Corrected (a re-raised false positive, re-verified)
+- **whisper `-cmd` "RCE":** one reviewer re-flagged `run_listener.sh:29` as shell command-injection via `%s`. **Verified against the on-box source** (`whisper/examples/command/command.cpp:86,125,220`): `-cmd`/`--commands` is a *file of allowed words* (guided mode) — no `system()`/`popen()`/`%s` shell substitution. **No RCE.** (Already rejected in the 2026-06-15 audit's false-positive list.) The real issue is functional misconfiguration (F24).
+
+## Verified clean (no action)
+SQL fully parameterized (incl. dynamic `IN (…)` — placeholders only); tokens + API keys hashed at rest, no plaintext path; frontend XSS-safe by construction (React nodes only, http(s)-only links with `rel="noopener noreferrer"`, no `dangerouslySetInnerHTML`, no external fetches); CORS locked to `[]`; no committed secrets (double-checked; no deleted-secret history); CI has no injection/secret-leak; volume agent genuinely outbound-only (no shell, no deserialization); SSRF surface config-only; static serving traversal-safe; session-expiry timezones correct.
