@@ -537,7 +537,7 @@ agent (`clients/volume-agent/`), install/supply-chain scripts, the frontend, and
 |---|---|---|
 | F1 device↔key binding | ✅ Fixed | `api_keys.device_id`; `mint-key <user> [desc] [device]`; middleware sets `request.state.device_id`; `/devices/commands` requires the key be bound to that device (or admin); `/events` records provenance from the key (body can't spoof) and plain users are denied. |
 | F2 login lockout (IP-keyed) | ✅ Fixed | Login throttle now keyed on **username** (no shared-IP global lockout); per-account. |
-| F3 root + 0.0.0.0 | ◑ Partial | `UMask=0077` added; non-root `User=` still needs a one-time chown of `/srv/jarvis` + HF cache (operator step) — left documented. |
+| F3 root + 0.0.0.0 | ✅ Fixed (operator runs once) | `UMask=0077` on the root unit; plus a hardened non-root unit (`systemd/jarvis-orchestrator.hardened.service`, `ProtectSystem=strict` + `ReadWritePaths` + `ProtectHome`) and `src/scripts/harden_service.sh` that creates the `jarvis` user, chowns the tree, copies `uv` + the HF cache, installs the unit and health-checks. |
 | F4 long-poll thread exhaustion | ✅ Fixed | `/devices/commands` is now `async` + `asyncio.sleep`, DB in threadpool, concurrency-capped (semaphore 16). |
 | F5 no CSP | ✅ Fixed | Strict CSP + `Referrer-Policy: no-referrer` on every response. |
 | F6 DB world-readable | ✅ Fixed | `init_db()` chmods DB+WAL/SHM to `0600`; `UMask=0077` keeps new files owner-only. |
@@ -558,7 +558,7 @@ agent (`clients/volume-agent/`), install/supply-chain scripts, the frontend, and
 | F21 `_safe_exec` over-broad | ✅ Fixed | No longer swallows `no such …`. |
 | F22 token in localStorage | ◯ Deferred | CSP (F5) added as mitigation; HttpOnly-cookie migration not done. |
 | F23 rate-limit dicts never evict | ✅ Fixed | Empty buckets swept; IP-keyed growth removed by F2. |
-| F24 voice listener misconfigured | ◯ Deferred | Functional redesign (needs the transcription→POST helper). |
+| F24 voice listener misconfigured | ✅ Fixed (needs on-box mic tuning) | Rewritten: `voice_bridge.py` runs `whisper-stream`, gates on the wake word, and POSTs JSON via urllib — no shell, and it actually transcribes (the old `-cmd` path did neither). `run_listener.sh` now just launches the bridge. |
 
 _Details of each finding below are unchanged from the original review._
 

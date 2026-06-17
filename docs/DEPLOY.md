@@ -122,11 +122,26 @@ you'd need your own cert (internal CA / real domain). Usually not worth it if th
 
 ### Note on the login rate limiter
 
-`/auth/login` is throttled per **connecting IP**. Behind the subnet router that IP becomes the
-router's (`192.168.0.10`), so the limit applies globally (8 logins/min total) rather than per
-client — more restrictive, not less, so it's safe. For per-client limiting, have the proxy set
-`X-Forwarded-For` and teach the limiter to read it (only when behind a trusted proxy — never
-trust that header on a directly-exposed bind).
+`/auth/login` is throttled per **username** (8 attempts/min/account). This targets the actual
+brute-force surface and — unlike IP keying — can't cause a global login lockout behind the shared
+subnet-router source IP. The tradeoff is that an attacker can briefly throttle one specific
+account; acceptable for this single-operator deployment.
+
+## Run as a non-root user (hardening, finding F3)
+
+The default unit runs as root. To run under a dedicated unprivileged user with `ProtectSystem=strict`:
+
+```bash
+sudo bash src/scripts/harden_service.sh
+```
+
+It's idempotent and conservative — creates the `jarvis` system user, copies `uv` to
+`/usr/local/bin`, **copies** (not moves) the HuggingFace cache to `/srv/jarvis/.cache`, chowns the
+tree, installs `systemd/jarvis-orchestrator.hardened.service`, restarts, and health-checks. If the
+check fails it prints the rollback command (reinstall the root unit). The stricter
+`SystemCallFilter`/`MemoryDenyWriteExecute` directives are left commented in the hardened unit —
+enable and test them after confirming the service starts (native libs can trip a syscall filter).
+`llama-fast.service` still runs as root from `/root` (loopback-only; lower risk — a follow-up).
 
 ## Auth model & the admin CLI
 

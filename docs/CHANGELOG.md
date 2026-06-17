@@ -4,6 +4,18 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-17 — Hardening follow-up: non-root service (F3) + voice listener rewrite (F24)
+
+- **F3 (non-root):** added `systemd/jarvis-orchestrator.hardened.service` (`User=jarvis`,
+  `ProtectSystem=strict` + `ReadWritePaths` + `ProtectHome`, `HF_HOME` under the owned tree) and
+  an idempotent `src/scripts/harden_service.sh` that creates the user, copies `uv` + the HF cache,
+  chowns `/srv/jarvis`, installs the unit, restarts and health-checks (with a rollback hint).
+  Operator runs it once; `llama-fast` left as root (loopback-only, follow-up). DEPLOY.md section added.
+- **F24 (voice listener):** rewrote the broken/unsafe `whisper-command -cmd "curl … %s"` line.
+  New `src/scripts/voice_bridge.py` runs `whisper-stream`, gates on the wake word, and POSTs the
+  command as JSON via urllib — **no shell** (transcripts can't be executed) and it actually
+  transcribes. `run_listener.sh` now just launches the bridge. Needs on-box mic/flag tuning.
+
 ## 2026-06-17 — Security hardening pass (resolves most of F1–F24)
 
 Acted on the 2026-06-17 review ([AUDIT.md](AUDIT.md) — see the Resolution status table). Fully

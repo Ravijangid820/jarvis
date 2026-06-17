@@ -1,29 +1,14 @@
 #!/bin/bash
-# Bridge Script: Connects Whisper Command tool to our FastAPI Orchestrator
-# Updated: Uses API key authentication
-
-cd /srv/jarvis/whisper
-
-# Load the voice-listener API key (a real, revocable api_keys row — mint with
-# `uv run python src/scripts/manage.py mint-key <user> voice-listener`).
-KEY_FILE=/srv/jarvis/config/voice_listener.key
-if [ ! -r "$KEY_FILE" ]; then
-  echo "FATAL: $KEY_FILE missing. Mint one: uv run python src/scripts/manage.py mint-key admin voice-listener > $KEY_FILE" >&2
-  exit 1
-fi
-API_KEY=$(tr -d '[:space:]' < "$KEY_FILE")
-
-echo "Starting Jarvis Voice Listener..."
-echo "Waiting for wake word: 'Jarvis'"
-
-# The whisper-command tool listens continuously.
-# When it hears the wake word, it records the following sentence.
-# We map the output command to a curl request to our locally hosted Python API.
-
-./build/bin/whisper-command \
-  -m ./models/ggml-base.en.bin \
-  -t 2 \
-  -c 0 \
-  -vth 0.6 \
-  -prompt "Jarvis" \
-  -cmd "curl -X POST http://localhost:5000/inbox -H 'Content-Type: application/json' -H 'Authorization: Bearer ${API_KEY}' -d '{\"text\": \"%s\"}'"
+# Jarvis voice listener: continuous transcription (whisper-stream) → wake-word bridge → POST /inbox.
+#
+# The bridge (voice_bridge.py) reads whisper-stream's transcript, gates on the wake word, and
+# POSTs the command as JSON via urllib — NO shell, so transcribed audio can never be executed as
+# a command. (This replaces the old whisper-command `-cmd "curl … %s"` line, which was both
+# unsafe-by-design and non-functional: `-cmd` is a *commands file*, not a shell template.)
+#
+# Needs a voice-listener API key (a normal per-user key — /inbox isn't device-scoped):
+#   uv run python src/scripts/manage.py mint-key admin voice-listener > config/voice_listener.key
+#   chmod 600 config/voice_listener.key
+# Tune the wake word / whisper flags via env vars — see voice_bridge.py.
+cd /srv/jarvis || exit 1
+exec uv run python src/scripts/voice_bridge.py "$@"

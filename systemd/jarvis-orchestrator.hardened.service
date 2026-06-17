@@ -1,0 +1,62 @@
+[Unit]
+Description=Jarvis AI Orchestrator - FastAPI Service (hardened, non-root)
+After=network.target llama-fast.service
+Wants=llama-fast.service
+Documentation=file:///srv/jarvis/src/orchestrator/main.py
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+# Runs as a dedicated unprivileged user. DO NOT `cp` this unit and restart by hand — run
+# src/scripts/harden_service.sh first: it creates the `jarvis` user, chowns /srv/jarvis, copies
+# uv to /usr/local/bin and the HuggingFace cache under /srv/jarvis/.cache, then installs THIS
+# unit and restarts + health-checks. (The script is what makes this unit able to start.)
+User=jarvis
+Group=jarvis
+WorkingDirectory=/srv/jarvis/src/orchestrator
+Environment="PATH=/usr/local/bin:/usr/bin:/bin"
+Environment="HOME=/srv/jarvis"
+# Embedding model loads cache-only (offline, private). ProtectHome blocks /root/.cache, so the
+# cache lives under the owned tree via HF_HOME (harden_service.sh copies it there).
+Environment="HF_HUB_OFFLINE=1"
+Environment="TRANSFORMERS_OFFLINE=1"
+Environment="HF_HOME=/srv/jarvis/.cache/huggingface"
+# host 0.0.0.0 so loopback (voice bridge) AND the Tailscale interface both work; a host
+# firewall restricts tcp:5000 to lo + tailscale0 (see docs/DEPLOY.md).
+ExecStart=/usr/local/bin/uv run uvicorn main:app \
+    --host 0.0.0.0 \
+    --port 5000 \
+    --workers 1
+Restart=always
+RestartSec=5
+SyslogIdentifier=jarvis-orchestrator
+
+# --- Security hardening (non-root) ---
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+# strict: the whole FS is read-only except ReadWritePaths (the venv, DB, logs, model cache).
+ProtectSystem=strict
+ReadWritePaths=/srv/jarvis
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+UMask=0077
+# Optional, stronger — enable AFTER confirming the service still starts (native libs like
+# torch/onnxruntime can trip a syscall filter): uncomment, `systemctl daemon-reload`, restart,
+# and check `journalctl -u jarvis-orchestrator` for "Operation not permitted".
+# RestrictNamespaces=true
+# SystemCallFilter=@system-service
+# SystemCallErrorNumber=EPERM
+# MemoryDenyWriteExecute=true   # likely breaks JIT in native libs — test carefully
+
+# --- Resource limits ---
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
