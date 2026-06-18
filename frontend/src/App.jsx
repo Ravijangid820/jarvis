@@ -27,8 +27,8 @@ function ArcReactor({ size = 120, className = "" }) {
           <stop offset="0%" stopColor="#bfeaff" /><stop offset="45%" stopColor="#4aa6ff" /><stop offset="100%" stopColor="#1c5fa8" />
         </linearGradient>
         <linearGradient id={u("steel")} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#d3dbe0" /><stop offset="16%" stopColor="#9aa4ab" />
-          <stop offset="52%" stopColor="#454f56" /><stop offset="100%" stopColor="#27313a" />
+          <stop offset="0%" stopColor="#d8e0e4" /><stop offset="20%" stopColor="#b1bbc1" />
+          <stop offset="58%" stopColor="#8a949b" /><stop offset="100%" stopColor="#717b82" />
         </linearGradient>
         <linearGradient id={u("steelV")} x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor="#c2ccd2" /><stop offset="50%" stopColor="#525d64" /><stop offset="100%" stopColor="#222a30" />
@@ -43,10 +43,10 @@ function ArcReactor({ size = 120, className = "" }) {
       <circle cx="200" cy="200" r="195" fill={`url(#${u("bloom")})`} opacity="0.4" />
       {/* steel housing + engraved text */}
       <path d="M200 8 A192 192 0 1 0 200.01 8 Z M200 52 A148 148 0 1 0 200.01 52 Z" fill={`url(#${u("steel")})`} fillRule="evenodd" />
-      <circle cx="200" cy="200" r="192" fill="none" stroke="#e0e8ec" strokeWidth="1" opacity="0.55" />
-      <circle cx="200" cy="200" r="148" fill="none" stroke="#0a0f12" strokeWidth="2.5" opacity="0.85" />
+      <circle cx="200" cy="200" r="192" fill="none" stroke="#eef3f5" strokeWidth="1" opacity="0.6" />
+      <circle cx="200" cy="200" r="148" fill="none" stroke="#10161a" strokeWidth="2.5" opacity="0.85" />
       {showText && (
-        <g fill="#0e1318" stroke="#c4ced4" strokeWidth="0.9" strokeLinejoin="round" fontSize="23" style={{ fontFamily: "'Arial Narrow', Arial, sans-serif", fontWeight: 700, letterSpacing: "2px", paintOrder: "stroke" }}>
+        <g fill="#181f25" fontSize="23" style={{ fontFamily: "'Arial Narrow', Arial, sans-serif", fontWeight: 700, letterSpacing: "2px" }}>
           <text><textPath href={`#${u("top")}`} startOffset="50%" textAnchor="middle">PROOF THAT TONY STARK</textPath></text>
           <text><textPath href={`#${u("bot")}`} startOffset="50%" textAnchor="middle">HAS A HEART</textPath></text>
         </g>
