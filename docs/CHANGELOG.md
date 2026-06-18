@@ -12,8 +12,8 @@ All notable changes to this project are documented in this file.
 - README front-door polish: links the setup guides + CONTRIBUTING/SECURITY/CHANGELOG; refreshed
   Project Structure (portable `<repo>` root, `edge/` + `clients/`, `install_services.sh`); the
   Security section now reflects the non-root services + CSP.
-- `LICENSE`: pending the owner's choice (MIT recommended) — licensing is just adding the standard
-  text file; no registration needed.
+- **Licensed under Apache-2.0**: added the canonical `LICENSE` (copyright Ravi Jangid) + `NOTICE`,
+  `license = "Apache-2.0"` in `pyproject.toml`, a README badge + License section.
 
 ## 2026-06-18 — Portable install: one installer, run as root OR a dedicated user
 

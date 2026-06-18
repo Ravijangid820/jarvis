@@ -1,5 +1,7 @@
 # Jarvis AI Assistant
 
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 A fully self-hosted, **offline** voice + text AI assistant — LLM, speech-to-text, memory, and
 text-to-speech — running entirely on a 2011-era laptop in a Proxmox LXC. No cloud APIs.
 
@@ -203,3 +205,9 @@ Project meta: **[CONTRIBUTING.md](CONTRIBUTING.md)** (dev setup, tests, conventi
 - ⬜ Tool / function calling · ⬜ Home Automation (MQTT + Home Assistant)
 
 Checks: `uv run pytest` · `uv run ruff check src/orchestrator src/scripts tests`.
+
+## License
+
+[Apache License 2.0](LICENSE) © 2026 Ravi Jangid. You may use, modify, and distribute this
+software under its terms (it includes an explicit patent grant); retain the `LICENSE` and `NOTICE`
+files. Contributions are accepted under the same license — see [CONTRIBUTING.md](CONTRIBUTING.md).

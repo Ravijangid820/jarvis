@@ -53,5 +53,5 @@ authorization, and input validation.
 
 ## License of contributions
 
-By contributing, you agree that your contributions are provided under the same license as the
-project (see the `LICENSE` file once it is added).
+By contributing, you agree that your contributions are licensed under the project's license,
+the **Apache License 2.0** (see [LICENSE](LICENSE)).
