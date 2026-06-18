@@ -37,8 +37,8 @@ function ArcReactor({ size = 120, className = "" }) {
           <stop offset="0%" stopColor="#6f3c13" /><stop offset="34%" stopColor="#e2924a" />
           <stop offset="54%" stopColor="#ffdcae" /><stop offset="76%" stopColor="#d6843e" /><stop offset="100%" stopColor="#54300f" />
         </linearGradient>
-        <path id={u("top")} d="M 32 200 A 168 168 0 0 1 368 200" fill="none" />
-        <path id={u("bot")} d="M 32 200 A 168 168 0 0 0 368 200" fill="none" />
+        <path id={u("top")} d="M 36 200 A 164 164 0 0 1 364 200" fill="none" />
+        <path id={u("bot")} d="M 24 200 A 176 176 0 0 0 376 200" fill="none" />
       </defs>
       <circle cx="200" cy="200" r="195" fill={`url(#${u("bloom")})`} opacity="0.4" />
       {/* steel housing + engraved text */}
