@@ -11,6 +11,19 @@ text-to-speech — running entirely on a 2011-era laptop in a Proxmox LXC. No cl
 
 **Stack:** FastAPI · llama.cpp (Qwen 2B) · whisper.cpp · ChromaDB + embeddinggemma RAG · Piper TTS · React 19
 
+## Features
+
+- 🔒 **100% self-hosted & offline** — every model runs locally; no cloud APIs, no telemetry, nothing leaves your network.
+- 💬 **Streaming chat UI** — React 19 SPA with live token streaming, markdown rendering, a stop button, themes, and a diagnostics panel.
+- 🧠 **Persistent memory (RAG)** — semantic recall over your history via ChromaDB (cosine) + a per-user knowledge base; facts are extracted in the background so chat never blocks.
+- 🎙️ **Voice in & out** — wake-word speech-to-text (whisper.cpp) → assistant → spoken replies (Piper TTS).
+- ⚡ **Tuned for modest hardware** — designed for a CPU with **no AVX2** and 8 GB RAM: a 2B Q4 model, prompt token-budgeting, off-request-path embedding, and a single-slot scheduler.
+- 👤 **Real multi-user auth** — web-login sessions or revocable per-user API keys (hashed at rest), an admin console, and per-user rate limiting — no static master secret.
+- 🛡️ **Hardened by default** — non-root systemd services with strict sandboxing, a strict CSP, parameterized SQL, bounded input, and authorization enforced **in code, never by the LLM** (backed by a multi-round security audit).
+- 📷 **Edge vision (Raspberry Pi)** — optional on-device motion / face / pose / gesture detection that posts only small JSON events — **no video leaves the device**.
+- 🔌 **Device control** — authorized, outbound-only agents (e.g. volume); Home Assistant + model tool-calling on the roadmap.
+- 🧩 **Clean, tested codebase** — an acyclic module graph under pytest + ruff + CI, and a portable installer (run as root **or** a dedicated user, from any checkout path).
+
 ## Demo
 
 > 📸 _Add a screenshot here:_ drop a UI capture at `docs/screenshot.png` (chat UI mid-stream +
