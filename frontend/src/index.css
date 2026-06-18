@@ -603,6 +603,27 @@ button, input, textarea { font-family: inherit; outline: none; }
 
 /* Theme tint: a global hue/saturation shift via [data-theme] on <html>.
    Retints the whole HUD uniformly (SVGs + literals included). stark = default. */
+/* Reduce-effects / performance mode: the floating particles + the frosted-glass backdrop-filter
+   panels are the per-frame GPU cost (the panels re-blur every frame as particles drift behind
+   them) — the main cause of choppy scrolling on lighter clients. This drops both; panels fall
+   back to a solid translucent fill so they still read as panels. Toggle in the Theme panel / ⌘K. */
+html.perf .ambient-particles,
+html.perf .chat-reactor-bg { display: none !important; }
+html.perf .sidebar,
+html.perf .top-bar,
+html.perf .input-wrap {
+  backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
+  background: rgba(6, 14, 20, 0.92) !important;
+}
+html.perf .perf-toggle { border-color: var(--stark-gold); color: var(--stark-gold); }
+
+/* Honour the OS "reduce motion" preference automatically (same lightening). */
+@media (prefers-reduced-motion: reduce) {
+  .ambient-particles { display: none; }
+  .pfield { animation: none; }
+  .app-container.thinking .chat-reactor-bg { animation: none; }
+}
+
 html[data-theme="cyberpunk"] body { filter: hue-rotate(118deg) saturate(1.25); }
 html[data-theme="emerald"]  body { filter: hue-rotate(-58deg) saturate(1.05); }
 html[data-theme="ember"]    body { filter: hue-rotate(-156deg) saturate(1.2); }

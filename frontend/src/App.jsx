@@ -177,6 +177,7 @@ function App() {
   // Theme switcher + synthesized UI sound (both persisted, sound off by default).
   const [theme, setTheme] = useState(() => localStorage.getItem("jarvis_theme") || "stark")
   const [sound, setSound] = useState(() => localStorage.getItem("jarvis_sound") === "1")
+  const [perfMode, setPerfMode] = useState(() => localStorage.getItem("jarvis_perf") === "1")
   const audioCtxRef = useRef(null)
 
   const messagesEndRef = useRef(null)
@@ -311,6 +312,13 @@ function App() {
     localStorage.setItem("jarvis_theme", theme)
   }, [theme])
   useEffect(() => { localStorage.setItem("jarvis_sound", sound ? "1" : "0") }, [sound])
+  // Reduce-effects mode: drop the heavy ambient GPU work (floating particles + the frosted-glass
+  // backdrop blur, which re-blurs every frame as particles drift) for smooth scrolling on lighter
+  // clients. Applied via a <html class="perf"> hook so it's pure CSS.
+  useEffect(() => {
+    localStorage.setItem("jarvis_perf", perfMode ? "1" : "0")
+    document.documentElement.classList.toggle("perf", perfMode)
+  }, [perfMode])
 
   const checkHealth = async () => {
     try {
@@ -622,6 +630,7 @@ function App() {
       { tag: "CFG", label: `${advancedOpen ? "Hide" : "Show"} advanced parameters`, run: () => setAdvancedOpen(o => !o) },
       { tag: "IN", label: "Focus message input", run: () => inputRef.current?.focus() },
       { tag: "SND", label: `Sound: ${sound ? "on" : "off"} — toggle`, run: () => setSound(s => !s) },
+      { tag: "FX", label: `Reduce effects: ${perfMode ? "on" : "off"} — toggle (smoother scroll)`, run: () => setPerfMode(p => !p) },
       ...(role === "admin" ? [{ tag: "ADM", label: "Open admin console", run: () => { window.location.href = "/admin" } }] : []),
       { tag: "OUT", label: "Disconnect", run: () => doLogout() },
       ...sessions.map(s => ({ tag: "GO", label: `Go to: ${s.title}`, run: () => loadHistory(s.id) })),
@@ -936,6 +945,10 @@ function App() {
                 ))}
               </div>
             )}
+            <button className="adv-btn perf-toggle" onClick={() => setPerfMode(p => !p)}
+                    title="Disable ambient particles + glass blur for smoother scrolling">
+              Reduce effects: {perfMode ? 'ON' : 'OFF'}
+            </button>
           </div>
 
           <div className="hud-panel">
