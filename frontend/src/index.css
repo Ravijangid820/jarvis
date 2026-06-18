@@ -57,9 +57,9 @@ body::after {
   content: ""; position: fixed; inset: 0;
   background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(103, 199, 235, 0.02) 2px, rgba(103, 199, 235, 0.02) 4px);
   z-index: -1; pointer-events: none;
-  animation: scanlines 10s linear infinite;
+  /* Static: animating background-position here repainted the full viewport every frame,
+     which made scrolling (and everything) feel laggy. The scanlines look the same still. */
 }
-@keyframes scanlines { from { background-position: 0 0; } to { background-position: 0 100vh; } }
 
 /* --- Global Elements --- */
 button, input, textarea { font-family: inherit; outline: none; }
