@@ -4,14 +4,15 @@ All notable changes to this project are documented in this file.
 
 ---
 
-## 2026-06-18 — Realistic arc reactor (replaces the plain concentric circles)
+## 2026-06-18 — Realistic Mark I arc reactor (replaces the plain concentric circles)
 
-- New reusable **`<ArcReactor>`** — a detailed, *realistic* reactor: a **brushed-steel housing with
-  bolts**, a ring of **ten copper wound-wire coil bobbins** (metallic gradients), a beveled inner
-  housing, and a **glowing triangle core**. **Static** (no spinning), per-instance gradients via
-  `useId()`. Replaces the radar-like concentric-circle placeholders in the sidebar logo, login,
-  welcome screen, boot overlay, and chat backdrop. Iterated visually (headless render) until it
-  read as a real arc reactor.
+- New reusable **`<ArcReactor>`** modelled on the iconic **Mark I "PROOF THAT TONY STARK HAS A
+  HEART"** reactor: a brushed-steel ring with **engraved text**, **copper wound coils alternating
+  with blue-glow panels**, a bolt ring, concentric inner rings, and a **layered blue core**.
+  Recreated as vector art (iterated via headless render against a reference photo), **static**, with
+  per-instance gradient/textPath ids via `useId()`. Replaces the radar-like concentric circles in
+  the sidebar logo, login, welcome screen, boot overlay, and chat backdrop (the engraved text
+  auto-hides at the tiny logo/login sizes).
 
 ## 2026-06-18 — Calmer, static UI (no cursor parallax / idle motion)
 

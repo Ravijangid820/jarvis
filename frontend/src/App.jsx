@@ -4,70 +4,92 @@ import Admin from './Admin'
 
 const API = ""
 
-// Realistic arc reactor (static): a brushed-steel housing with bolts, a ring of ten copper
-// wound-wire coil bobbins, a beveled inner housing, and a glowing triangle core. One component,
-// reused at every size (logo, login, welcome, chat backdrop). useId() keeps each instance's
-// gradients unique. Built/iterated visually; viewBox 400 so the fine detail holds at any size.
+// Arc reactor — Mark I "PROOF THAT TONY STARK HAS A HEART" style: a brushed-steel ring with engraved
+// text, alternating copper wound coils + blue-glow panels, a bolt ring, and a layered blue core.
+// Recreated as vector art (iterated via headless render against the reference photo). Static.
+// Reused at every size; the engraved text auto-hides on the tiny logo/login sizes to stay clean.
+// useId() keeps gradient + textPath ids unique per instance.
 function ArcReactor({ size = 120, className = "" }) {
   const id = useId()
   const u = (s) => `${id}-${s}`
+  const showText = size >= 110
   return (
     <svg className={className} width={size} height={size} viewBox="0 0 400 400" aria-hidden="true">
       <defs>
         <radialGradient id={u("core")}>
-          <stop offset="0%" stopColor="#ffffff" />
-          <stop offset="18%" stopColor="#eafdff" />
-          <stop offset="48%" stopColor="#67C7EB" />
-          <stop offset="100%" stopColor="#67C7EB" stopOpacity="0" />
+          <stop offset="0%" stopColor="#eafaff" /><stop offset="30%" stopColor="#7fd0ff" />
+          <stop offset="70%" stopColor="#2e8fe0" /><stop offset="100%" stopColor="#2e8fe0" stopOpacity="0" />
         </radialGradient>
         <radialGradient id={u("bloom")}>
-          <stop offset="0%" stopColor="#67C7EB" stopOpacity="0.5" />
-          <stop offset="100%" stopColor="#67C7EB" stopOpacity="0" />
+          <stop offset="0%" stopColor="#4aa6ff" stopOpacity="0.55" /><stop offset="100%" stopColor="#4aa6ff" stopOpacity="0" />
         </radialGradient>
+        <linearGradient id={u("blue")} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#bfeaff" /><stop offset="45%" stopColor="#4aa6ff" /><stop offset="100%" stopColor="#1c5fa8" />
+        </linearGradient>
         <linearGradient id={u("steel")} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#cdd6db" /><stop offset="16%" stopColor="#8c979e" />
-          <stop offset="52%" stopColor="#39434a" /><stop offset="100%" stopColor="#141a1f" />
+          <stop offset="0%" stopColor="#d3dbe0" /><stop offset="16%" stopColor="#9aa4ab" />
+          <stop offset="52%" stopColor="#454f56" /><stop offset="100%" stopColor="#1a2026" />
         </linearGradient>
         <linearGradient id={u("steelV")} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#bcc6cc" /><stop offset="50%" stopColor="#49545b" /><stop offset="100%" stopColor="#1e252b" />
+          <stop offset="0%" stopColor="#c2ccd2" /><stop offset="50%" stopColor="#525d64" /><stop offset="100%" stopColor="#222a30" />
         </linearGradient>
         <linearGradient id={u("wire")} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#6f3c13" /><stop offset="32%" stopColor="#e0904a" />
-          <stop offset="52%" stopColor="#ffe0b6" /><stop offset="74%" stopColor="#d07f3b" /><stop offset="100%" stopColor="#54300f" />
+          <stop offset="0%" stopColor="#6f3c13" /><stop offset="34%" stopColor="#e2924a" />
+          <stop offset="54%" stopColor="#ffdcae" /><stop offset="76%" stopColor="#d6843e" /><stop offset="100%" stopColor="#54300f" />
         </linearGradient>
+        <path id={u("top")} d="M 32 200 A 168 168 0 0 1 368 200" fill="none" />
+        <path id={u("bot")} d="M 368 200 A 168 168 0 0 1 32 200" fill="none" />
       </defs>
-      <circle cx="200" cy="200" r="200" fill={`url(#${u("bloom")})`} opacity="0.35" />
-      {/* brushed-steel outer housing + edge bevels */}
-      <path d="M200 12 A188 188 0 1 0 200.01 12 Z M200 52 A148 148 0 1 0 200.01 52 Z" fill={`url(#${u("steel")})`} fillRule="evenodd" />
-      <circle cx="200" cy="200" r="188" fill="none" stroke="#dde5e9" strokeWidth="1" opacity="0.6" />
-      <circle cx="200" cy="200" r="150" fill="none" stroke="#cdd6db" strokeWidth="1" opacity="0.35" />
-      <circle cx="200" cy="200" r="148" fill="none" stroke="#090d10" strokeWidth="3" opacity="0.9" />
-      {/* bolts */}
-      {Array.from({ length: 12 }).map((_, i) => (
-        <g key={`b${i}`} transform={`rotate(${i * 30} 200 200)`}>
-          <circle cx="200" cy="33" r="5" fill="#11181d" stroke="#8a959c" strokeWidth="1.2" />
-          <circle cx="198.5" cy="31.5" r="1.6" fill="#d6dee2" />
+      <circle cx="200" cy="200" r="195" fill={`url(#${u("bloom")})`} opacity="0.4" />
+      {/* steel housing + engraved text */}
+      <path d="M200 8 A192 192 0 1 0 200.01 8 Z M200 52 A148 148 0 1 0 200.01 52 Z" fill={`url(#${u("steel")})`} fillRule="evenodd" />
+      <circle cx="200" cy="200" r="192" fill="none" stroke="#e0e8ec" strokeWidth="1" opacity="0.55" />
+      <circle cx="200" cy="200" r="148" fill="none" stroke="#0a0f12" strokeWidth="2.5" opacity="0.85" />
+      {showText && (
+        <g fill="#1e262c" fontSize="23" style={{ fontFamily: "'Arial Narrow', Arial, sans-serif", fontWeight: 700, letterSpacing: "2px" }}>
+          <text><textPath href={`#${u("top")}`} startOffset="50%" textAnchor="middle">PROOF THAT TONY STARK</textPath></text>
+          <text><textPath href={`#${u("bot")}`} startOffset="50%" textAnchor="middle">HAS A HEART</textPath></text>
         </g>
+      )}
+      <circle cx="200" cy="200" r="120" fill={`url(#${u("bloom")})`} opacity="0.5" />
+      {/* alternating blue-glow panels + copper wound coils */}
+      {Array.from({ length: 16 }).map((_, i) => {
+        const rot = `rotate(${i * 22.5} 200 200)`
+        if (i % 2 === 0) return (
+          <g key={i} transform={rot}>
+            <path d="M187 56 L213 56 L208 104 L192 104 Z" fill={`url(#${u("blue")})`} stroke="#bfe9ff" strokeWidth="1.2" />
+            <path d="M191 60 L209 60 L206 100 L194 100 Z" fill="#9fe0ff" opacity="0.25" />
+          </g>
+        )
+        return (
+          <g key={i} transform={rot}>
+            <rect x="183" y="55" width="34" height="52" rx="4" fill="#0a1218" stroke="#2f3a42" strokeWidth="1.3" />
+            <rect x="184" y="56" width="32" height="5" rx="2" fill={`url(#${u("steelV")})`} />
+            {Array.from({ length: 9 }).map((_, t) => (
+              <rect key={t} x="186" y={(60 + t * 5).toFixed(1)} width="28" height="3.8" rx="1.9" fill={`url(#${u("wire")})`} />
+            ))}
+            <rect x="184" y="101" width="32" height="5" rx="2" fill={`url(#${u("steelV")})`} />
+          </g>
+        )
+      })}
+      {/* bolt ring */}
+      {Array.from({ length: 28 }).map((_, i) => (
+        <circle key={i} cx="200" cy="113" r="2.6" fill="#0a1117" stroke="#5b6973" strokeWidth="0.8" transform={`rotate(${i * (360 / 28)} 200 200)`} />
       ))}
-      {/* ten copper wound-wire coil bobbins */}
-      {Array.from({ length: 10 }).map((_, i) => (
-        <g key={`c${i}`} transform={`rotate(${i * 36} 200 200)`}>
-          <rect x="179" y="56" width="42" height="96" rx="5" fill="#0a1015" stroke="#39434a" strokeWidth="1.5" />
-          <rect x="181" y="57.5" width="38" height="7" rx="2.5" fill={`url(#${u("steelV")})`} />
-          {Array.from({ length: 12 }).map((_, t) => (
-            <rect key={t} x="185" y={(66 + t * 6).toFixed(1)} width="30" height="4.6" rx="2.3" fill={`url(#${u("wire")})`} />
-          ))}
-          <rect x="181" y="144" width="38" height="7" rx="2.5" fill={`url(#${u("steelV")})`} />
-        </g>
+      {/* center: concentric rings, hole ring, dark hub + blue core */}
+      <circle cx="200" cy="200" r="86" fill="#08141e" stroke={`url(#${u("steelV")})`} strokeWidth="6" />
+      <circle cx="200" cy="200" r="80" fill="none" stroke="#3a6a96" strokeWidth="1" opacity="0.6" />
+      <circle cx="200" cy="200" r="64" fill="none" stroke={`url(#${u("steelV")})`} strokeWidth="4" />
+      {Array.from({ length: 14 }).map((_, i) => (
+        <circle key={i} cx="200" cy="150" r="2" fill="#0a1620" transform={`rotate(${i * (360 / 14)} 200 200)`} />
       ))}
-      {/* beveled inner housing + glowing triangle core */}
-      <circle cx="200" cy="200" r="90" fill="#0a1620" stroke={`url(#${u("steelV")})`} strokeWidth="8" />
-      <circle cx="200" cy="200" r="85" fill="none" stroke="#aeb9bf" strokeWidth="1" opacity="0.45" />
-      <circle cx="200" cy="200" r="82" fill="none" stroke="#090d10" strokeWidth="1.5" />
-      <circle cx="200" cy="200" r="82" fill={`url(#${u("core")})`} />
-      <circle cx="200" cy="200" r="40" fill="#bdeeff" opacity="0.5" />
-      <path d="M200 152 L243 226 L157 226 Z" fill="rgba(234,253,255,0.14)" stroke="#f2feff" strokeWidth="3.4" strokeLinejoin="round" />
-      <circle cx="200" cy="200" r="11" fill="#ffffff" />
+      <circle cx="200" cy="200" r="44" fill={`url(#${u("core")})`} />
+      <circle cx="200" cy="200" r="30" fill="#1a2026" stroke="#3a6a96" strokeWidth="1.5" />
+      {Array.from({ length: 4 }).map((_, i) => (
+        <rect key={i} x="197" y="178" width="6" height="20" rx="2" fill="#11181e" transform={`rotate(${i * 90} 200 200)`} />
+      ))}
+      <circle cx="200" cy="200" r="15" fill={`url(#${u("core")})`} />
+      <circle cx="200" cy="200" r="6" fill="#ffffff" />
     </svg>
   )
 }
