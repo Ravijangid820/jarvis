@@ -160,7 +160,7 @@ button, input, textarea { font-family: inherit; outline: none; }
 .conn-badge { display: flex; align-items: center; gap: 8px; font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.15em; color: rgba(103, 199, 235, 0.6); }
 
 /* --- Messages --- */
-.messages-container { flex: 1; overflow-y: auto; padding: 30px 0; }
+.messages-container { flex: 1; overflow-y: auto; padding: 30px 0; overflow-anchor: none; }
 .messages-inner { max-width: 900px; margin: 0 auto; padding: 0 30px; }
 
 .welcome-screen { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; text-align: center; animation: bootUp 1s cubic-bezier(0.16, 1, 0.3, 1); }
@@ -629,10 +629,12 @@ html[data-theme="ember"]    body { filter: hue-rotate(-156deg) saturate(1.2); }
              perspective(900px) rotateY(calc(var(--mx, 0) * 10deg)) rotateX(calc(var(--my, 0) * -10deg));
   transition: opacity 0.6s ease, transform 0.25s ease-out;
 }
-.app-container.thinking .chat-reactor-bg { opacity: 0.22; animation: reactorBgPulse 1.7s ease-in-out infinite; }
+/* Pulse OPACITY (GPU-composited), not filter: animating drop-shadow repaints this large
+   element behind the messages every frame — the main cause of choppy scroll while streaming. */
+.app-container.thinking .chat-reactor-bg { will-change: opacity; animation: reactorBgPulse 1.7s ease-in-out infinite; }
 @keyframes reactorBgPulse {
-  0%,100% { filter: drop-shadow(0 0 26px var(--holo-cyan-glow)); }
-  50%     { filter: drop-shadow(0 0 55px var(--holo-cyan)); }
+  0%,100% { opacity: 0.16; }
+  50%     { opacity: 0.26; }
 }
 
 /* Temperature radial gauge (live, in the Parameters panel). */

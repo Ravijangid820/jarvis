@@ -1,8 +1,102 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, memo } from 'react'
 import './index.css'
 import Admin from './Admin'
 
 const API = ""
+
+// --- Message rendering (module scope: stable identity so memo() works) ---
+function copyText(text, e) {
+  navigator.clipboard.writeText(text)
+  const btn = e.target
+  btn.textContent = "OK"
+  btn.classList.add("ok")
+  setTimeout(() => { btn.textContent = "Copy"; btn.classList.remove("ok") }, 1200)
+}
+
+// Inline markdown: **bold**, `code`, and [links](url). Builds React text nodes
+// only (no dangerouslySetInnerHTML), so it's XSS-safe by construction.
+function renderInline(text) {
+  const nodes = []
+  const re = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)\s]+\))/g
+  let last = 0, m, i = 0
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) nodes.push(text.slice(last, m.index))
+    const tok = m[0]
+    if (tok.startsWith("**")) nodes.push(<strong key={i}>{tok.slice(2, -2)}</strong>)
+    else if (tok.startsWith("`")) nodes.push(<code key={i}>{tok.slice(1, -1)}</code>)
+    else {
+      const mm = tok.match(/\[([^\]]+)\]\(([^)\s]+)\)/)
+      const href = /^https?:\/\//i.test(mm[2]) ? mm[2] : "#"   // only allow http(s) links
+      nodes.push(<a key={i} href={href} target="_blank" rel="noopener noreferrer">{mm[1]}</a>)
+    }
+    last = m.index + tok.length; i++
+  }
+  if (last < text.length) nodes.push(text.slice(last))
+  return nodes
+}
+
+// Block markdown: fenced code, #/##/### headings, -/* and 1. lists, paragraphs.
+function renderMessageContent(content) {
+  if (!content) return null
+  return content.split(/(```[\s\S]*?```)/g).map((part, idx) => {
+    if (part.startsWith("```") && part.endsWith("```")) {
+      const code = part.slice(3, -3).replace(/^\w+\n/, "")
+      return <pre key={idx}><code>{code}</code></pre>
+    }
+    const blocks = []
+    let list = null
+    const flush = () => {
+      if (!list) return
+      const Tag = list.type
+      blocks.push(<Tag key={blocks.length} className="md-list">{list.items.map((it, i) => <li key={i}>{renderInline(it)}</li>)}</Tag>)
+      list = null
+    }
+    part.split("\n").forEach(line => {
+      const h = line.match(/^(#{1,3})\s+(.*)$/)
+      const ul = line.match(/^\s*[-*]\s+(.*)$/)
+      const ol = line.match(/^\s*\d+\.\s+(.*)$/)
+      if (h) { flush(); blocks.push(<div key={blocks.length} className={`md-h md-h${h[1].length}`}>{renderInline(h[2])}</div>) }
+      else if (ul) { if (!list || list.type !== "ul") { flush(); list = { type: "ul", items: [] } } list.items.push(ul[1]) }
+      else if (ol) { if (!list || list.type !== "ol") { flush(); list = { type: "ol", items: [] } } list.items.push(ol[1]) }
+      else if (line.trim() === "") { flush(); blocks.push(<div key={blocks.length} className="md-gap" />) }
+      else { flush(); blocks.push(<div key={blocks.length} className="md-line">{renderInline(line)}</div>) }
+    })
+    flush()
+    return <span key={idx}>{blocks}</span>
+  })
+}
+
+// One chat message. memo()'d so streaming a token re-renders only the LAST message
+// instead of re-parsing every message's markdown each token (that was the scroll jank).
+const MessageItem = memo(function MessageItem({ role, content, isStreaming }) {
+  return (
+    <div className="message">
+      <div className={`msg-avatar ${role}`}>{role === 'user' ? 'U' : 'J'}</div>
+      <div className={`msg-body ${isStreaming ? 'streaming' : ''}`}>
+        <div className="msg-head">
+          <span className={`msg-sender ${role}`}>{role === 'user' ? 'You' : 'Jarvis'}</span>
+          <div className="msg-actions">
+            <button className="copy-btn" onClick={(e) => copyText(content, e)}>Copy</button>
+          </div>
+        </div>
+        <div className="msg-content">
+          {isStreaming && content === "" ? (
+            <div className="typing-indicator" style={{margin:0}}>
+              <div className="typing-dots" style={{padding:'5px 10px'}}>
+                <div className="typing-dot"></div><div className="typing-dot"></div><div className="typing-dot"></div>
+              </div>
+            </div>
+          ) : (
+            <>
+              {renderMessageContent(content)}
+              {isStreaming && <span className="stream-cursor" aria-hidden="true" />}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+})
 
 // Static "neural activity" waveform path (two harmonics; seamless loop over the tile).
 const OSC_PATH = (() => {
@@ -95,6 +189,7 @@ function App() {
   // pinned, so streaming never yanks the user back down when they scroll up to read.
   const stickToBottomRef = useRef(true)
   const prevMsgCountRef = useRef(0)
+  const scrollRafRef = useRef(0)   // coalesces per-token auto-scrolls into one per frame
 
   const onMessagesScroll = () => {
     const el = messagesContainerRef.current
@@ -134,10 +229,13 @@ function App() {
       el.scrollTop = el.scrollHeight
       return
     }
-    if (!stickToBottomRef.current) return
-    // Streaming-token updates: instant so per-token scrolls don't fight a smooth
-    // animation; smooth only for the small settle once the reply finishes.
-    el.scrollTo({ top: el.scrollHeight, behavior: processing ? "auto" : "smooth" })
+    if (!stickToBottomRef.current || scrollRafRef.current) return
+    // Coalesce rapid streaming-token updates into ONE scroll per animation frame, so we
+    // don't force a layout read on every token. Instant while streaming; smooth to settle.
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = 0
+      el.scrollTo({ top: el.scrollHeight, behavior: processing ? "auto" : "smooth" })
+    })
   }, [messages, processing])
 
   // Live uptime ticker (drives the telemetry readout).
@@ -640,66 +738,8 @@ function App() {
     return <svg className="spark" width={w} height={h} viewBox={`0 0 ${w} ${h}`}><polyline points={pts} fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" /></svg>
   }
 
-  const copyText = (text, e) => {
-    navigator.clipboard.writeText(text)
-    const btn = e.target
-    btn.textContent = "OK"
-    btn.classList.add("ok")
-    setTimeout(() => { btn.textContent = "Copy"; btn.classList.remove("ok") }, 1200)
-  }
-
-  // Inline markdown: **bold**, `code`, and [links](url). Builds React text nodes
-  // only (no dangerouslySetInnerHTML), so it's XSS-safe by construction.
-  const renderInline = (text) => {
-    const nodes = []
-    const re = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)\s]+\))/g
-    let last = 0, m, i = 0
-    while ((m = re.exec(text)) !== null) {
-      if (m.index > last) nodes.push(text.slice(last, m.index))
-      const tok = m[0]
-      if (tok.startsWith("**")) nodes.push(<strong key={i}>{tok.slice(2, -2)}</strong>)
-      else if (tok.startsWith("`")) nodes.push(<code key={i}>{tok.slice(1, -1)}</code>)
-      else {
-        const mm = tok.match(/\[([^\]]+)\]\(([^)\s]+)\)/)
-        const href = /^https?:\/\//i.test(mm[2]) ? mm[2] : "#"   // only allow http(s) links
-        nodes.push(<a key={i} href={href} target="_blank" rel="noopener noreferrer">{mm[1]}</a>)
-      }
-      last = m.index + tok.length; i++
-    }
-    if (last < text.length) nodes.push(text.slice(last))
-    return nodes
-  }
-
-  // Block markdown: fenced code, #/##/### headings, -/* and 1. lists, paragraphs.
-  const renderMessageContent = (content) => {
-    if (!content) return null
-    return content.split(/(```[\s\S]*?```)/g).map((part, idx) => {
-      if (part.startsWith("```") && part.endsWith("```")) {
-        const code = part.slice(3, -3).replace(/^\w+\n/, "")
-        return <pre key={idx}><code>{code}</code></pre>
-      }
-      const blocks = []
-      let list = null
-      const flush = () => {
-        if (!list) return
-        const Tag = list.type
-        blocks.push(<Tag key={blocks.length} className="md-list">{list.items.map((it, i) => <li key={i}>{renderInline(it)}</li>)}</Tag>)
-        list = null
-      }
-      part.split("\n").forEach(line => {
-        const h = line.match(/^(#{1,3})\s+(.*)$/)
-        const ul = line.match(/^\s*[-*]\s+(.*)$/)
-        const ol = line.match(/^\s*\d+\.\s+(.*)$/)
-        if (h) { flush(); blocks.push(<div key={blocks.length} className={`md-h md-h${h[1].length}`}>{renderInline(h[2])}</div>) }
-        else if (ul) { if (!list || list.type !== "ul") { flush(); list = { type: "ul", items: [] } } list.items.push(ul[1]) }
-        else if (ol) { if (!list || list.type !== "ol") { flush(); list = { type: "ol", items: [] } } list.items.push(ol[1]) }
-        else if (line.trim() === "") { flush(); blocks.push(<div key={blocks.length} className="md-gap" />) }
-        else { flush(); blocks.push(<div key={blocks.length} className="md-line">{renderInline(line)}</div>) }
-      })
-      flush()
-      return <span key={idx}>{blocks}</span>
-    })
-  }
+  // copyText / renderInline / renderMessageContent + the memoized <MessageItem>
+  // now live at module scope (top of file) so memo() can skip unchanged messages.
 
   if (booting) {
     return (
@@ -1062,31 +1102,7 @@ function App() {
             )}
             
             {messages.map((m, i) => (
-              <div key={i} className="message">
-                <div className={`msg-avatar ${m.role}`}>{m.role === 'user' ? 'U' : 'J'}</div>
-                <div className={`msg-body ${m.isStreaming ? 'streaming' : ''}`}>
-                  <div className="msg-head">
-                    <span className={`msg-sender ${m.role}`}>{m.role === 'user' ? 'You' : 'Jarvis'}</span>
-                    <div className="msg-actions">
-                      <button className="copy-btn" onClick={(e) => copyText(m.content, e)}>Copy</button>
-                    </div>
-                  </div>
-                  <div className="msg-content">
-                    {m.isStreaming && m.content === "" ? (
-                      <div className="typing-indicator" style={{margin:0}}>
-                        <div className="typing-dots" style={{padding:'5px 10px'}}>
-                          <div className="typing-dot"></div><div className="typing-dot"></div><div className="typing-dot"></div>
-                        </div>
-                      </div>
-                    ) : (
-                      <>
-                        {renderMessageContent(m.content)}
-                        {m.isStreaming && <span className="stream-cursor" aria-hidden="true" />}
-                      </>
-                    )}
-                  </div>
-                </div>
-              </div>
+              <MessageItem key={i} role={m.role} content={m.content} isStreaming={m.isStreaming} />
             ))}
             <div ref={messagesEndRef} />
           </div>
