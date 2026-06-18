@@ -4,53 +4,70 @@ import Admin from './Admin'
 
 const API = ""
 
-// Realistic arc reactor (static): a metallic bezel, the signature ring of wound copper coils,
-// an inner housing, the iconic triangle, and a bright layered core. One component, reused at every
-// size (sidebar logo, login, welcome, chat backdrop) — useId() keeps each instance's gradients unique.
+// Realistic arc reactor (static): a brushed-steel housing with bolts, a ring of ten copper
+// wound-wire coil bobbins, a beveled inner housing, and a glowing triangle core. One component,
+// reused at every size (logo, login, welcome, chat backdrop). useId() keeps each instance's
+// gradients unique. Built/iterated visually; viewBox 400 so the fine detail holds at any size.
 function ArcReactor({ size = 120, className = "" }) {
   const id = useId()
-  const core = `${id}-c`, bezel = `${id}-b`, coil = `${id}-w`
+  const u = (s) => `${id}-${s}`
   return (
-    <svg className={className} width={size} height={size} viewBox="0 0 120 120" aria-hidden="true">
+    <svg className={className} width={size} height={size} viewBox="0 0 400 400" aria-hidden="true">
       <defs>
-        <radialGradient id={core}>
-          <stop offset="0%" stopColor="#ffffff" stopOpacity="1" />
-          <stop offset="28%" stopColor="#dff6ff" stopOpacity="0.95" />
-          <stop offset="62%" stopColor="#67C7EB" stopOpacity="0.6" />
+        <radialGradient id={u("core")}>
+          <stop offset="0%" stopColor="#ffffff" />
+          <stop offset="18%" stopColor="#eafdff" />
+          <stop offset="48%" stopColor="#67C7EB" />
           <stop offset="100%" stopColor="#67C7EB" stopOpacity="0" />
         </radialGradient>
-        <linearGradient id={bezel} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#cfeeff" />
-          <stop offset="48%" stopColor="#67C7EB" />
-          <stop offset="100%" stopColor="#27617c" />
+        <radialGradient id={u("bloom")}>
+          <stop offset="0%" stopColor="#67C7EB" stopOpacity="0.5" />
+          <stop offset="100%" stopColor="#67C7EB" stopOpacity="0" />
+        </radialGradient>
+        <linearGradient id={u("steel")} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#cdd6db" /><stop offset="16%" stopColor="#8c979e" />
+          <stop offset="52%" stopColor="#39434a" /><stop offset="100%" stopColor="#141a1f" />
         </linearGradient>
-        <linearGradient id={coil} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="rgba(184,238,255,0.34)" />
-          <stop offset="100%" stopColor="rgba(103,199,235,0.03)" />
+        <linearGradient id={u("steelV")} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#bcc6cc" /><stop offset="50%" stopColor="#49545b" /><stop offset="100%" stopColor="#1e252b" />
+        </linearGradient>
+        <linearGradient id={u("wire")} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#6f3c13" /><stop offset="32%" stopColor="#e0904a" />
+          <stop offset="52%" stopColor="#ffe0b6" /><stop offset="74%" stopColor="#d07f3b" /><stop offset="100%" stopColor="#54300f" />
         </linearGradient>
       </defs>
-      {/* soft halo */}
-      <circle cx="60" cy="60" r="59" fill={`url(#${core})`} opacity="0.14" />
-      {/* outer metallic bezel */}
-      <circle cx="60" cy="60" r="55" fill="none" stroke={`url(#${bezel})`} strokeWidth="3.2" />
-      <circle cx="60" cy="60" r="49.5" fill="none" stroke="#0c2330" strokeWidth="2" opacity="0.85" />
-      <circle cx="60" cy="60" r="47.5" fill="none" stroke="#67C7EB" strokeWidth="0.6" opacity="0.35" />
-      {/* wound copper-coil ring — 10 segments */}
-      {Array.from({ length: 10 }).map((_, i) => (
-        <g key={i} transform={`rotate(${i * 36} 60 60)`}>
-          <path d="M52 14 L68 14 L64 30 L56 30 Z" fill={`url(#${coil})`} stroke={`url(#${bezel})`} strokeWidth="1.3" strokeLinejoin="round" />
-          <line x1="53.4" y1="19" x2="66.6" y2="19" stroke="#bfefff" strokeWidth="0.7" opacity="0.75" />
-          <line x1="54" y1="23.5" x2="66" y2="23.5" stroke="#bfefff" strokeWidth="0.7" opacity="0.68" />
-          <line x1="54.6" y1="28" x2="65.4" y2="28" stroke="#bfefff" strokeWidth="0.7" opacity="0.6" />
+      <circle cx="200" cy="200" r="200" fill={`url(#${u("bloom")})`} opacity="0.35" />
+      {/* brushed-steel outer housing + edge bevels */}
+      <path d="M200 12 A188 188 0 1 0 200.01 12 Z M200 52 A148 148 0 1 0 200.01 52 Z" fill={`url(#${u("steel")})`} fillRule="evenodd" />
+      <circle cx="200" cy="200" r="188" fill="none" stroke="#dde5e9" strokeWidth="1" opacity="0.6" />
+      <circle cx="200" cy="200" r="150" fill="none" stroke="#cdd6db" strokeWidth="1" opacity="0.35" />
+      <circle cx="200" cy="200" r="148" fill="none" stroke="#090d10" strokeWidth="3" opacity="0.9" />
+      {/* bolts */}
+      {Array.from({ length: 12 }).map((_, i) => (
+        <g key={`b${i}`} transform={`rotate(${i * 30} 200 200)`}>
+          <circle cx="200" cy="33" r="5" fill="#11181d" stroke="#8a959c" strokeWidth="1.2" />
+          <circle cx="198.5" cy="31.5" r="1.6" fill="#d6dee2" />
         </g>
       ))}
-      {/* inner housing */}
-      <circle cx="60" cy="60" r="29" fill="#06141c" stroke={`url(#${bezel})`} strokeWidth="2.4" />
-      <circle cx="60" cy="60" r="24.5" fill="none" stroke="#67C7EB" strokeWidth="0.6" opacity="0.4" />
-      {/* core glow + iconic triangle + center spark */}
-      <circle cx="60" cy="60" r="22" fill={`url(#${core})`} />
-      <path d="M60 47 L72 67 L48 67 Z" fill="rgba(214,244,255,0.06)" stroke="#dff6ff" strokeWidth="1.4" strokeLinejoin="round" opacity="0.9" />
-      <circle cx="60" cy="60" r="3.4" fill="#ffffff" />
+      {/* ten copper wound-wire coil bobbins */}
+      {Array.from({ length: 10 }).map((_, i) => (
+        <g key={`c${i}`} transform={`rotate(${i * 36} 200 200)`}>
+          <rect x="179" y="56" width="42" height="96" rx="5" fill="#0a1015" stroke="#39434a" strokeWidth="1.5" />
+          <rect x="181" y="57.5" width="38" height="7" rx="2.5" fill={`url(#${u("steelV")})`} />
+          {Array.from({ length: 12 }).map((_, t) => (
+            <rect key={t} x="185" y={(66 + t * 6).toFixed(1)} width="30" height="4.6" rx="2.3" fill={`url(#${u("wire")})`} />
+          ))}
+          <rect x="181" y="144" width="38" height="7" rx="2.5" fill={`url(#${u("steelV")})`} />
+        </g>
+      ))}
+      {/* beveled inner housing + glowing triangle core */}
+      <circle cx="200" cy="200" r="90" fill="#0a1620" stroke={`url(#${u("steelV")})`} strokeWidth="8" />
+      <circle cx="200" cy="200" r="85" fill="none" stroke="#aeb9bf" strokeWidth="1" opacity="0.45" />
+      <circle cx="200" cy="200" r="82" fill="none" stroke="#090d10" strokeWidth="1.5" />
+      <circle cx="200" cy="200" r="82" fill={`url(#${u("core")})`} />
+      <circle cx="200" cy="200" r="40" fill="#bdeeff" opacity="0.5" />
+      <path d="M200 152 L243 226 L157 226 Z" fill="rgba(234,253,255,0.14)" stroke="#f2feff" strokeWidth="3.4" strokeLinejoin="round" />
+      <circle cx="200" cy="200" r="11" fill="#ffffff" />
     </svg>
   )
 }
