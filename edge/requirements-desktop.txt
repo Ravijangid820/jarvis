@@ -1,0 +1,10 @@
+# Desktop/laptop deps (Windows / macOS / Linux) — for testing the camera code WITHOUT a Pi.
+# (On the Raspberry Pi, OpenCV/picamera2 come from apt instead — see requirements.txt + setup.sh.)
+#   pip install -r edge/requirements-desktop.txt
+numpy<2
+requests>=2.31,<3
+opencv-python>=4.8        # webcam capture + motion detection (the minimum to test the camera)
+
+# Optional — install only if you want these detectors:
+# mediapipe>=0.10,<0.11    # pose + hand gestures
+# onnxruntime>=1.17,<2     # face-identity embeddings (faces.py)

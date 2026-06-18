@@ -71,8 +71,14 @@ def run(config_path, dry_run=False):
     rr = 0
 
     state = {"go": True}
-    signal.signal(signal.SIGINT, lambda *_: state.update(go=False))
-    signal.signal(signal.SIGTERM, lambda *_: state.update(go=False))
+    # Register stop signals defensively — not every signal is settable on every platform
+    # (e.g. SIGTERM handling differs on Windows, where we test on a laptop webcam).
+    for _sig in (signal.SIGINT, getattr(signal, "SIGTERM", None)):
+        if _sig is not None:
+            try:
+                signal.signal(_sig, lambda *_: state.update(go=False))
+            except (ValueError, OSError, RuntimeError):
+                pass
 
     period = 1.0 / max(cam_cfg.get("fps", 8), 1)
     log.info("agent started (dry_run=%s) — Ctrl-C to stop", dry_run)

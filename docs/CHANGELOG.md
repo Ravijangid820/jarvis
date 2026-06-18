@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-18 — Edge camera: testable on a laptop (no Pi needed)
+
+- The edge vision agent runs on a **laptop webcam** (the camera layer already falls back to OpenCV
+  when picamera2 is absent). Added **`edge/requirements-desktop.txt`** (opencv-python + numpy +
+  requests; mediapipe/onnxruntime optional) and a **"Test on a laptop"** guide in the edge setup
+  doc — `bench` + `--dry-run` work with no server. Windows-safe signal handling in the agent.
+- **Decision:** the edge code stays in the monorepo (the clone is small — models/builds are
+  gitignored; the event contract stays in sync with the server; `git sparse-checkout set edge`
+  gives an edge-only checkout if ever needed).
+
 ## 2026-06-18 — JARVIS speaks: spoken greeting + voice-triggered "Yes, sir?"
 
 - **`POST /tts`** (synthesize any text → WAV) and **`GET /greeting`** (a time-aware JARVIS

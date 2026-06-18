@@ -1,4 +1,5 @@
-"""Benchmark each detector's throughput — run ON THE PI to check what it can handle.
+"""Benchmark each detector's throughput — run on the Pi (or your laptop webcam) to see what it
+can handle before deploying.
 
   python -m jarvis_edge.bench [--config config/config.json] [--frames 60]
 

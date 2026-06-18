@@ -80,6 +80,33 @@ cp edge/config.example.json edge/config/config.json   # review server.url / came
 python -m jarvis_edge.agent --config edge/config/config.json        # or --dry-run
 ```
 
+## Test on a laptop (no Pi) — uses your webcam
+
+The same code runs on a laptop: the camera layer falls back to **OpenCV/webcam** when picamera2
+isn't present. Great for developing the detectors before you have the Pi. (Windows/macOS/Linux.)
+
+```bash
+# 1. Get just the edge code (or clone the whole repo — it's small; models are gitignored):
+git clone --filter=blob:none --sparse <repo> jarvis && cd jarvis && git sparse-checkout set edge
+
+# 2. A Python env + desktop deps (motion needs only opencv-python):
+python -m venv .venv && . .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -r edge/requirements-desktop.txt           # add mediapipe/onnxruntime for pose/faces
+
+# 3. Config for the laptop webcam:
+cp edge/config.example.json edge/config/config.json
+#    set  camera.backend = "opencv"  (or leave "auto"),  device = 0  (default webcam),
+#         device_id = "laptop-cam",  server.url = http://<server-ip>:5000
+
+# 4. Test the camera + detectors with NO server first:
+python -m jarvis_edge.bench --frames 60                 # per-detector FPS on your webcam
+python -m jarvis_edge.agent --dry-run                   # events logged, not sent
+
+# 5. Go live: on the SERVER mint a device-bound key, save it, then run for real:
+#    uv run python src/scripts/manage.py mint-key <user> laptop-cam laptop-cam  →  edge/config/edge.key
+python -m jarvis_edge.agent                             # events POST to /events → see them in /admin
+```
+
 ## Layout
 
 ```
