@@ -14,6 +14,9 @@ All notable changes to this project are documented in this file.
   any other command → `/inbox` with `voice_feedback`, and the reply is **spoken back** (played with
   `paplay`/`aplay`/`ffplay`). Needs an audio player + output device on the box — on-hardware tuning
   required. Tests 42 → 45.
+- **One toggle now governs all audio.** Consolidated the old separate "Sound" + "Voice Output"
+  switches into a single **JARVIS Voice** toggle (Parameters panel / ⌘K) — when on, you get UI
+  blips, the spoken greeting, **and spoken chat replies** (`voice_feedback` follows it).
 
 ## 2026-06-18 — JARVIS-style greeting on the welcome screen
 

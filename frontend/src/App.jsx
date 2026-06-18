@@ -264,7 +264,6 @@ function App() {
   const [freqPenalty, setFreqPenalty] = useState(0.0)
   const [nPredict, setNPredict] = useState(2048)   // backend clamps this to fit the 4096-token context
   const [seed, setSeed] = useState(-1)
-  const [voice, setVoice] = useState(false)
   const [sysPrompt, setSysPrompt] = useState("")
 
   // Cinematic boot sequence — shown once per browser session, click to skip.
@@ -628,7 +627,7 @@ function App() {
       // Guard against NaN from a cleared number field (parseInt("") === NaN).
       n_predict: Number.isFinite(nPredict) ? nPredict : undefined,
       seed: Number.isFinite(seed) ? seed : undefined,
-      voice_feedback: voice,
+      voice_feedback: sound,   // JARVIS speaks the reply when the voice toggle is on
       system_prompt: sysPrompt || undefined
     }
 
@@ -766,10 +765,9 @@ function App() {
   const paletteActions = () => {
     const acts = [
       { tag: "NEW", label: "New session", run: () => createSession() },
-      { tag: "VOX", label: `Voice output: ${voice ? "on" : "off"} — toggle`, run: () => setVoice(v => !v) },
       { tag: "CFG", label: `${advancedOpen ? "Hide" : "Show"} advanced parameters`, run: () => setAdvancedOpen(o => !o) },
       { tag: "IN", label: "Focus message input", run: () => inputRef.current?.focus() },
-      { tag: "SND", label: `Sound: ${sound ? "on" : "off"} — toggle`, run: () => setSound(s => !s) },
+      { tag: "VOX", label: `JARVIS voice: ${sound ? "on" : "off"} — toggle (greeting + spoken replies)`, run: () => setSound(s => !s) },
       { tag: "FX", label: `Reduce effects: ${perfMode ? "on" : "off"} — toggle (smoother scroll)`, run: () => setPerfMode(p => !p) },
       ...(role === "admin" ? [{ tag: "ADM", label: "Open admin console", run: () => { window.location.href = "/admin" } }] : []),
       { tag: "OUT", label: "Disconnect", run: () => doLogout() },
@@ -1049,8 +1047,8 @@ function App() {
                   <input type="number" className="hud-input" value={seed} onChange={e => setSeed(parseInt(e.target.value))} style={{flex: 1}} />
                 </div>
                 <div className="toggle-row" style={{marginTop: '6px'}}>
-                  <label>Voice Output</label>
-                  <input type="checkbox" className="hud-toggle" checked={voice} onChange={e => setVoice(e.target.checked)} />
+                  <label>JARVIS Voice</label>
+                  <input type="checkbox" className="hud-toggle" checked={sound} onChange={e => setSound(e.target.checked)} />
                 </div>
                 <div style={{marginTop: '8px'}}>
                   <span className="field-label">System Prompt Override</span>
