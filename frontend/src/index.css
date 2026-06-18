@@ -96,7 +96,7 @@ button, input, textarea { font-family: inherit; outline: none; }
 
 .stat-row { display: flex; align-items: center; gap: 10px; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 6px; }
 .status-dot { width: 6px; height: 6px; }
-.status-dot.online { background: #00ff88; box-shadow: 0 0 10px #00ff88; animation: blink 2s infinite; }
+.status-dot.online { background: #00ff88; box-shadow: 0 0 10px #00ff88; }
 .status-dot.offline { background: var(--action-red); box-shadow: 0 0 10px var(--action-red); }
 @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 .stat-val { margin-left: auto; font-family: var(--font-data); color: var(--alert-orange); font-size: 0.7rem; }
@@ -319,11 +319,9 @@ button, input, textarea { font-family: inherit; outline: none; }
 .app-container::before {
   content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
   background:
-    radial-gradient(circle at 50% 118%, rgba(103,199,235,0.12), transparent 55%),
-    radial-gradient(circle at 50% -18%, rgba(255,197,61,0.05), transparent 45%);
-  animation: reactorBreath 8s ease-in-out infinite;
+    radial-gradient(circle at 50% 118%, rgba(103,199,235,0.14), transparent 58%),
+    radial-gradient(circle at 50% -18%, rgba(255,197,61,0.06), transparent 48%);
 }
-@keyframes reactorBreath { 0%,100% { opacity: 0.65; } 50% { opacity: 1; } }
 
 /* --- Ambient parallax particle field (depth) --- */
 .ambient-particles { position: fixed; inset: 0; z-index: -1; pointer-events: none; overflow: hidden; }
@@ -364,25 +362,21 @@ button, input, textarea { font-family: inherit; outline: none; }
 .hud-corner {
   position: absolute; width: 24px; height: 24px;
   border-color: var(--holo-cyan); filter: drop-shadow(0 0 4px var(--holo-cyan-glow));
-  animation: cornerPulse 4s ease-in-out infinite;
+  opacity: 0.55;
 }
 .hud-corner.tl { top: 0; left: 0; border-top: 2px solid; border-left: 2px solid; }
 .hud-corner.tr { top: 0; right: 0; border-top: 2px solid; border-right: 2px solid; }
 .hud-corner.bl { bottom: 0; left: 0; border-bottom: 2px solid; border-left: 2px solid; }
 .hud-corner.br { bottom: 0; right: 0; border-bottom: 2px solid; border-right: 2px solid; }
-@keyframes cornerPulse { 0%,100% { opacity: 0.35; } 50% { opacity: 0.8; } }
 
-/* Reactor / title glows */
+/* Reactor / title glows (static — no flicker) */
 .reactor-logo, .login-reactor, .welcome-reactor svg { filter: drop-shadow(0 0 7px var(--holo-cyan-glow)); }
-.sidebar-title, .welcome-title, .top-title, .boot-title { animation: holoFlicker 7s infinite; }
-@keyframes holoFlicker { 0%,95%,100% { opacity: 1; } 96% { opacity: 0.72; } 97% { opacity: 1; } 98.5% { opacity: 0.85; } }
 
 /* Stark-gold secondary accents (was amber-yellow) */
 .stat-val, .slider-val, .sug-icon { color: var(--stark-gold); text-shadow: 0 0 6px var(--stark-gold-glow); }
 .top-model { color: var(--stark-gold); border-color: rgba(255,197,61,0.4); text-shadow: 0 0 6px var(--stark-gold-glow); }
 
-/* Status dot — stronger reactor pulse */
-.status-dot.online { animation: dotPulse 2s ease-in-out infinite; }
+/* Status dot — steady glow at idle; it pulses only while the model is thinking (see below). */
 @keyframes dotPulse {
   0%,100% { box-shadow: 0 0 6px #00ff88; opacity: 1; }
   50% { box-shadow: 0 0 14px #00ff88, 0 0 24px rgba(0,255,136,0.5); opacity: 0.55; }
@@ -531,16 +525,7 @@ button, input, textarea { font-family: inherit; outline: none; }
 .tele-k { color: rgba(103,199,235,0.4); margin-right: 4px; }
 @media (max-width: 880px) { .telemetry { display: none; } }
 
-/* Pointer-reactive depth (fine-pointer desktop only). --mx/--my published from JS. */
-.ambient-particles { transform: translate3d(calc(var(--mx, 0) * -10px), calc(var(--my, 0) * -10px), 0); transition: transform 0.25s ease-out; }
-@media (hover: hover) and (min-width: 769px) {
-  .welcome-reactor {
-    transform: perspective(900px) rotateY(calc(var(--mx, 0) * 6deg)) rotateX(calc(var(--my, 0) * -6deg));
-    transition: transform 0.18s ease-out;
-  }
-  .welcome-grid { transform: perspective(1000px) rotateX(calc(var(--my, 0) * -1.5deg)); transition: transform 0.2s ease-out; }
-  .message { transform: perspective(1200px) rotateY(calc(var(--mx, 0) * 0.7deg)); transition: transform 0.2s ease-out; }
-}
+/* (Pointer-reactive depth removed — the UI is static. Depth comes from gradients + glows.) */
 
 /* ============================================================
    MARK V — command palette (⌘K)
@@ -643,10 +628,9 @@ html[data-theme="ember"]    body { filter: hue-rotate(-156deg) saturate(1.2); }
 .messages-container { position: relative; z-index: 1; }
 .chat-reactor-bg {
   position: absolute; top: 46%; left: 50%; z-index: 0; pointer-events: none;
-  opacity: 0.11; filter: drop-shadow(0 0 30px var(--holo-cyan-glow));
-  transform: translate(calc(-50% + var(--mx, 0) * 16px), calc(-50% + var(--my, 0) * 16px))
-             perspective(900px) rotateY(calc(var(--mx, 0) * 10deg)) rotateX(calc(var(--my, 0) * -10deg));
-  transition: opacity 0.6s ease, transform 0.25s ease-out;
+  opacity: 0.15; filter: drop-shadow(0 0 34px var(--holo-cyan-glow));
+  transform: translate(-50%, -50%);   /* static, centered — a calm focal point */
+  transition: opacity 0.6s ease;
 }
 /* Pulse OPACITY (GPU-composited), not filter: animating drop-shadow repaints this large
    element behind the messages every frame — the main cause of choppy scroll while streaming. */
@@ -686,8 +670,9 @@ html[data-theme="ember"]    body { filter: hue-rotate(-156deg) saturate(1.2); }
 .osc-wave {
   filter: drop-shadow(0 0 4px var(--holo-cyan-glow));
   transform-box: fill-box; transform-origin: center;
-  animation: oscScroll 7s linear infinite;
 }
+/* The waveform is a static readout at idle; it only scrolls while the model is thinking. */
+.app-container.thinking .osc-wave { animation: oscScroll 7s linear infinite; }
 @keyframes oscScroll {
   from { transform: translateX(0) scaleY(var(--osc-amp)); }
   to   { transform: translateX(-50%) scaleY(var(--osc-amp)); }

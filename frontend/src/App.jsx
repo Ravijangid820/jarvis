@@ -257,23 +257,8 @@ function App() {
     return () => clearInterval(id)
   }, [booting])
 
-  // Pointer-reactive parallax/tilt (desktop only). Publishes cursor offset (-1..1)
-  // as --mx/--my CSS vars; the stylesheet maps them to subtle depth transforms.
-  useEffect(() => {
-    if (window.matchMedia("(hover: none)").matches) return
-    let raf = 0
-    const onMove = (e) => {
-      if (raf) return
-      raf = requestAnimationFrame(() => {
-        raf = 0
-        const root = document.documentElement
-        root.style.setProperty("--mx", ((e.clientX / window.innerWidth - 0.5) * 2).toFixed(3))
-        root.style.setProperty("--my", ((e.clientY / window.innerHeight - 0.5) * 2).toFixed(3))
-      })
-    }
-    window.addEventListener("pointermove", onMove, { passive: true })
-    return () => { window.removeEventListener("pointermove", onMove); if (raf) cancelAnimationFrame(raf) }
-  }, [])
+  // (Cursor parallax removed — the UI is intentionally static: calmer, prettier, and zero
+  //  per-pointer-move repaints. Depth now comes from static gradients + glows, not motion.)
 
   // Command palette: ⌘K / Ctrl+K toggles it; Escape closes.
   useEffect(() => {

@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-18 — Calmer, static UI (no cursor parallax / idle motion)
+
+- **Removed cursor parallax** — the arc reactor, particles, and messages no longer tilt to the
+  pointer (and the per-pointer-move handler is gone). Calmer, prettier, zero pointer-driven repaints.
+- **Idle decorative animations made static**: ambient reactor "breath", HUD corner-bracket pulse,
+  title holo-flicker, status-dot pulse, and the oscilloscope scroll. The **idle UI is now fully
+  static**; the brief feedback animations (typing dots, streaming scan, thinking pulses) remain but
+  only play *during* an active request.
+- Arc reactor is now a static, centered focal point (a touch more present). Depth comes from static
+  gradients + glows, not motion.
+
 ## 2026-06-18 — Smoother chat scroll (render + GPU-paint fixes)
 
 - **Streaming no longer re-parses every message each token.** Messages render through a `memo()`'d
