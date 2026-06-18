@@ -80,6 +80,12 @@ def run(cfg):
     key_path = Path(cfg["server"]["api_key_file"])
     if not key_path.is_absolute():
         key_path = HERE / key_path
+    # Warn if the key file is readable by other local users (POSIX; no-op on Windows ACLs).
+    try:
+        if key_path.stat().st_mode & 0o077:
+            log.warning("%s is group/other-readable — restrict its permissions", key_path)
+    except OSError:
+        pass
     headers = {"Authorization": "Bearer " + key_path.read_text().strip()}
     url = f"{base}/devices/commands?device={device}&wait={wait}"
 

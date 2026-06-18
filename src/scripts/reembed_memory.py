@@ -52,7 +52,7 @@ def main() -> None:
         print("Nothing to embed. Done.")
         return
 
-    model = SentenceTransformer(EMBED_MODEL_NAME)
+    model = SentenceTransformer(EMBED_MODEL_NAME, trust_remote_code=False)  # no model-repo code exec
     BATCH = 32
     for start in range(0, len(rows), BATCH):
         batch = rows[start:start + BATCH]

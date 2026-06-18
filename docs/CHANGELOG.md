@@ -4,6 +4,19 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-17 — Hardening round 3 + adversarial recheck (F8/F17 + breakout sweep)
+
+Independent verifier attacked the new auth/device/voice/migration code — **no critical/high** (no
+bypass, privesc, injection, or breakout). Acted on its findings + closed remaining supply-chain RCE:
+- **F8:** `trust_remote_code=False` on the embedding model (closes model-repo RCE) + `EMBED_MODEL_REVISION`
+  pin; Piper `PIPER_VERSION` pin + `PIPER_SHA256`/`VOICE_SHA256` verify hooks.
+- **F17:** voice/edge/volume agents warn if the key file is group/other-readable; `mint-key` coerces
+  an empty device arg to NULL.
+- **Race fix:** device-command claim is now a single atomic `UPDATE…RETURNING` (no double-delivery).
+- **llama-fast.service** hardened (`RestrictSUIDSGID`/`LockPersonality`/`ProtectKernelModules`/`UMask`).
+- **F22** accepted (CSP verified effective; HttpOnly-cookie migration intentionally skipped — adds CSRF
+  surface for negligible gain here). Tests still 42; see AUDIT.md Resolution table.
+
 ## 2026-06-17 — Hardening follow-up: non-root service (F3) + voice listener rewrite (F24)
 
 - **F3 (non-root):** added `systemd/jarvis-orchestrator.hardened.service` (`User=jarvis`,

@@ -424,17 +424,16 @@ _poll_sem = asyncio.Semaphore(16)
 
 
 def _claim_commands(device: str) -> List[Dict[str, Any]]:
-    """Atomically fetch + mark-delivered pending commands for one device (sync; runs in a thread)."""
+    """Atomically claim (mark delivered + return) pending commands for one device. A single
+    UPDATE…RETURNING — not SELECT-then-UPDATE — so two concurrent pollers can't double-deliver
+    the same command (the second writer finds nothing still 'pending')."""
     conn = get_db()
     try:
         rows = conn.execute(
-            "SELECT id, action, params FROM device_commands WHERE device_id = ? AND status = 'pending' ORDER BY id LIMIT 50",
+            "UPDATE device_commands SET status='delivered', delivered_at=datetime('now') "
+            "WHERE id IN (SELECT id FROM device_commands WHERE device_id = ? AND status='pending' "
+            "ORDER BY id LIMIT 50) RETURNING id, action, params",
             (device,)).fetchall()
-        if not rows:
-            return []
-        ids = [r["id"] for r in rows]
-        ph = ",".join("?" * len(ids))
-        conn.execute(f"UPDATE device_commands SET status='delivered', delivered_at=datetime('now') WHERE id IN ({ph})", ids)
         conn.commit()
         return [{"id": r["id"], "action": r["action"], "params": json.loads(r["params"] or "{}")} for r in rows]
     finally:

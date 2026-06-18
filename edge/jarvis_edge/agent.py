@@ -30,7 +30,11 @@ def _load_key(cfg):
     p = Path(cfg["server"].get("api_key_file", "config/edge.key"))
     if not p.is_absolute():
         p = EDGE_ROOT / p
-    return p.read_text().strip() if p.exists() else ""
+    if not p.exists():
+        return ""
+    if p.stat().st_mode & 0o077:
+        log.warning("%s is group/other-readable — run: chmod 600 %s", p, p)
+    return p.read_text().strip()
 
 
 def _build_heavy(det_cfg):

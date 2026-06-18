@@ -80,7 +80,7 @@ def mint_key(username, description="cli-minted", device_id=None):
         key_hash = hashlib.sha256(key.encode()).hexdigest()
         c.execute(
             "INSERT INTO api_keys (key_string, key_prefix, user_id, description, device_id) VALUES (?, ?, ?, ?, ?)",
-            (key_hash, key[:10], row["id"], description, device_id),
+            (key_hash, key[:10], row["id"], description, (device_id or None)),  # "" → NULL, so it can't match an empty ?device=
         )
     print(key)  # printed alone so it's easy to capture: KEY=$(... mint-key ...)
 

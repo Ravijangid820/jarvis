@@ -47,7 +47,11 @@ def init_embeddings():
         import chromadb
         from sentence_transformers import SentenceTransformer
         chroma_client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
-        _embed_model = SentenceTransformer(EMBED_MODEL_NAME)
+        # trust_remote_code=False: never execute code shipped in the model repo (supply-chain RCE
+        # guard). Pin EMBED_MODEL_REVISION=<commit> for a tamper-evident load (else uses the cache).
+        _embed_model = SentenceTransformer(
+            EMBED_MODEL_NAME, trust_remote_code=False,
+            revision=os.environ.get("EMBED_MODEL_REVISION") or None)
         # Cosine space with normalized vectors (the "jarvis_memory_cos" collection).
         memory_collection = chroma_client.get_or_create_collection(
             name="jarvis_memory_cos", metadata={"hnsw:space": "cosine"}

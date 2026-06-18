@@ -21,14 +21,20 @@ Restart=on-failure
 RestartSec=10
 SyslogIdentifier=llama-fast
 # Security hardening
-# NOTE: ProtectHome is not set because the llama-server binary lives in /root/llama.cpp
+# NOTE: ProtectHome is not set because the llama-server binary lives in /root/llama.cpp.
+# It serves only loopback (127.0.0.1:8081) and loads a local GGUF — lower risk than the
+# orchestrator, but still root; moving the build out of /root to run non-root is a follow-up.
 NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=true
 ProtectSystem=full
 ProtectKernelTunables=true
+ProtectKernelModules=true
 ProtectControlGroups=true
+RestrictSUIDSGID=true
 RestrictAddressFamilies=AF_INET AF_INET6
+LockPersonality=true
+UMask=0077
 # Resource limits
 LimitNOFILE=65536
 

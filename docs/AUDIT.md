@@ -542,7 +542,7 @@ agent (`clients/volume-agent/`), install/supply-chain scripts, the frontend, and
 | F5 no CSP | ✅ Fixed | Strict CSP + `Referrer-Policy: no-referrer` on every response. |
 | F6 DB world-readable | ✅ Fixed | `init_db()` chmods DB+WAL/SHM to `0600`; `UMask=0077` keeps new files owner-only. |
 | F7 unbounded event data / no retention | ✅ Fixed | `data` capped at 4 KB; `vision_events` capped to last 5000; delivered `device_commands` purged after 1 day. |
-| F8 supply-chain downloads | ◑ Partial | GGUF: https check + optional `LLM_GGUF_SHA256` verify; `LLAMA_CPP_REF` pin override + commit logged; agent deps upper-bounded. Embedding/Piper revision-pinning + mandatory checksums still TODO. |
+| F8 supply-chain downloads | ✅ Fixed (mechanisms in place; exact pins/hashes are operator-supplied) | `trust_remote_code=False` on the embedding model (closes a model-repo RCE vector) + `EMBED_MODEL_REVISION` pin; Piper `PIPER_VERSION` pin + `PIPER_SHA256`/`VOICE_SHA256` verify; GGUF https-check + `LLM_GGUF_SHA256`; `LLAMA_CPP_REF` pin + commit logged; agent deps upper-bounded. |
 | F9 self-scoped prompt injection | — Accepted | Self-only; delimited framing kept. |
 | F10 long-lived credentials | ◑ Partial | Added `/auth/logout-all` (revoke-all). Token lifetime (30 d) / rotation / key expiry unchanged. |
 | F11 0-row mutations return ok | ✅ Fixed | Rename → 403 on not-yours; knowledge update/delete → 404 on missing. |
@@ -551,14 +551,30 @@ agent (`clients/volume-agent/`), install/supply-chain scripts, the frontend, and
 | F14 no length bounds on auth | ✅ Fixed | username ≤ 64, password ≤ 256. |
 | F15 free-string role | ✅ Fixed | `role` constrained to `user`/`admin`. |
 | F16 agents plaintext HTTP | — Accepted | Tied to TLS / trusted-LAN decision. |
-| F17 key files not 0600 | ◯ Deferred | Operator/setup step; low. |
+| F17 key files not 0600 | ✅ Fixed | The voice/edge/volume agents warn at startup if the key file is group/other-readable; `mint-key` coerces an empty device arg to NULL. |
 | F18 volume agent trusts server | ✅ Fixed | Client-side validate + clamp (0–100), unknown/bad commands ignored. |
 | F19 agent deps unpinned | ◑ Partial | Upper bounds added; hash-pinned lockfile still TODO. |
 | F20 PBKDF2 100k | ✅ Fixed | New hashes 600k (`pbkdf2_sha256$…`); legacy `salt:hex` still verifies. |
 | F21 `_safe_exec` over-broad | ✅ Fixed | No longer swallows `no such …`. |
-| F22 token in localStorage | ◯ Deferred | CSP (F5) added as mitigation; HttpOnly-cookie migration not done. |
+| F22 token in localStorage | — Accepted (mitigated) | CSP verified effective (the served bundle has no inline scripts, so `script-src 'self'` blocks injected JS). An HttpOnly-cookie migration is intentionally skipped — it trades XSS-token-theft for CSRF surface, a net-neutral for this single-operator, firewalled deployment. |
 | F23 rate-limit dicts never evict | ✅ Fixed | Empty buckets swept; IP-keyed growth removed by F2. |
 | F24 voice listener misconfigured | ✅ Fixed (needs on-box mic tuning) | Rewritten: `voice_bridge.py` runs `whisper-stream`, gates on the wake word, and POSTs JSON via urllib — no shell, and it actually transcribes (the old `-cmd` path did neither). `run_listener.sh` now just launches the bridge. |
+
+### Adversarial recheck of the fixes (2026-06-17)
+
+An independent verifier attacked the new auth/device/voice/migration code and found **no critical
+or high** issue — no auth bypass, privilege escalation, injection, or breakout. Confirmed solid:
+device↔key binding (web sessions and wrong-device keys are 403; `/events` provenance can't be
+spoofed), PBKDF2 verify (fail-closed, constant-time, no exception-as-true), CSP (effective against
+the real inline-script-free bundle), the voice bridge (argv list, transcript can't be executed),
+and the hardened unit/script (strict improvement over root). Acted on its low-severity notes:
+
+- **Fixed:** the command claim is now a single atomic `UPDATE…RETURNING` (was SELECT-then-UPDATE →
+  could double-deliver to two pollers); empty-string `device_id` coerced to NULL.
+- **Hardened:** `llama-fast.service` gained `RestrictSUIDSGID`/`LockPersonality`/`ProtectKernelModules`/`UMask`.
+- **Accepted (documented):** volume `device` target is all-or-nothing (bounded — clamped enum, no
+  injection); the 16-slot long-poll semaphore is an authenticated-only nuisance; the hardened
+  unit's `ReadWritePaths=/srv/jarvis` is broad because `uv run` needs the tree (follow-up to narrow).
 
 _Details of each finding below are unchanged from the original review._
 
