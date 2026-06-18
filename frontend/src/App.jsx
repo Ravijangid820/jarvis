@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useId, memo } from 'react'
+import { useState, useEffect, useRef, useId, useMemo, memo } from 'react'
 import './index.css'
 import Admin from './Admin'
 
@@ -92,6 +92,24 @@ function ArcReactor({ size = 120, className = "" }) {
       <circle cx="200" cy="200" r="6" fill="#ffffff" />
     </svg>
   )
+}
+
+// JARVIS-style greeting: time-aware, addresses the user by name (or "sir", à la JARVIS),
+// with a rotating tagline. Shown (typed out) on the welcome screen.
+function jarvisGreeting(name) {
+  const h = new Date().getHours()
+  const part = h < 12 ? "morning" : h < 18 ? "afternoon" : "evening"
+  const who = name ? name.charAt(0).toUpperCase() + name.slice(1) : "sir"
+  const taglines = [
+    "At your service.",
+    "All systems operational — local processing, private server.",
+    "How may I help you today?",
+    "A pleasure, as always.",
+    "Welcome home.",
+    "Ready when you are.",
+    "Standing by, as ever.",
+  ]
+  return `Good ${part}, ${who}. ${taglines[Math.floor(Math.random() * taglines.length)]}`
 }
 
 // --- Message rendering (module scope: stable identity so memo() works) ---
@@ -213,6 +231,9 @@ function App() {
   const [currentTitle, setCurrentTitle] = useState("New Session")
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState("")
+  const [greetTyped, setGreetTyped] = useState("")
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- recompute on login so the name appears
+  const greeting = useMemo(() => jarvisGreeting((localStorage.getItem("jarvis_user") || "").trim()), [token])
   const [processing, setProcessing] = useState(false)
   const [speed, setSpeed] = useState("")
 
@@ -387,6 +408,17 @@ function App() {
     localStorage.setItem("jarvis_theme", theme)
   }, [theme])
   useEffect(() => { localStorage.setItem("jarvis_sound", sound ? "1" : "0") }, [sound])
+  // Type out the JARVIS greeting on the welcome screen (empty chat), one character at a time.
+  useEffect(() => {
+    if (messages.length !== 0) return
+    setGreetTyped("")
+    let i = 0
+    const id = setInterval(() => {
+      setGreetTyped(greeting.slice(0, ++i))
+      if (i >= greeting.length) clearInterval(id)
+    }, 42)
+    return () => clearInterval(id)
+  }, [greeting, messages.length])
   // Reduce-effects mode: drop the heavy ambient GPU work (floating particles + the frosted-glass
   // backdrop blur, which re-blurs every frame as particles drift) for smooth scrolling on lighter
   // clients. Applied via a <html class="perf"> hook so it's pure CSS.
@@ -430,6 +462,7 @@ function App() {
       localStorage.setItem("jarvis_role", data.role)
       setToken(data.token)
       setRole(data.role)
+      localStorage.setItem("jarvis_user", username.trim())
       setUsername("")
       setPassword("")
     } catch (e) {
@@ -449,6 +482,7 @@ function App() {
     }
     localStorage.removeItem("jarvis_token")
     localStorage.removeItem("jarvis_role")
+    localStorage.removeItem("jarvis_user")
     setToken(null)
     setSessions([])
     setMessages([])
@@ -1048,7 +1082,8 @@ function App() {
                   <ArcReactor size={128} />
                 </div>
                 <h1 className="welcome-title">J.A.R.V.I.S</h1>
-                <p className="welcome-sub">Just A Rather Very Intelligent System<br/>All systems operational. Private server. Local processing.</p>
+                <p className="welcome-greeting">{greetTyped}{greetTyped.length < greeting.length && <span className="greet-cursor" />}</p>
+                <p className="welcome-sub">Just A Rather Very Intelligent System · Local processing · Private server</p>
                 <div className="welcome-grid">
                   <button className="sug-btn" onClick={() => send("What can you help me with?")}><span className="sug-icon">[SYS]</span> What can you help me with?</button>
                   <button className="sug-btn" onClick={() => send("Tell me a fun fact about technology")}><span className="sug-icon">[DATA]</span> Fun fact about technology</button>

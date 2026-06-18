@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-18 — JARVIS-style greeting on the welcome screen
+
+- The empty-chat welcome screen now greets the user in JARVIS's voice, **typed out** character by
+  character: time-aware ("Good morning/afternoon/evening"), addressed to the logged-in user **by
+  name** (or **"sir"**, à la JARVIS, when no name), with a rotating tagline ("At your service.",
+  "Welcome home.", "Ready when you are.", …). The username is persisted at login (`jarvis_user`).
+  Grounded in the films' JARVIS dialogue. Next: a **spoken** greeting via Piper TTS and a
+  **voice-triggered** "when it hears you" greeting through the listener.
+
 ## 2026-06-18 — Realistic Mark I arc reactor (replaces the plain concentric circles)
 
 - New reusable **`<ArcReactor>`** modelled on the iconic **Mark I "PROOF THAT TONY STARK HAS A
