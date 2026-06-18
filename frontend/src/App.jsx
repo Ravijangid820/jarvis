@@ -1,8 +1,59 @@
-import { useState, useEffect, useRef, memo } from 'react'
+import { useState, useEffect, useRef, useId, memo } from 'react'
 import './index.css'
 import Admin from './Admin'
 
 const API = ""
+
+// Realistic arc reactor (static): a metallic bezel, the signature ring of wound copper coils,
+// an inner housing, the iconic triangle, and a bright layered core. One component, reused at every
+// size (sidebar logo, login, welcome, chat backdrop) — useId() keeps each instance's gradients unique.
+function ArcReactor({ size = 120, className = "" }) {
+  const id = useId()
+  const core = `${id}-c`, bezel = `${id}-b`, coil = `${id}-w`
+  return (
+    <svg className={className} width={size} height={size} viewBox="0 0 120 120" aria-hidden="true">
+      <defs>
+        <radialGradient id={core}>
+          <stop offset="0%" stopColor="#ffffff" stopOpacity="1" />
+          <stop offset="28%" stopColor="#dff6ff" stopOpacity="0.95" />
+          <stop offset="62%" stopColor="#67C7EB" stopOpacity="0.6" />
+          <stop offset="100%" stopColor="#67C7EB" stopOpacity="0" />
+        </radialGradient>
+        <linearGradient id={bezel} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#cfeeff" />
+          <stop offset="48%" stopColor="#67C7EB" />
+          <stop offset="100%" stopColor="#27617c" />
+        </linearGradient>
+        <linearGradient id={coil} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="rgba(184,238,255,0.34)" />
+          <stop offset="100%" stopColor="rgba(103,199,235,0.03)" />
+        </linearGradient>
+      </defs>
+      {/* soft halo */}
+      <circle cx="60" cy="60" r="59" fill={`url(#${core})`} opacity="0.14" />
+      {/* outer metallic bezel */}
+      <circle cx="60" cy="60" r="55" fill="none" stroke={`url(#${bezel})`} strokeWidth="3.2" />
+      <circle cx="60" cy="60" r="49.5" fill="none" stroke="#0c2330" strokeWidth="2" opacity="0.85" />
+      <circle cx="60" cy="60" r="47.5" fill="none" stroke="#67C7EB" strokeWidth="0.6" opacity="0.35" />
+      {/* wound copper-coil ring — 10 segments */}
+      {Array.from({ length: 10 }).map((_, i) => (
+        <g key={i} transform={`rotate(${i * 36} 60 60)`}>
+          <path d="M52 14 L68 14 L64 30 L56 30 Z" fill={`url(#${coil})`} stroke={`url(#${bezel})`} strokeWidth="1.3" strokeLinejoin="round" />
+          <line x1="53.4" y1="19" x2="66.6" y2="19" stroke="#bfefff" strokeWidth="0.7" opacity="0.75" />
+          <line x1="54" y1="23.5" x2="66" y2="23.5" stroke="#bfefff" strokeWidth="0.7" opacity="0.68" />
+          <line x1="54.6" y1="28" x2="65.4" y2="28" stroke="#bfefff" strokeWidth="0.7" opacity="0.6" />
+        </g>
+      ))}
+      {/* inner housing */}
+      <circle cx="60" cy="60" r="29" fill="#06141c" stroke={`url(#${bezel})`} strokeWidth="2.4" />
+      <circle cx="60" cy="60" r="24.5" fill="none" stroke="#67C7EB" strokeWidth="0.6" opacity="0.4" />
+      {/* core glow + iconic triangle + center spark */}
+      <circle cx="60" cy="60" r="22" fill={`url(#${core})`} />
+      <path d="M60 47 L72 67 L48 67 Z" fill="rgba(214,244,255,0.06)" stroke="#dff6ff" strokeWidth="1.4" strokeLinejoin="round" opacity="0.9" />
+      <circle cx="60" cy="60" r="3.4" fill="#ffffff" />
+    </svg>
+  )
+}
 
 // --- Message rendering (module scope: stable identity so memo() works) ---
 function copyText(text, e) {
@@ -640,77 +691,7 @@ function App() {
   // the iconic center triangle, and a hot gradient core.
   const renderChatReactor = () => (
     <div className="chat-reactor-bg" aria-hidden="true">
-      <svg viewBox="0 0 400 400" width="600" height="600">
-        <defs>
-          <radialGradient id="reactorCore">
-            <stop offset="0%" stopColor="#ffffff" stopOpacity="1" />
-            <stop offset="22%" stopColor="#dff6ff" stopOpacity="0.95" />
-            <stop offset="55%" stopColor="#67C7EB" stopOpacity="0.7" />
-            <stop offset="100%" stopColor="#67C7EB" stopOpacity="0" />
-          </radialGradient>
-          <radialGradient id="reactorHalo">
-            <stop offset="0%" stopColor="#67C7EB" stopOpacity="0.22" />
-            <stop offset="100%" stopColor="#67C7EB" stopOpacity="0" />
-          </radialGradient>
-        </defs>
-        <circle cx="200" cy="200" r="155" fill="url(#reactorHalo)" />
-
-        {/* metallic bezel: double ring + tick marks + bolts */}
-        <circle cx="200" cy="200" r="194" fill="none" stroke="#67C7EB" strokeWidth="2" opacity="0.45" />
-        <circle cx="200" cy="200" r="186" fill="none" stroke="#67C7EB" strokeWidth="0.6" opacity="0.3" />
-        <g stroke="#67C7EB" opacity="0.5">
-          {Array.from({ length: 72 }).map((_, i) => (
-            <line key={i} x1="200" y1="14" x2="200" y2={i % 6 === 0 ? "26" : "20"}
-              strokeWidth={i % 6 === 0 ? 1.4 : 0.5} transform={`rotate(${i * 5} 200 200)`} />
-          ))}
-        </g>
-        <g fill="#67C7EB" opacity="0.55">
-          {Array.from({ length: 12 }).map((_, i) => (
-            <circle key={i} cx="200" cy="22" r="2.6" transform={`rotate(${i * 30} 200 200)`} />
-          ))}
-        </g>
-
-        {/* rotating dashed scan ring */}
-        <circle cx="200" cy="200" r="162" fill="none" stroke="#67C7EB" strokeWidth="1.5" strokeDasharray="2 13" opacity="0.55">
-          <animateTransform attributeName="transform" type="rotate" from="0 200 200" to="360 200 200" dur="60s" repeatCount="indefinite" />
-        </circle>
-
-        {/* wound copper-coil ring (the signature reactor look) */}
-        <g opacity="0.75">
-          {Array.from({ length: 10 }).map((_, i) => (
-            <g key={i} transform={`rotate(${i * 36} 200 200)`}>
-              <path d="M182 78 L218 78 L212 124 L188 124 Z" fill="rgba(103,199,235,0.07)" stroke="#67C7EB" strokeWidth="1.6" strokeLinejoin="round" />
-              <line x1="185.5" y1="90" x2="214.5" y2="90" stroke="#67C7EB" strokeWidth="0.7" opacity="0.7" />
-              <line x1="186.5" y1="101" x2="213.5" y2="101" stroke="#67C7EB" strokeWidth="0.7" opacity="0.7" />
-              <line x1="187.5" y1="112" x2="212.5" y2="112" stroke="#67C7EB" strokeWidth="0.7" opacity="0.7" />
-            </g>
-          ))}
-          <animateTransform attributeName="transform" type="rotate" from="0 200 200" to="360 200 200" dur="140s" repeatCount="indefinite" />
-        </g>
-
-        {/* radial spokes between coils */}
-        <g stroke="#67C7EB" strokeWidth="0.8" opacity="0.4">
-          {Array.from({ length: 10 }).map((_, i) => (
-            <line key={i} x1="200" y1="76" x2="200" y2="128" transform={`rotate(${i * 36 + 18} 200 200)`} />
-          ))}
-        </g>
-
-        {/* inner housing rings */}
-        <circle cx="200" cy="200" r="72" fill="none" stroke="#67C7EB" strokeWidth="2.5" opacity="0.85" />
-        <circle cx="200" cy="200" r="64" fill="none" stroke="#67C7EB" strokeWidth="0.6" opacity="0.4" />
-        <circle cx="200" cy="200" r="52" fill="none" stroke="#67C7EB" strokeWidth="1" strokeDasharray="4 7" opacity="0.5">
-          <animateTransform attributeName="transform" type="rotate" from="360 200 200" to="0 200 200" dur="26s" repeatCount="indefinite" />
-        </circle>
-
-        {/* iconic center triangle */}
-        <path d="M200 168 L227 214 L173 214 Z" fill="none" stroke="#9fe4ff" strokeWidth="1.6" strokeLinejoin="round" opacity="0.7" />
-
-        {/* hot core */}
-        <circle cx="200" cy="200" r="50" fill="url(#reactorCore)">
-          <animate attributeName="opacity" values="0.75;1;0.75" dur="3s" repeatCount="indefinite" />
-        </circle>
-        <circle cx="200" cy="200" r="13" fill="#ffffff" opacity="0.97" />
-      </svg>
+      <ArcReactor size={560} />
     </div>
   )
 
@@ -739,27 +720,7 @@ function App() {
     return (
       <div className="boot-overlay" onClick={skipBoot} style={{ cursor: 'pointer' }} title="Click to skip">
         <div className="boot-grid" />
-        <svg className="boot-reactor" width="160" height="160" viewBox="0 0 160 160">
-          <circle cx="80" cy="80" r="76" fill="none" stroke="#67C7EB" strokeWidth="1" opacity="0.2" />
-          <circle cx="80" cy="80" r="64" fill="none" stroke="#67C7EB" strokeWidth="1.5" strokeDasharray="14 8" opacity="0.45">
-            <animateTransform attributeName="transform" type="rotate" from="0 80 80" to="360 80 80" dur="6s" repeatCount="indefinite" />
-          </circle>
-          <circle cx="80" cy="80" r="48" fill="none" stroke="#67C7EB" strokeWidth="1" strokeDasharray="4 6" opacity="0.5">
-            <animateTransform attributeName="transform" type="rotate" from="360 80 80" to="0 80 80" dur="4s" repeatCount="indefinite" />
-          </circle>
-          <circle cx="80" cy="80" r="30" fill="none" stroke="#67C7EB" strokeWidth="2" opacity="0.7" />
-          <circle cx="80" cy="80" r="18" fill="url(#bootCore)">
-            <animate attributeName="opacity" values="0.5;1;0.5" dur="1.4s" repeatCount="indefinite" />
-          </circle>
-          <circle cx="80" cy="80" r="7" fill="#fff" opacity="0.95" />
-          <defs>
-            <radialGradient id="bootCore">
-              <stop offset="0%" stopColor="#cdeeff" stopOpacity="1" />
-              <stop offset="60%" stopColor="#67C7EB" stopOpacity="0.5" />
-              <stop offset="100%" stopColor="#67C7EB" stopOpacity="0" />
-            </radialGradient>
-          </defs>
-        </svg>
+        <ArcReactor size={150} className="boot-reactor" />
         <div className="boot-title">J.A.R.V.I.S</div>
         <div className="boot-log">
           <span className="boot-line" style={{animationDelay: '0.2s'}}><span>▸ Neural core</span><span className="bl-ok">ONLINE</span></span>
@@ -781,15 +742,7 @@ function App() {
     return (
       <div className="login-overlay" style={{display: 'flex'}}>
         <div className="login-box">
-          <svg className="login-reactor" width="56" height="56" viewBox="0 0 56 56">
-            <circle cx="28" cy="28" r="26" fill="none" stroke="#67C7EB" strokeWidth="1.5" opacity="0.4" />
-            <circle cx="28" cy="28" r="20" fill="none" stroke="#67C7EB" strokeWidth="1" strokeDasharray="6 4" opacity="0.5">
-              <animateTransform attributeName="transform" type="rotate" from="0 28 28" to="360 28 28" dur="12s" repeatCount="indefinite" />
-            </circle>
-            <circle cx="28" cy="28" r="14" fill="none" stroke="#67C7EB" strokeWidth="1.5" opacity="0.7" />
-            <circle cx="28" cy="28" r="7" fill="#67C7EB" opacity="0.3" />
-            <circle cx="28" cy="28" r="3" fill="#67C7EB" opacity="0.8" />
-          </svg>
+          <ArcReactor size={64} className="login-reactor" />
           <div className="login-label">System Authorization</div>
           <input className="login-input" value={username} onChange={e=>setUsername(e.target.value)} placeholder="Identifier" />
           <input className="login-input" type="password" value={password} onChange={e=>setPassword(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')doLogin()}} placeholder="Access Code" />
@@ -851,15 +804,7 @@ function App() {
       <aside className={`sidebar ${sidebarOpen ? 'open' : ''} ${sidebarCollapsed ? 'collapsed' : ''}`}>
         <div className="sidebar-inner">
           <div className="sidebar-header">
-            <svg className="reactor-logo" width="38" height="38" viewBox="0 0 38 38">
-              <circle cx="19" cy="19" r="17" fill="none" stroke="#67C7EB" strokeWidth="1" opacity="0.35" />
-              <circle cx="19" cy="19" r="13" fill="none" stroke="#67C7EB" strokeWidth="0.8" strokeDasharray="4 3" opacity="0.45">
-                <animateTransform attributeName="transform" type="rotate" from="0 19 19" to="-360 19 19" dur="10s" repeatCount="indefinite" />
-              </circle>
-              <circle cx="19" cy="19" r="9" fill="none" stroke="#67C7EB" strokeWidth="1" opacity="0.6" />
-              <circle cx="19" cy="19" r="4" fill="#67C7EB" opacity="0.4" />
-              <circle cx="19" cy="19" r="2" fill="#67C7EB" opacity="0.9" />
-            </svg>
+            <ArcReactor size={40} className="reactor-logo" />
             <div>
               <div className="sidebar-title">J.A.R.V.I.S</div>
               <div className="sidebar-subtitle">Stark Industries</div>
@@ -1061,32 +1006,7 @@ function App() {
             {messages.length === 0 && (
               <div className="welcome-screen">
                 <div className="welcome-reactor">
-                  <svg width="110" height="110" viewBox="0 0 110 110">
-                    <circle cx="55" cy="55" r="52" fill="none" stroke="#67C7EB" strokeWidth="1" opacity="0.25" />
-                    <circle cx="55" cy="55" r="46" fill="none" stroke="#67C7EB" strokeWidth="1.5" strokeDasharray="12 6" opacity="0.4">
-                      <animateTransform attributeName="transform" type="rotate" from="0 55 55" to="360 55 55" dur="20s" repeatCount="indefinite" />
-                    </circle>
-                    <circle cx="55" cy="55" r="38" fill="none" stroke="#67C7EB" strokeWidth="1" opacity="0.3" />
-                    <circle cx="55" cy="55" r="30" fill="none" stroke="#67C7EB" strokeWidth="1.5" strokeDasharray="8 5" opacity="0.5">
-                      <animateTransform attributeName="transform" type="rotate" from="360 55 55" to="0 55 55" dur="14s" repeatCount="indefinite" />
-                    </circle>
-                    <circle cx="55" cy="55" r="22" fill="none" stroke="#67C7EB" strokeWidth="1.5" opacity="0.6" />
-                    <circle cx="55" cy="55" r="14" fill="url(#coreGrad)" opacity="0.7">
-                      <animate attributeName="opacity" values="0.5;0.8;0.5" dur="3s" repeatCount="indefinite" />
-                    </circle>
-                    <circle cx="55" cy="55" r="6" fill="#67C7EB" opacity="0.9" />
-                    <defs>
-                      <radialGradient id="coreGrad">
-                        <stop offset="0%" stopColor="#67C7EB" stopOpacity="0.8" />
-                        <stop offset="70%" stopColor="#67C7EB" stopOpacity="0.2" />
-                        <stop offset="100%" stopColor="#67C7EB" stopOpacity="0" />
-                      </radialGradient>
-                    </defs>
-                    <line x1="55" y1="3" x2="55" y2="15" stroke="#67C7EB" strokeWidth="0.5" opacity="0.3" />
-                    <line x1="55" y1="95" x2="55" y2="107" stroke="#67C7EB" strokeWidth="0.5" opacity="0.3" />
-                    <line x1="3" y1="55" x2="15" y2="55" stroke="#67C7EB" strokeWidth="0.5" opacity="0.3" />
-                    <line x1="95" y1="55" x2="107" y2="55" stroke="#67C7EB" strokeWidth="0.5" opacity="0.3" />
-                  </svg>
+                  <ArcReactor size={128} />
                 </div>
                 <h1 className="welcome-title">J.A.R.V.I.S</h1>
                 <p className="welcome-sub">Just A Rather Very Intelligent System<br/>All systems operational. Private server. Local processing.</p>

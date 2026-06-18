@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-18 — Realistic arc reactor (replaces the plain concentric circles)
+
+- New reusable **`<ArcReactor>`**: a metallic bezel, the signature ring of **10 wound copper
+  coils**, an inner housing, the iconic triangle, and a bright layered core glow — **static**
+  (no spinning), with per-instance gradients via `useId()`. Replaces the radar-like
+  concentric-circle placeholders in the sidebar logo, login, welcome screen, boot overlay, and the
+  chat backdrop. (Bundle ~6 KB smaller from de-duplicating the SVG markup.)
+
 ## 2026-06-18 — Calmer, static UI (no cursor parallax / idle motion)
 
 - **Removed cursor parallax** — the arc reactor, particles, and messages no longer tilt to the
