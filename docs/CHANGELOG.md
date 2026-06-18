@@ -4,6 +4,18 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-18 — Smoother chat scroll (render + GPU-paint fixes)
+
+- **Streaming no longer re-parses every message each token.** Messages render through a `memo()`'d
+  `<MessageItem>`, so a token re-renders only the last message (was re-parsing the whole list).
+- **Removed the per-frame GPU work behind the scroller.** The scanline overlay and the ambient
+  particles are now **static** — they were continuously changing the backdrop and forcing the
+  frosted-glass panels to re-blur every frame (the "laggy even when idle" cause). Glass + reactor
+  kept; the panels now blur once and cache.
+- Auto-scroll coalesced into one `requestAnimationFrame`; `overflow-anchor: none`.
+- New **"Reduce effects"** toggle (Theme panel / ⌘K, persisted) + a `prefers-reduced-motion`
+  fallback that drops particles + glass blur entirely for the lightest mode.
+
 ## 2026-06-18 — Project documentation: CONTRIBUTING, SECURITY, templates; README polish
 
 - Added the standard OSS document set: **CONTRIBUTING.md** (dev setup, tests/lint, conventions, PR
