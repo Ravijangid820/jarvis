@@ -6,7 +6,7 @@
 # The venv is created with --system-site-packages so the apt-installed cv2/picamera2 are visible.
 
 # Bounded ranges (avoid silently pulling a future major). For a tamper-evident install,
-# compile these to a hash-pinned lockfile and use `pip install --require-hashes`.
+# compile these to a hash-pinned lockfile and use `uv pip install --require-hashes`.
 numpy<2
 requests>=2.31,<3
 

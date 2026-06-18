@@ -59,8 +59,8 @@ events locally without sending.
 
 ```bash
 # install mediapipe (pose/gestures) into the venv first if you want to bench them:
-#   .venv/bin/pip install mediapipe onnxruntime
-.venv/bin/python -m jarvis_edge.bench --frames 60
+#   uv pip install --python .venv/bin/python mediapipe onnxruntime
+cd edge && uv run --no-project python -m jarvis_edge.bench --frames 60
 #   motion   :  28.0 FPS  (  35.7 ms/frame)
 #   faces    :   6.5 FPS  ( 153.0 ms/frame)
 #   pose     :   2.3 FPS  ( 435.0 ms/frame)   ← decide if this is usable for you
@@ -72,7 +72,7 @@ Use the numbers to set each detector's `interval_s` (and whether to enable it) i
 ## Setup (on the Pi)
 
 ```bash
-bash edge/setup.sh          # 64-bit check, apt deps, venv, pip install, config
+bash edge/setup.sh          # 64-bit check, apt deps, uv venv + uv pip install, config
 # then on the SERVER, mint a key for this device and copy it to the Pi:
 #   uv run python src/scripts/manage.py mint-key <user> pi-vision <device_id>  →  edge/config/edge.key
 #   (the last arg binds the key to that device — it may then only post events as that device)
@@ -89,22 +89,23 @@ isn't present. Great for developing the detectors before you have the Pi. (Windo
 # 1. Get just the edge code (or clone the whole repo — it's small; models are gitignored):
 git clone --filter=blob:none --sparse <repo> jarvis && cd jarvis && git sparse-checkout set edge
 
-# 2. A Python env + desktop deps (motion needs only opencv-python):
-python -m venv .venv && . .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -r edge/requirements-desktop.txt           # add mediapipe/onnxruntime for pose/faces
+# 2. A Python env + desktop deps via uv (motion needs only opencv-python):
+cd edge
+uv venv
+uv pip install -r requirements-desktop.txt             # add mediapipe/onnxruntime for pose/faces
 
-# 3. Config for the laptop webcam:
-cp edge/config.example.json edge/config/config.json
+# 3. Config for the laptop webcam (you're now in edge/):
+cp config.example.json config/config.json
 #    set  camera.backend = "opencv"  (or leave "auto"),  device = 0  (default webcam),
 #         device_id = "laptop-cam",  server.url = http://<server-ip>:5000
 
-# 4. Test the camera + detectors with NO server first:
-python -m jarvis_edge.bench --frames 60                 # per-detector FPS on your webcam
-python -m jarvis_edge.agent --dry-run                   # events logged, not sent
+# 4. Test the camera + detectors with NO server first (--no-project uses edge/.venv, not the server's):
+uv run --no-project python -m jarvis_edge.bench --frames 60   # per-detector FPS on your webcam
+uv run --no-project python -m jarvis_edge.agent --dry-run     # events logged, not sent
 
-# 5. Go live: on the SERVER mint a device-bound key, save it, then run for real:
-#    uv run python src/scripts/manage.py mint-key <user> laptop-cam laptop-cam  →  edge/config/edge.key
-python -m jarvis_edge.agent                             # events POST to /events → see them in /admin
+# 5. Go live: on the SERVER mint a device-bound key, save it to edge/config/edge.key, then:
+#    uv run python src/scripts/manage.py mint-key <user> laptop-cam laptop-cam
+uv run --no-project python -m jarvis_edge.agent               # events POST to /events → see them in /admin
 ```
 
 ## Layout

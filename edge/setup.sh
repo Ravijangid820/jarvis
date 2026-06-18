@@ -17,10 +17,10 @@ cyan "System packages (OpenCV + picamera2 via apt — lighter than building pip 
 sudo apt-get update
 sudo apt-get install -y python3-opencv python3-picamera2 libatlas-base-dev python3-venv
 
-cyan "Python venv (--system-site-packages so apt's cv2/picamera2 are visible)"
-python3 -m venv --system-site-packages "$EDGE/.venv"
-"$EDGE/.venv/bin/pip" install --upgrade pip
-"$EDGE/.venv/bin/pip" install -r "$EDGE/requirements.txt"
+cyan "Python env via uv (--system-site-packages so apt's cv2/picamera2 are visible)"
+command -v uv >/dev/null || { echo "  uv required — install it: curl -LsSf https://astral.sh/uv/install.sh | sh"; exit 1; }
+uv venv --system-site-packages "$EDGE/.venv"
+uv pip install --python "$EDGE/.venv/bin/python" -r "$EDGE/requirements.txt"
 
 cyan "Config"
 mkdir -p "$EDGE/config"
@@ -33,6 +33,6 @@ Setup done. Next:
        uv run python src/scripts/manage.py mint-key <user> pi-vision
      and save the printed key to:  $EDGE/config/edge.key
   2. Review $EDGE/config/config.json (server.url, camera, which detectors are enabled).
-  3. Try it:  cd "$EDGE" && .venv/bin/python -m jarvis_edge.agent --dry-run
+  3. Try it:  cd "$EDGE" && uv run --no-project python -m jarvis_edge.agent --dry-run
      (drop --dry-run once the server /events endpoint exists and the key is in place)
 EOF
