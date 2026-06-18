@@ -41,8 +41,11 @@ else
   echo "  already in place or no /root cache"
 fi
 
-say "4/6  chown the tree to $USER_NAME"
-chown -R "$USER_NAME:$USER_NAME" "$REPO"
+say "4/6  ownership: writable data dirs → $USER_NAME, source + .git stay root (read-only to the service)"
+chown -R root:root "$REPO"
+for d in .venv .cache memory logs config; do
+  [ -e "$REPO/$d" ] && chown -R "$USER_NAME:$USER_NAME" "$REPO/$d"
+done
 
 say "5/6  install the hardened unit"
 cp "$REPO/systemd/jarvis-orchestrator.hardened.service" /etc/systemd/system/jarvis-orchestrator.service

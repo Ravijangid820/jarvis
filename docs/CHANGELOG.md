@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-18 — Least-privilege follow-ups: narrowed writable scope + non-root llama-fast
+
+- **Orchestrator writable scope narrowed:** the hardened unit's `ReadWritePaths` is now just
+  `memory`/`logs`/`.cache`/`.venv` (was the whole tree). `harden_service.sh` keeps source + `.git`
+  root-owned (read-only to the service — an RCE can't rewrite its own code/history); `uv run
+  --no-sync` so boot never writes the venv/lock. `config/` is readable but not writable.
+- **`llama-fast` is now non-root:** new `src/scripts/harden_llama.sh` copies the build out of
+  `/root` to `/opt/llama.cpp` (with `LD_LIBRARY_PATH`, since its RUNPATH was absolute) and installs
+  a non-root unit (`User=jarvis`, `ProtectSystem=strict`, no writable paths).
+- Both applied live and verified (health + a real inference round-trip). No remaining root service.
+
 ## 2026-06-17 — Hardening round 3 + adversarial recheck (F8/F17 + breakout sweep)
 
 Independent verifier attacked the new auth/device/voice/migration code — **no critical/high** (no

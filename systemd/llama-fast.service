@@ -1,5 +1,5 @@
 [Unit]
-Description=Jarvis Fast Brain - Qwen3.5-2B LLM Server
+Description=Jarvis Fast Brain - Qwen3.5-2B LLM Server (non-root)
 After=network.target
 Documentation=https://github.com/ggml-org/llama.cpp
 StartLimitIntervalSec=120
@@ -7,7 +7,14 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-ExecStart=/root/llama.cpp/build/bin/llama-server \
+# Runs as the unprivileged `jarvis` user. The llama.cpp build must live OUTSIDE /root (which is
+# 0700) so a non-root user can read it — harden_llama.sh copies it to /opt/llama.cpp. The binary's
+# RUNPATH points at the old /root path, so LD_LIBRARY_PATH forces the relocated libs (RUNPATH is
+# searched after LD_LIBRARY_PATH). Don't `cp` + restart this unit without running that script first.
+User=jarvis
+Group=jarvis
+Environment="LD_LIBRARY_PATH=/opt/llama.cpp/build/bin"
+ExecStart=/opt/llama.cpp/build/bin/llama-server \
     -m /srv/jarvis/models/qwen3.5_2b/Qwen3.5-2B-Q4_K_M.gguf \
     -c 4096 \
     -t 2 \
@@ -20,14 +27,15 @@ ExecStart=/root/llama.cpp/build/bin/llama-server \
 Restart=on-failure
 RestartSec=10
 SyslogIdentifier=llama-fast
-# Security hardening
-# NOTE: ProtectHome is not set because the llama-server binary lives in /root/llama.cpp.
-# It serves only loopback (127.0.0.1:8081) and loads a local GGUF — lower risk than the
-# orchestrator, but still root; moving the build out of /root to run non-root is a follow-up.
+
+# --- Security hardening (non-root) ---
+# Serves only loopback and loads a local GGUF; it writes nothing persistent, so the whole FS can
+# be read-only (no ReadWritePaths) with a private /tmp.
 NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=true
-ProtectSystem=full
+ProtectSystem=strict
+ProtectHome=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
@@ -35,7 +43,8 @@ RestrictSUIDSGID=true
 RestrictAddressFamilies=AF_INET AF_INET6
 LockPersonality=true
 UMask=0077
-# Resource limits
+
+# --- Resource limits ---
 LimitNOFILE=65536
 
 [Install]

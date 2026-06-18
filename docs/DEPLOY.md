@@ -136,12 +136,22 @@ sudo bash src/scripts/harden_service.sh
 ```
 
 It's idempotent and conservative — creates the `jarvis` system user, copies `uv` to
-`/usr/local/bin`, **copies** (not moves) the HuggingFace cache to `/srv/jarvis/.cache`, chowns the
-tree, installs `systemd/jarvis-orchestrator.hardened.service`, restarts, and health-checks. If the
-check fails it prints the rollback command (reinstall the root unit). The stricter
-`SystemCallFilter`/`MemoryDenyWriteExecute` directives are left commented in the hardened unit —
-enable and test them after confirming the service starts (native libs can trip a syscall filter).
-`llama-fast.service` still runs as root from `/root` (loopback-only; lower risk — a follow-up).
+`/usr/local/bin`, **copies** (not moves) the HuggingFace cache to `/srv/jarvis/.cache`, makes the
+**writable data dirs** (`memory`/`logs`/`.cache`/`.venv`/`config`) owned by `jarvis` while source
++ `.git` stay root-owned (read-only to the service), installs the hardened unit, restarts, and
+health-checks (polls up to ~70 s for the model load). On failure it prints the rollback command.
+The stricter `SystemCallFilter`/`MemoryDenyWriteExecute` directives are left commented in the unit
+— enable and test them after confirming startup (native libs can trip a syscall filter).
+
+Then run `llama-fast` non-root too (its build lives in `/root`, so it's copied to `/opt`):
+
+```bash
+sudo bash src/scripts/harden_llama.sh
+```
+
+> After going non-root the repo is root-owned but the service writes only its data dirs. If you
+> run `git` as root on the box and see "dubious ownership", add the exception once:
+> `git config --global --add safe.directory /srv/jarvis`.
 
 ## Auth model & the admin CLI
 

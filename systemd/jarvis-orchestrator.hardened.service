@@ -24,7 +24,8 @@ Environment="TRANSFORMERS_OFFLINE=1"
 Environment="HF_HOME=/srv/jarvis/.cache/huggingface"
 # host 0.0.0.0 so loopback (voice bridge) AND the Tailscale interface both work; a host
 # firewall restricts tcp:5000 to lo + tailscale0 (see docs/DEPLOY.md).
-ExecStart=/usr/local/bin/uv run uvicorn main:app \
+# --no-sync: don't touch the lockfile/venv at boot (source is read-only now; deploys sync explicitly).
+ExecStart=/usr/local/bin/uv run --no-sync uvicorn main:app \
     --host 0.0.0.0 \
     --port 5000 \
     --workers 1
@@ -36,9 +37,11 @@ SyslogIdentifier=jarvis-orchestrator
 NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=true
-# strict: the whole FS is read-only except ReadWritePaths (the venv, DB, logs, model cache).
+# strict: the whole FS is read-only except ReadWritePaths. Only the paths the service actually
+# writes are listed — source + .git stay read-only (an RCE can't rewrite its own code/history).
+# config/ is readable (owned by jarvis) but deliberately NOT writable.
 ProtectSystem=strict
-ReadWritePaths=/srv/jarvis
+ReadWritePaths=/srv/jarvis/memory /srv/jarvis/logs /srv/jarvis/.cache /srv/jarvis/.venv
 ProtectHome=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
