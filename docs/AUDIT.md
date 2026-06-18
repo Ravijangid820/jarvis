@@ -537,7 +537,7 @@ agent (`clients/volume-agent/`), install/supply-chain scripts, the frontend, and
 |---|---|---|
 | F1 device↔key binding | ✅ Fixed | `api_keys.device_id`; `mint-key <user> [desc] [device]`; middleware sets `request.state.device_id`; `/devices/commands` requires the key be bound to that device (or admin); `/events` records provenance from the key (body can't spoof) and plain users are denied. |
 | F2 login lockout (IP-keyed) | ✅ Fixed | Login throttle now keyed on **username** (no shared-IP global lockout); per-account. |
-| F3 root + 0.0.0.0 | ✅ Fixed (both services non-root) | Hardened non-root units for **both** the orchestrator (`harden_service.sh`) and `llama-fast` (`harden_llama.sh`, build relocated to `/opt`). `ProtectSystem=strict`; the orchestrator's writable scope is **narrowed** to `memory/logs/.cache/.venv` (source + `.git` are root-owned, read-only — an RCE can't rewrite its own code); `llama-fast` has no writable paths at all. |
+| F3 root + 0.0.0.0 | ✅ Fixed (both services non-root) | `src/scripts/install_services.sh` installs both units as root **or** a dedicated user (`JARVIS_USER=`). Non-root: `ProtectSystem=strict`; the orchestrator's writable scope is **narrowed** to `memory/logs/.cache/.venv` (source + `.git` root-owned, read-only — an RCE can't rewrite its own code); `llama-fast` runs non-root from `/opt` with no writable paths. |
 | F4 long-poll thread exhaustion | ✅ Fixed | `/devices/commands` is now `async` + `asyncio.sleep`, DB in threadpool, concurrency-capped (semaphore 16). |
 | F5 no CSP | ✅ Fixed | Strict CSP + `Referrer-Policy: no-referrer` on every response. |
 | F6 DB world-readable | ✅ Fixed | `init_db()` chmods DB+WAL/SHM to `0600`; `UMask=0077` keeps new files owner-only. |

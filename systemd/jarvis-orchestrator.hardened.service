@@ -9,7 +9,7 @@ StartLimitBurst=5
 [Service]
 Type=simple
 # Runs as a dedicated unprivileged user. DO NOT `cp` this unit and restart by hand — run
-# src/scripts/harden_service.sh first: it creates the `jarvis` user, chowns /srv/jarvis, copies
+# `JARVIS_USER=jarvis src/scripts/install_services.sh` first: it creates the user, sets ownership, copies
 # uv to /usr/local/bin and the HuggingFace cache under /srv/jarvis/.cache, then installs THIS
 # unit and restarts + health-checks. (The script is what makes this unit able to start.)
 User=jarvis
@@ -18,7 +18,7 @@ WorkingDirectory=/srv/jarvis/src/orchestrator
 Environment="PATH=/usr/local/bin:/usr/bin:/bin"
 Environment="HOME=/srv/jarvis"
 # Embedding model loads cache-only (offline, private). ProtectHome blocks /root/.cache, so the
-# cache lives under the owned tree via HF_HOME (harden_service.sh copies it there).
+# cache lives under the owned tree via HF_HOME (install_services.sh copies it there).
 Environment="HF_HUB_OFFLINE=1"
 Environment="TRANSFORMERS_OFFLINE=1"
 Environment="HF_HOME=/srv/jarvis/.cache/huggingface"

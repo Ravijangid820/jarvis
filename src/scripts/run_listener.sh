@@ -10,5 +10,5 @@
 #   uv run python src/scripts/manage.py mint-key admin voice-listener > config/voice_listener.key
 #   chmod 600 config/voice_listener.key
 # Tune the wake word / whisper flags via env vars — see voice_bridge.py.
-cd /srv/jarvis || exit 1
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)" || exit 1   # repo root (any checkout)
 exec uv run python src/scripts/voice_bridge.py "$@"

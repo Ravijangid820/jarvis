@@ -36,8 +36,13 @@ bash src/scripts/build_native.sh          # whisper.cpp + llama.cpp (AVX-only)
 bash src/scripts/download_models.sh       # embedding (HF) · Piper · whisper base.en · LLM GGUF
 (cd frontend && npm ci && npm run build)  # SPA bundle (served at /)
 uv run python src/scripts/manage.py create-admin <user> <pass>
+
+# Install as systemd services — your choice of user:
+sudo bash src/scripts/install_services.sh                    # run as root (simplest)
+sudo JARVIS_USER=jarvis bash src/scripts/install_services.sh # dedicated non-root user (hardened)
 ```
 
+Runs as **root or a dedicated non-root user** — your call (see [docs/setup/server.md](docs/setup/server.md)).
 Paths are repo-relative (data lands under the checkout). The **LLM GGUF source isn't pinned**
 in the repo — set `LLM_GGUF_URL=<url>` for the download, or drop the file under `models/`. The
 embedding model is gated (Gemma license): accept its terms and `uv run huggingface-cli login`

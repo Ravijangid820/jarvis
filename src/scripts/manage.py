@@ -12,6 +12,7 @@ Password hashing matches the orchestrator (PBKDF2-HMAC-SHA256, 100k iterations).
 """
 import hashlib
 import json
+import os
 import secrets
 import sqlite3
 import sys
@@ -19,8 +20,14 @@ from pathlib import Path
 
 PBKDF2_ITERATIONS = 600_000   # keep in sync with src/orchestrator/auth.py
 
-CONFIG = json.loads(Path("/srv/jarvis/config/jarvis.json").read_text())
+# Resolve config + DB portably so this works in ANY checkout (not just /srv/jarvis), as any user:
+# JARVIS_CONFIG > JARVIS_HOME/config/jarvis.json > repo-relative. Relative db_path → under the repo.
+_REPO = Path(os.environ.get("JARVIS_HOME") or Path(__file__).resolve().parents[2])
+_CONFIG_PATH = Path(os.environ.get("JARVIS_CONFIG") or _REPO / "config" / "jarvis.json")
+CONFIG = json.loads(_CONFIG_PATH.read_text())
 DB_PATH = CONFIG["memory"]["db_path"]
+if not Path(DB_PATH).is_absolute():
+    DB_PATH = str(_REPO / DB_PATH)
 
 
 def _db():

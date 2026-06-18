@@ -8,7 +8,7 @@ StartLimitBurst=5
 [Service]
 Type=simple
 # Runs as the unprivileged `jarvis` user. The llama.cpp build must live OUTSIDE /root (which is
-# 0700) so a non-root user can read it — harden_llama.sh copies it to /opt/llama.cpp. The binary's
+# 0700) so a non-root user can read it — install_services.sh copies it to /opt/llama.cpp. The binary's
 # RUNPATH points at the old /root path, so LD_LIBRARY_PATH forces the relocated libs (RUNPATH is
 # searched after LD_LIBRARY_PATH). Don't `cp` + restart this unit without running that script first.
 User=jarvis

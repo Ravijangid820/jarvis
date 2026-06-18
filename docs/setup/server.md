@@ -33,14 +33,30 @@ uv run python src/scripts/manage.py create-admin <user> <pass>
 
 ## Run it
 
+Pick one:
+
+**A. Quick / dev — any user, no systemd.** Run the two processes directly:
 ```bash
-# LLM backend (from your llama.cpp build):
-<repo>/llama.cpp/build/bin/llama-server -m <gguf> -c 4096 --host 127.0.0.1 --port 8081
-# Orchestrator (dev):
-cd src/orchestrator && uv run uvicorn main:app --host 127.0.0.1 --port 5000
-# …or install the systemd units (systemd/) and use them — see DEPLOY.md.
+# LLM backend:
+llama.cpp/build/bin/llama-server -m models/<your-model>.gguf -c 4096 --host 127.0.0.1 --port 8081 &
+# Orchestrator:
+(cd src/orchestrator && uv run uvicorn main:app --host 127.0.0.1 --port 5000)
 curl http://localhost:5000/health
 ```
+
+**B. Install as systemd services — your choice of user:**
+```bash
+sudo bash src/scripts/install_services.sh                      # run as ROOT (simplest)
+sudo JARVIS_USER=jarvis bash src/scripts/install_services.sh   # dedicated NON-ROOT user (hardened — recommended)
+```
+The installer works from any checkout path: it auto-detects the repo, `uv`, the `llama-server`
+binary and the GGUF, generates both unit files for the chosen mode, then enables + starts +
+health-checks. The non-root mode also creates the user, moves the model cache under the repo,
+narrows write access to the data dirs (source + `.git` stay read-only to the service), and runs
+`llama-server` non-root too. Useful env vars:
+- `DRY_RUN=1` — write the units to `systemd/generated/` and stop (preview, no root needed).
+- `JARVIS_GGUF=<path>` — pick the model if you have more than one under `models/`.
+- `JARVIS_HOST=` / `JARVIS_PORT=` — bind address / port (default `0.0.0.0:5000`).
 
 ## Next
 

@@ -4,6 +4,19 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-18 — Portable install: one installer, run as root OR a dedicated user
+
+- **`src/scripts/install_services.sh`** — single installer that works from any checkout path and
+  installs both services either as **root** (`install_services.sh`, simplest) or a **dedicated
+  non-root user** (`JARVIS_USER=jarvis …`, hardened). Auto-detects repo/`uv`/`llama-server`/GGUF,
+  generates both units for the chosen mode, and (non-root) creates the user, moves the HF cache
+  under the repo, narrows write access, relocates a `/root` llama build to `/opt`. `DRY_RUN=1`
+  previews; `JARVIS_GGUF`/`JARVIS_HOST`/`JARVIS_PORT` override. Replaces the box-specific
+  `harden_service.sh`/`harden_llama.sh` (removed).
+- **Portability fixes:** `manage.py`, `reembed_memory.py`, `fetch_fonts.py`, `run_listener.sh` no
+  longer hardcode `/srv/jarvis` — they resolve config/paths repo-relative (`JARVIS_HOME`/
+  `JARVIS_CONFIG`), so a fresh clone works at any path, as any user. README/server.md/DEPLOY updated.
+
 ## 2026-06-18 — Least-privilege follow-ups: narrowed writable scope + non-root llama-fast
 
 - **Orchestrator writable scope narrowed:** the hardened unit's `ReadWritePaths` is now just

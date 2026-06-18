@@ -127,31 +127,29 @@ brute-force surface and — unlike IP keying — can't cause a global login lock
 subnet-router source IP. The tradeoff is that an attacker can briefly throttle one specific
 account; acceptable for this single-operator deployment.
 
-## Run as a non-root user (hardening, finding F3)
+## Installing the services (root or a dedicated non-root user)
 
-The default unit runs as root. To run under a dedicated unprivileged user with `ProtectSystem=strict`:
-
-```bash
-sudo bash src/scripts/harden_service.sh
-```
-
-It's idempotent and conservative — creates the `jarvis` system user, copies `uv` to
-`/usr/local/bin`, **copies** (not moves) the HuggingFace cache to `/srv/jarvis/.cache`, makes the
-**writable data dirs** (`memory`/`logs`/`.cache`/`.venv`/`config`) owned by `jarvis` while source
-+ `.git` stay root-owned (read-only to the service), installs the hardened unit, restarts, and
-health-checks (polls up to ~70 s for the model load). On failure it prints the rollback command.
-The stricter `SystemCallFilter`/`MemoryDenyWriteExecute` directives are left commented in the unit
-— enable and test them after confirming startup (native libs can trip a syscall filter).
-
-Then run `llama-fast` non-root too (its build lives in `/root`, so it's copied to `/opt`):
+`src/scripts/install_services.sh` installs **both** units (orchestrator + `llama-fast`) and works
+from any checkout path. It auto-detects the repo, `uv`, the `llama-server` binary and the GGUF, and
+generates the units for the mode you choose:
 
 ```bash
-sudo bash src/scripts/harden_llama.sh
+sudo bash src/scripts/install_services.sh                      # run as ROOT (simplest)
+sudo JARVIS_USER=jarvis bash src/scripts/install_services.sh   # dedicated NON-ROOT user (hardened — recommended)
 ```
 
-> After going non-root the repo is root-owned but the service writes only its data dirs. If you
-> run `git` as root on the box and see "dubious ownership", add the exception once:
-> `git config --global --add safe.directory /srv/jarvis`.
+Non-root mode (`JARVIS_USER`) additionally: creates the system user; copies `uv` to
+`/usr/local/bin` and the HuggingFace cache under the repo's `.cache/`; makes only the **writable
+data dirs** (`memory`/`logs`/`.cache`/`.venv`/`config`) owned by the user while source + `.git`
+stay root-owned (read-only to the service); relocates a `/root` llama build to `/opt`; and runs
+`llama-server` non-root too. `ProtectSystem=strict` in both units. Preview with
+`DRY_RUN=1 …` (writes to `systemd/generated/`, no root needed). The stricter
+`SystemCallFilter`/`MemoryDenyWriteExecute` directives are intentionally omitted — add and test
+them per box if you want (native libs can trip a syscall filter).
+
+> After a non-root install the repo is root-owned and the service writes only its data dirs. If you
+> run `git` **as root** on the box and see "dubious ownership", add the exception once:
+> `git config --global --add safe.directory <repo>`.
 
 ## Auth model & the admin CLI
 

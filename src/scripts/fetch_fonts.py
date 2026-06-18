@@ -6,7 +6,7 @@ import re
 import urllib.request
 from pathlib import Path
 
-OUT = Path("/srv/jarvis/src/orchestrator/static/fonts")
+OUT = Path(__file__).resolve().parents[2] / "src" / "orchestrator" / "static" / "fonts"
 OUT.mkdir(parents=True, exist_ok=True)
 
 CSS_URL = ("https://fonts.googleapis.com/css2?"

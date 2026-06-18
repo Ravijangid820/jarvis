@@ -10,15 +10,20 @@ Run (after deploying the new code, with the orchestrator stopped to avoid races)
     uv run python src/scripts/reembed_memory.py
 """
 import json
+import os
 import sqlite3
 from pathlib import Path
 
 import chromadb
 from sentence_transformers import SentenceTransformer
 
-CONFIG = json.loads(Path("/srv/jarvis/config/jarvis.json").read_text())
+# Portable paths (any checkout, any user): JARVIS_CONFIG > JARVIS_HOME > repo-relative.
+_REPO = Path(os.environ.get("JARVIS_HOME") or Path(__file__).resolve().parents[2])
+CONFIG = json.loads(Path(os.environ.get("JARVIS_CONFIG") or _REPO / "config" / "jarvis.json").read_text())
 DB_PATH = CONFIG["memory"]["db_path"]
-CHROMA_PATH = CONFIG["memory"].get("chroma_db_path", "/srv/jarvis/memory/chroma_db")
+CHROMA_PATH = CONFIG["memory"].get("chroma_db_path", "memory/chroma_db")
+DB_PATH = DB_PATH if Path(DB_PATH).is_absolute() else str(_REPO / DB_PATH)
+CHROMA_PATH = CHROMA_PATH if Path(CHROMA_PATH).is_absolute() else str(_REPO / CHROMA_PATH)
 
 EMBED_MODEL_NAME = "google/embeddinggemma-300m"
 EMBED_DOC_PREFIX = "title: none | text: "
