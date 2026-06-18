@@ -10,6 +10,9 @@ wheels/
 .venv
 venv/
 
+# ---- Caches (HF model cache lives here after harden_service.sh; multi-GB) ----
+.cache/
+
 # ---- Secrets & runtime config (NEVER commit) ----
 # jarvis.json holds the master API key. Commit jarvis.example.json instead.
 config/jarvis.json
