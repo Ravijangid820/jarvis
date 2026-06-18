@@ -59,9 +59,11 @@ def init_embeddings():
         # Surface the embedding dimension + collection size. If EMBED_MODEL_NAME ever
         # changes dimension, get_or_create returns the OLD collection and the first add()
         # would fail in the worker — logging this makes that diagnosable.
+        # method was renamed get_sentence_embedding_dimension → get_embedding_dimension; support both
+        _dim = (_embed_model.get_embedding_dimension if hasattr(_embed_model, "get_embedding_dimension")
+                else _embed_model.get_sentence_embedding_dimension)()
         logger.info("Embeddings: %s (dim=%d), collection 'jarvis_memory_cos' has %d vectors",
-                    EMBED_MODEL_NAME, _embed_model.get_sentence_embedding_dimension(),
-                    memory_collection.count())
+                    EMBED_MODEL_NAME, _dim, memory_collection.count())
     except Exception as e:
         logger.error("Failed to initialize ChromaDB / embedding model: %s", e)
         _embed_model = None

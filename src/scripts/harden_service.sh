@@ -49,12 +49,16 @@ cp "$REPO/systemd/jarvis-orchestrator.hardened.service" /etc/systemd/system/jarv
 systemctl daemon-reload
 systemctl restart jarvis-orchestrator
 
-say "6/6  verify"
-sleep 3
-if curl -fsS http://localhost:5000/health >/dev/null 2>&1; then
+say "6/6  verify (startup loads the embedding model — can take ~30s, so poll up to ~70s)"
+ok=""
+for _ in $(seq 1 35); do
+  if curl -fsS --max-time 3 http://localhost:5000/health >/dev/null 2>&1; then ok=1; break; fi
+  sleep 2
+done
+if [ -n "$ok" ]; then
   echo "  ✓ /health OK — orchestrator is running as '$USER_NAME'"
 else
-  echo "  ✗ health check FAILED. Inspect:  journalctl -u jarvis-orchestrator -n 50 --no-pager"
+  echo "  ✗ health check FAILED after ~70s. Inspect:  journalctl -u jarvis-orchestrator -n 50 --no-pager"
   echo "    Rollback:  cp $REPO/systemd/jarvis-orchestrator.service /etc/systemd/system/ && systemctl daemon-reload && systemctl restart jarvis-orchestrator"
   exit 1
 fi
