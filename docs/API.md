@@ -129,6 +129,18 @@ the LLM.
 
 ---
 
+## Voice / TTS
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| `POST` | `/tts` | `{ text }` (≤600) | `{ "audio": "<base64 WAV>" }` — synthesize speech (Piper); `503` if TTS unavailable. The web UI uses this to **speak the greeting**. |
+| `GET` | `/greeting` | — | `{ "text", "audio" }` — a time-aware JARVIS acknowledgement + spoken audio. The voice bridge calls this when it hears just the wake word ("Jarvis" → "Yes, sir?"). |
+
+`/inbox` and `/chat/stream` also return `audio` when the request sets `voice_feedback: true` (the
+voice bridge uses this to speak replies).
+
+---
+
 ## Misc / unauthenticated
 
 | Method | Path | Returns |

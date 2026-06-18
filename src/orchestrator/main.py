@@ -13,6 +13,7 @@ Domain logic lives in focused modules:
 import asyncio
 import json
 import os
+import random
 import sqlite3
 import secrets
 import time
@@ -242,6 +243,10 @@ class VolumeRequest(BaseModel):
     device: str = Field(default="laptop", max_length=64)
 
 
+class TTSRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=600)
+
+
 # ----------------- Auth endpoints -----------------
 @app.post("/auth/login")
 def login(req: LoginRequest, request: Request):
@@ -370,6 +375,35 @@ def system_stats(request: Request) -> Dict[str, Any]:
     # Admin-only: host telemetry (load/mem/uptime) is infrastructure detail, not for every user.
     _require_admin(request)
     return _system_stats()
+
+
+# ----------------- Voice / TTS -----------------
+@app.post("/tts")
+def tts(req: TTSRequest, request: Request):
+    """Synthesize speech (Piper) for arbitrary text → base64 WAV. The web UI uses this to speak
+    the greeting; the voice bridge uses it for spoken replies."""
+    audio = synthesize_tts(req.text.strip())
+    if not audio:
+        raise HTTPException(status_code=503, detail="TTS unavailable")
+    return {"audio": audio}
+
+
+def _jarvis_ack() -> str:
+    """A short, time-aware JARVIS acknowledgement — the spoken reply to just the wake word."""
+    h = datetime.now().hour
+    part = "morning" if h < 12 else "afternoon" if h < 18 else "evening"
+    return random.choice([
+        "Yes, sir?", "At your service, sir.", "How can I help, sir?",
+        f"Good {part}, sir.", "Standing by, sir.", "I'm here, sir.",
+    ])
+
+
+@app.get("/greeting")
+def greeting(request: Request):
+    """A JARVIS greeting (text + spoken audio), no LLM. Used by the voice bridge when it hears
+    just the wake word ("Jarvis" → "Yes, sir?")."""
+    text = _jarvis_ack()
+    return {"text": text, "audio": synthesize_tts(text)}
 
 
 def _can_control_devices(request: Request) -> bool:

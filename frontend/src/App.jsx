@@ -290,6 +290,22 @@ function App() {
   const [sound, setSound] = useState(() => localStorage.getItem("jarvis_sound") === "1")
   const [perfMode, setPerfMode] = useState(() => localStorage.getItem("jarvis_perf") === "1")
   const audioCtxRef = useRef(null)
+  const greetSpokenRef = useRef(false)   // speak the greeting at most once per session
+
+  // Speak arbitrary text via the server's Piper TTS (used for the JARVIS greeting).
+  const speak = async (text, tok = token) => {
+    if (!text || !tok) return
+    try {
+      const res = await fetch(API + "/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + tok },
+        body: JSON.stringify({ text }),
+      })
+      if (!res.ok) return
+      const { audio } = await res.json()
+      if (audio) { const a = new Audio("data:audio/wav;base64," + audio); a.play().catch(() => {}) }
+    } catch { /* ignore */ }
+  }
 
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
@@ -419,6 +435,20 @@ function App() {
     }, 42)
     return () => clearInterval(id)
   }, [greeting, messages.length])
+  // Speak the greeting on the first user gesture (browsers block autoplay until one) while on the
+  // welcome screen — covers page reload; login speaks it directly. Sound toggle gates it.
+  useEffect(() => {
+    if (!token || !sound || greetSpokenRef.current || messages.length !== 0) return
+    const fire = () => {
+      if (greetSpokenRef.current) return
+      greetSpokenRef.current = true
+      speak(greeting)
+      window.removeEventListener("pointerdown", fire); window.removeEventListener("keydown", fire)
+    }
+    window.addEventListener("pointerdown", fire); window.addEventListener("keydown", fire)
+    return () => { window.removeEventListener("pointerdown", fire); window.removeEventListener("keydown", fire) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, sound, messages.length, greeting])
   // Reduce-effects mode: drop the heavy ambient GPU work (floating particles + the frosted-glass
   // backdrop blur, which re-blurs every frame as particles drift) for smooth scrolling on lighter
   // clients. Applied via a <html class="perf"> hook so it's pure CSS.
@@ -463,6 +493,7 @@ function App() {
       setToken(data.token)
       setRole(data.role)
       localStorage.setItem("jarvis_user", username.trim())
+      if (sound) { greetSpokenRef.current = true; speak(jarvisGreeting(username.trim()), data.token) }
       setUsername("")
       setPassword("")
     } catch (e) {

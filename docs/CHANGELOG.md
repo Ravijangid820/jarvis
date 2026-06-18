@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-18 — JARVIS speaks: spoken greeting + voice-triggered "Yes, sir?"
+
+- **`POST /tts`** (synthesize any text → WAV) and **`GET /greeting`** (a time-aware JARVIS
+  acknowledgement + audio), both auth-gated.
+- **Web UI:** the welcome greeting is now **spoken** via Piper TTS when the sound toggle is on —
+  on login or the first page gesture (browsers block autoplay until a gesture).
+- **Voice bridge:** hearing just the wake word ("Jarvis") → a spoken greeting (`GET /greeting`);
+  any other command → `/inbox` with `voice_feedback`, and the reply is **spoken back** (played with
+  `paplay`/`aplay`/`ffplay`). Needs an audio player + output device on the box — on-hardware tuning
+  required. Tests 42 → 45.
+
 ## 2026-06-18 — JARVIS-style greeting on the welcome screen
 
 - The empty-chat welcome screen now greets the user in JARVIS's voice, **typed out** character by

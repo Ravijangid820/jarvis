@@ -266,3 +266,22 @@ def test_security_headers_present(client):
     r = client.get("/health")
     assert "default-src 'self'" in r.headers.get("Content-Security-Policy", "")
     assert r.headers.get("Referrer-Policy") == "no-referrer"
+
+
+def test_tts_requires_auth(client):
+    assert client.post("/tts", json={"text": "hi"}).status_code == 401
+
+
+def test_tts_validation_and_synthesis(client):
+    admin = _tok(client, "tony", "pw-admin")
+    h = {"Authorization": "Bearer " + admin}
+    assert client.post("/tts", headers=h, json={"text": ""}).status_code == 422   # empty rejected
+    # valid text → 200 with audio, or 503 if Piper isn't present in the test env
+    assert client.post("/tts", headers=h, json={"text": "Good evening"}).status_code in (200, 503)
+
+
+def test_greeting(client):
+    assert client.get("/greeting").status_code == 401
+    admin = _tok(client, "tony", "pw-admin")
+    r = client.get("/greeting", headers={"Authorization": "Bearer " + admin})
+    assert r.status_code == 200 and "text" in r.json()
