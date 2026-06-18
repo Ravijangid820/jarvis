@@ -68,7 +68,7 @@ uv run pytest -q && uv run ruff check src/orchestrator src/scripts tests
 ## Project Structure
 
 ```
-/srv/jarvis/
+<repo>/                         ← clone anywhere (paths are repo-relative)
 ├── src/orchestrator/           ← FastAPI app, split into an acyclic module graph:
 │   ├── config.py               ← configuration, tunables, logging
 │   ├── db.py                   ← SQLite connections + schema init
@@ -80,19 +80,23 @@ uv run pytest -q && uv run ruff check src/orchestrator src/scripts tests
 │   ├── main.py                 ← app, auth middleware, route handlers
 │   └── static/                 ← self-hosted fonts (offline, no Google Fonts)
 ├── src/scripts/
-│   ├── run_listener.sh         ← whisper voice listener → orchestrator bridge
+│   ├── setup.sh                ← one-shot bootstrap (env, config, build, models, admin)
+│   ├── install_services.sh     ← install systemd units as root OR a dedicated user
+│   ├── run_listener.sh / voice_bridge.py  ← whisper voice listener → /inbox (no shell)
 │   ├── manage.py               ← admin CLI (create-admin / reset-password / mint-key)
 │   └── reembed_memory.py       ← one-time vector-store migration
-├── frontend/                   ← React 19 + Vite chat UI
+├── frontend/                   ← React 19 + Vite chat UI (+ admin console)
+├── edge/                       ← Raspberry Pi camera/vision agent (own env)
+├── clients/                    ← device agents (e.g. clients/volume-agent/ — Windows volume)
 ├── config/
 │   ├── jarvis.example.json     ← config template (real jarvis.json is gitignored)
 │   └── schema.sql              ← SQLite schema (single source of truth)
 ├── tests/                      ← pytest suite
-├── systemd/                    ← llama-fast + jarvis-orchestrator units
-├── docs/                       ← AUDIT.md, DEPLOY.md, benchmarks
-└── .github/workflows/ci.yml    ← ruff + pytest on push
+├── systemd/                    ← reference units (install_services.sh generates per-mode)
+├── docs/                       ← setup/, ARCHITECTURE, API, DEPLOY, SPECS, AUDIT, CHANGELOG
+└── .github/                    ← CI (ruff + pytest), PR + issue templates
 
-# gitignored runtime data: models/ (GGUF), whisper/, piper/, memory/ (DB + vectors), logs/
+# gitignored runtime data: models/ (GGUF), whisper/, piper/, memory/ (DB + vectors), logs/, .cache/
 ```
 
 Module dependency graph (acyclic): `config → {db, auth, llm} → memory → chat → main`
@@ -106,7 +110,7 @@ this repo). To reproduce the box, clone and build them yourself:
 |---|---|---|---|
 | **whisper.cpp** | `v1.8.6` (commit `23ee0350`) | https://github.com/ggerganov/whisper.cpp | Built with `-DGGML_AVX=ON -DWHISPER_SDL2=ON` (Sandy Bridge has AVX but **no** AVX2) |
 | **Piper TTS** | `en_GB-alan-medium` voice | https://github.com/rhasspy/piper | Installed via [src/scripts/piper_setup.sh](src/scripts/piper_setup.sh) |
-| **llama.cpp** | — | https://github.com/ggml-org/llama.cpp | Built AVX-only (Sandy Bridge); binary at `/root/llama.cpp/build/bin/llama-server` |
+| **llama.cpp** | — | https://github.com/ggml-org/llama.cpp | Built AVX-only (Sandy Bridge); `install_services.sh` finds the binary (repo `llama.cpp/build/bin/` or `/opt`) |
 
 ```bash
 # whisper.cpp (matches the deployed build)
@@ -148,11 +152,12 @@ cmake --build /srv/jarvis/whisper/build -j
 
 ## Security
 
+- **No root:** the orchestrator + LLM server run as a dedicated unprivileged user, systemd-sandboxed (`ProtectSystem=strict`, minimal write paths)
 - All inference local (no cloud APIs); LLM server bound to `127.0.0.1`
-- Auth = web-login session tokens **or** per-user API keys (no static admin secret)
-- Rate limiting per user; parameterized SQL; input validation; security headers
-- Reachable over LAN + Tailscale; see [docs/DEPLOY.md](docs/DEPLOY.md) for the firewall posture
-- Full self-audit + fixes in **[docs/AUDIT.md](docs/AUDIT.md)**
+- Auth = web-login session tokens **or** per-user API keys (hashed at rest; no static admin secret); authorization enforced **in code, never the LLM**
+- Rate limiting; parameterized SQL; bounded/validated input; strict CSP + security headers
+- Reachable over LAN + Tailscale behind a host firewall; see [docs/DEPLOY.md](docs/DEPLOY.md)
+- Policy & reporting → **[SECURITY.md](SECURITY.md)** · full self-audit + fixes → **[docs/AUDIT.md](docs/AUDIT.md)**
 
 ## Engineering highlights
 
@@ -176,12 +181,17 @@ Full docs live in **[docs/](docs/README.md)**:
 
 | Doc | What's in it |
 |---|---|
+| **Setup guides** → [server](docs/setup/server.md) · [Raspberry Pi](docs/setup/raspberry-pi.md) · [volume agent](docs/setup/volume-agent.md) | Per-component install (root or dedicated user) |
 | [Architecture](docs/ARCHITECTURE.md) | Components, module graph, design decisions, security model |
 | [Workflows](docs/WORKFLOWS.md) | Chat lifecycle, prompt token-budgeting, RAG, fact extraction, voice loop |
 | [API Reference](docs/API.md) | Every HTTP endpoint, auth, request/response shapes |
 | [Specs](docs/SPECS.md) | Hardware, models, performance, config reference, DB schema |
-| [Deploy](docs/DEPLOY.md) | Runbook: units, migrations, firewall, the admin CLI |
-| [Audit](docs/AUDIT.md) | The 81-finding self-audit and fixes |
+| [Deploy](docs/DEPLOY.md) | Runbook: install_services.sh, migrations, firewall, the admin CLI |
+| [Audit](docs/AUDIT.md) | The multi-round security self-audit and fixes |
+
+Project meta: **[CONTRIBUTING.md](CONTRIBUTING.md)** (dev setup, tests, conventions) ·
+**[SECURITY.md](SECURITY.md)** (security model, how to report a vulnerability) ·
+[CHANGELOG](docs/CHANGELOG.md).
 
 ## Status
 

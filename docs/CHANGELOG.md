@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-18 — Project documentation: CONTRIBUTING, SECURITY, templates; README polish
+
+- Added the standard OSS document set: **CONTRIBUTING.md** (dev setup, tests/lint, conventions, PR
+  style), **SECURITY.md** (report via GitHub private advisories + the security model), and
+  `.github/` PR + bug/feature issue templates.
+- README front-door polish: links the setup guides + CONTRIBUTING/SECURITY/CHANGELOG; refreshed
+  Project Structure (portable `<repo>` root, `edge/` + `clients/`, `install_services.sh`); the
+  Security section now reflects the non-root services + CSP.
+- `LICENSE`: pending the owner's choice (MIT recommended) — licensing is just adding the standard
+  text file; no registration needed.
+
 ## 2026-06-18 — Portable install: one installer, run as root OR a dedicated user
 
 - **`src/scripts/install_services.sh`** — single installer that works from any checkout path and
