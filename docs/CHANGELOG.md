@@ -4,6 +4,18 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-19 — Camera: one-click install + reproducible Windows .exe (CI-built)
+
+- **One command:** `install.sh` / `install.ps1` chain *setup* + *service* (thin, readable wrappers —
+  no opaque binary).
+- **Packaged Windows `.exe`** for a no-scripts option: new `app.py` dispatcher
+  (`run` / `verify` / `setup` / `install-service` / `uninstall-service`), `models.py` (first-run model
+  download + sha256-verify), and a frozen-aware `paths.base_dir()` (config/models live next to the
+  .exe). Built **reproducibly in CI** — `.github/workflows/build-camera-exe.yml` builds `jarvis-camera.exe`
+  on a Windows runner *from source*, publishes it with a SHA-256 (artifact, or a Release on a
+  `camera-v*` tag), so the binary is traceable to a commit. Self-installs a per-user logon Scheduled
+  Task (not elevated); unsigned (one-time SmartScreen prompt). Non-frozen behavior unchanged.
+
 ## 2026-06-19 — Admin: role management (promote/demote) + last-admin protection
 
 - **Promote/demote users** from the admin Users tab — new `PUT /admin/users/{id}/role`

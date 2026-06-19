@@ -24,10 +24,11 @@ from pathlib import Path
 from .capture import Camera
 from .detectors.faces import FaceDetector
 from .keyfile import load_key
+from .paths import base_dir
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("camera.enroll")
-CAMERA_ROOT = Path(__file__).resolve().parents[1]
+CAMERA_ROOT = base_dir()
 
 
 def _load_admin_key(cfg):

@@ -20,11 +20,12 @@ from .detectors.motion import MotionDetector
 from .detectors.pose import PoseDetector
 from .events import EventClient
 from .keyfile import load_key
+from .paths import base_dir
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 log = logging.getLogger("camera.agent")
 
-CAMERA_ROOT = Path(__file__).resolve().parents[1]
+CAMERA_ROOT = base_dir()
 HEAVY = {"faces": FaceDetector, "pose": PoseDetector, "gestures": GestureDetector}
 
 

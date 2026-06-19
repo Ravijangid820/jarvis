@@ -1,0 +1,47 @@
+name: build-camera-exe
+
+# Builds the Windows camera .exe REPRODUCIBLY from source on a GitHub-hosted Windows runner, so the
+# binary is traceable to a commit (not a binary handed over out-of-band). Publishes the .exe + its
+# SHA-256 as a downloadable artifact; on a `camera-v*` tag it also attaches them to a Release.
+on:
+  workflow_dispatch:                 # run manually from the Actions tab
+  push:
+    tags: ['camera-v*']
+
+permissions:
+  contents: write                    # needed only for the Release step on a tag
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: camera
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Build the .exe (PyInstaller, in an isolated venv)
+        run: |
+          uv venv --python 3.12
+          uv pip install --python .venv\Scripts\python.exe -r requirements-desktop.txt pyinstaller
+          .venv\Scripts\pyinstaller.exe --onefile --noconfirm --name jarvis-camera `
+            --paths . --collect-all cv2 --add-data "config.example.json;." run_exe.py
+
+      - name: Checksum
+        run: (Get-FileHash dist\jarvis-camera.exe -Algorithm SHA256).Hash | Out-File -Encoding ascii dist\jarvis-camera.exe.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jarvis-camera-windows
+          path: |
+            camera/dist/jarvis-camera.exe
+            camera/dist/jarvis-camera.exe.sha256
+
+      - name: Attach to Release (tag builds only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            camera/dist/jarvis-camera.exe
+            camera/dist/jarvis-camera.exe.sha256

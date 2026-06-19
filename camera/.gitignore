@@ -2,5 +2,7 @@
 config/
 .venv/
 models/          # ONNX models are downloaded + sha256-verified by setup, not committed
+dist/            # PyInstaller .exe output (built by CI)
+build/           # PyInstaller scratch
 __pycache__/
 *.pyc

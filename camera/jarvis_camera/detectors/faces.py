@@ -19,9 +19,10 @@ import math
 from pathlib import Path
 
 from .base import Detector
+from ..paths import base_dir
 
 log = logging.getLogger("camera.faces")
-CAMERA_ROOT = Path(__file__).resolve().parents[2]
+CAMERA_ROOT = base_dir()
 
 
 class FaceDetector(Detector):

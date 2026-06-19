@@ -152,6 +152,33 @@ Each task is its own script, with a Linux/macOS/Pi `.sh` and a Windows `.ps1`:
   **Scheduled Task at your logon** (runs as you, *not* elevated, no third-party wrapper, no admin
   needed). Neither opens any listening port — the agent stays outbound-only.
 
+### One command (setup + service)
+
+`install.sh` / `install.ps1` chain *setup* then *service* so it's one step:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File install.ps1     # Windows  (Linux/Pi: bash install.sh)
+```
+
+These are tiny readable wrappers (no opaque binary) — open them to see they only call the other two.
+
+### Or a packaged Windows .exe (built reproducibly in CI)
+
+If you'd rather not run scripts at all, the GitHub Actions workflow **`build-camera-exe`** builds a
+single **`jarvis-camera.exe`** on a Windows runner *from this source* and publishes it (with a
+SHA-256) as a downloadable artifact — so the binary is **traceable to a commit**, not handed over
+out-of-band. Run it from the **Actions** tab (or push a `camera-v*` tag for a Release). Then:
+
+```
+jarvis-camera.exe install-service   # downloads+verifies models, writes config\, starts at logon
+jarvis-camera.exe verify            # one-shot: who's at the camera
+jarvis-camera.exe uninstall-service
+```
+
+It's **unsigned**, so Windows SmartScreen shows a one-time "More info → Run anyway" on first launch
+(verify the SHA-256 against the workflow output first). Everything lives next to the .exe
+(`config\`, `models\`); no admin, no listening port.
+
 ## Manage faces (verify · list · add · delete)
 
 Detection (**YuNet**) and identity (**SFace**) both come from `setup`, so there's nothing to
@@ -210,12 +237,17 @@ camera/
   setup.sh / setup.ps1      install: auto-detect platform, deps + model download (Linux/Pi · Windows)
   run.sh   / run.ps1        run once in the foreground (testing; no service)
   service.sh / service.ps1  make persistent: systemd user service (Linux) · Scheduled Task (Windows)
+  install.sh / install.ps1  one command: setup + service (thin readable wrappers)
+  run_exe.py                PyInstaller entry → jarvis-camera.exe (built in CI)
   models/                   YuNet + SFace ONNX (downloaded + sha256-verified by setup; gitignored)
   jarvis_camera/
     capture.py         camera abstraction (picamera2 for CSI, OpenCV for USB)
+    paths.py           base dir (camera/ from source, or the .exe's folder when frozen)
+    models.py          download + sha256-verify the OpenCV-Zoo models (used by the .exe first run)
     events.py          event client (POST + offline queue + retry)
     keyfile.py         shared API-key loader (device vs admin key separation + perm checks)
     agent.py           main loop + motion-gated scheduler (+ pulls enrolled faces)
+    app.py             .exe dispatcher: run / verify / setup / install-service / uninstall-service
     facecli.py         manage faces: list / verify / add / delete (device vs admin key)
     enroll.py          enroll a face → server (capture, average embedding, POST; admin key)
     bench.py           per-detector FPS benchmark (Pi or laptop webcam)
