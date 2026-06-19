@@ -24,7 +24,10 @@
   --bg-glass: rgba(4, 10, 16, 0.6);
   --bg-glass-heavy: rgba(4, 10, 16, 0.85);
 
-  --font-hud: 'Rajdhani', sans-serif;
+  /* UI/body font: a readable system stack (Segoe UI on Windows, SF on macOS, Roboto on Linux).
+     The narrow 'Rajdhani' HUD font read as cramped/small; this matches the more legible look.
+     Rajdhani is still self-hosted (fonts.css) — add it first here to bring back the HUD headers. */
+  --font-hud: system-ui, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   --font-data: 'JetBrains Mono', monospace;
   
   --clip-angle: polygon(12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%, 0 12px);
