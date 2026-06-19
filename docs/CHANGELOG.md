@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-19 — Admin: mint device-bound (camera/edge) keys from the UI
+
+- The **Keys** tab now has a **Device ID** field — minting with one creates a **device-bound** key,
+  the kind a camera/edge agent needs (a plain unbound non-admin key is rejected by `/events`). No
+  more dropping to `manage.py mint-key` on the box for this. The keys table gained a **Device**
+  column; the minted-key callout reminds you to save it to `edge/config/edge.key` and run the agent.
+  The Faces → Camera Agents panel links to the Keys tab to start the flow. `POST /admin/api_keys`
+  accepts + returns `device_id`; `GET /admin/api_keys` returns it. Tests 50 → 52.
+- (Inherent limits, by design: the agent **runs on the device**, so the server can't launch it; and
+  saving the key to a file is a device-side step — the outbound-only agent holds its own credential.)
+
 ## 2026-06-19 — Edge: Windows laptop setup + correct sandboxed run command
 
 - **`edge/setup.ps1`** — one-shot Windows bootstrap (uv-managed **Python 3.12** venv — MediaPipe has

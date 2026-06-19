@@ -199,6 +199,35 @@ def test_heartbeat_marks_camera_active_and_is_not_an_event(client):
     assert all(e["type"] != "heartbeat" for e in events)
 
 
+def test_admin_mint_device_bound_key_via_api(client):
+    # The admin UI can mint a DEVICE-BOUND key (device_id) — the kind an edge/camera agent needs.
+    admin = _tok(client, "tony", "pw-admin")
+    h = {"Authorization": "Bearer " + admin}
+    uid = next(u["id"] for u in client.get("/admin/users", headers=h).json()["users"] if u["username"] == "pepper")
+    r = client.post("/admin/api_keys", headers=h,
+                    json={"user_id": uid, "description": "laptop cam", "device_id": "ui-cam"})
+    assert r.status_code == 200 and r.json()["device_id"] == "ui-cam"
+    key = r.json()["key"]
+    # listed with its device binding
+    assert any(k.get("device_id") == "ui-cam" for k in client.get("/admin/api_keys", headers=h).json()["keys"])
+    # and it actually works as an edge key: it can post events (recorded under ITS device, not a spoof)
+    assert client.post("/events", headers={"Authorization": "Bearer " + key},
+                       json={"device_id": "SPOOF", "type": "heartbeat"}).status_code == 200
+    svc = client.get("/admin/services", headers=h).json()["services"]
+    assert any(s["name"] == "Camera · ui-cam" and s["status"] == "active" for s in svc)
+
+
+def test_admin_mint_unbound_key_cannot_post_events(client):
+    # Contrast: an UNBOUND key for a non-admin user may NOT post events (so device_id matters).
+    admin = _tok(client, "tony", "pw-admin")
+    h = {"Authorization": "Bearer " + admin}
+    uid = next(u["id"] for u in client.get("/admin/users", headers=h).json()["users"] if u["username"] == "pepper")
+    key = client.post("/admin/api_keys", headers=h,
+                      json={"user_id": uid, "description": "generic"}).json()["key"]
+    assert client.post("/events", headers={"Authorization": "Bearer " + key},
+                       json={"device_id": "x", "type": "motion"}).status_code == 403
+
+
 def test_volume_authz_denies_unprivileged(client):
     # pepper (plain user, can_control_devices=0) must NOT be able to queue a device command.
     tok = _tok(client, "pepper", "pw-user")

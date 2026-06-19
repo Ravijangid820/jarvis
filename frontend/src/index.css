@@ -712,6 +712,8 @@ html[data-theme="ember"]    body { filter: hue-rotate(-156deg) saturate(1.2); }
 
 .adm-hint { font-size: 0.75rem; color: rgba(103,199,235,0.6); margin-bottom: 16px; line-height: 1.6; }
 .adm-hint code { font-family: var(--font-data); font-size: 0.74rem; color: var(--stark-gold); }
+.adm-link { background: none; border: none; color: var(--holo-cyan); font: inherit; cursor: pointer; padding: 0 2px; text-decoration: underline; }
+.adm-link:hover { text-shadow: 0 0 8px var(--holo-cyan-glow); }
 
 /* Service status board (green active / red inactive). */
 .adm-services { display: flex; flex-direction: column; gap: 2px; }

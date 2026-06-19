@@ -217,6 +217,9 @@ class CreateUserRequest(BaseModel):
 class CreateKeyRequest(BaseModel):
     user_id: int
     description: str
+    # Optional: bind the key to one device (e.g. "laptop-cam"). A bound key may ONLY post events as
+    # that device (F1). Edge/camera agents need this — a plain unbound non-admin key can't post events.
+    device_id: Optional[str] = Field(default=None, max_length=64)
 
 
 class KnowledgeFactRequest(BaseModel):
@@ -834,11 +837,13 @@ def admin_create_key(req: CreateKeyRequest, request: Request):
         if not conn.execute("SELECT 1 FROM users WHERE id = ?", (req.user_id,)).fetchone():
             raise HTTPException(status_code=400, detail="No such user")
         new_key = "jk-" + secrets.token_hex(16)
+        device_id = (req.device_id or "").strip() or None     # "" → NULL (unbound), like the CLI
         # Store only the hash + a short display prefix; the plaintext is shown once.
-        conn.execute("INSERT INTO api_keys (key_string, key_prefix, user_id, description) VALUES (?, ?, ?, ?)",
-                     (hash_token(new_key), new_key[:10], req.user_id, req.description))
+        conn.execute("INSERT INTO api_keys (key_string, key_prefix, user_id, description, device_id) "
+                     "VALUES (?, ?, ?, ?, ?)",
+                     (hash_token(new_key), new_key[:10], req.user_id, req.description, device_id))
         conn.commit()
-        return {"key": new_key}
+        return {"key": new_key, "device_id": device_id}
     finally:
         conn.close()
 
@@ -849,7 +854,7 @@ def admin_list_keys(request: Request):
     conn = get_db()
     try:
         keys = conn.execute(
-            "SELECT rowid AS id, key_prefix, user_id, description, created_at, usage_count, last_used_at "
+            "SELECT rowid AS id, key_prefix, user_id, description, device_id, created_at, usage_count, last_used_at "
             "FROM api_keys ORDER BY created_at DESC").fetchall()
         # Display the prefix only — the full key is never recoverable (hash at rest).
         return {"keys": [{**dict(k), "key_string": (k["key_prefix"] or "jk-") + "…"} for k in keys]}
