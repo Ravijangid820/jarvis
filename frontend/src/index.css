@@ -107,6 +107,8 @@ button, input, textarea { font-family: inherit; outline: none; }
 .panel-row { display: flex; gap: 8px; }
 .hud-btn { flex: 1; padding: 8px; background: transparent; border: 1px solid var(--holo-cyan); color: var(--holo-cyan); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.15em; font-weight: 600; cursor: pointer; transition: all 0.2s; clip-path: var(--clip-angle-sm); }
 .hud-btn:hover { background: var(--holo-cyan-dim); box-shadow: inset 0 0 15px var(--holo-cyan-glow); }
+.hud-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.hud-btn:disabled:hover { background: transparent; box-shadow: none; }
 .hud-btn.warn { border-color: var(--alert-orange); color: var(--alert-orange); }
 .hud-btn.warn:hover { background: rgba(251, 202, 3, 0.1); box-shadow: inset 0 0 15px rgba(251, 202, 3, 0.3); }
 

@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-19 — Admin: role management (promote/demote) + last-admin protection
+
+- **Promote/demote users** from the admin Users tab — new `PUT /admin/users/{id}/role`
+  (`user`|`admin`). Promotion is live immediately for the user's existing session (role is read
+  per-request). UI shows **Make admin / Revoke admin** per user.
+- **Last admin can't be removed:** demoting or deleting the only remaining admin → **400** (so you
+  can never lock yourself out). The delete path also re-raises `HTTPException` so the 400/404 isn't
+  masked as a 500. Tests 53 → 57.
+
 ## 2026-06-19 — Camera: split task scripts (setup · run · service), Linux + Windows
 
 - Three purpose-specific scripts, each with a Linux/macOS/Pi `.sh` and a Windows `.ps1`:

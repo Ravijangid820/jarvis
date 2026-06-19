@@ -64,6 +64,12 @@ export default function Admin({ token, onExit }) {
     if (!confirm("Terminate this user and purge their data?")) return
     try { await api("/admin/users/" + id, "DELETE"); load() } catch (e) { setErr(e.message) }
   }
+  const setRole = async (id, role) => {
+    const verb = role === "admin" ? "Grant admin clearance to" : "Revoke admin clearance from"
+    if (!confirm(verb + " this user?")) return
+    try { await api("/admin/users/" + id + "/role", "PUT", { role }); load() } catch (e) { setErr(e.message) }
+  }
+  const adminCount = users.filter(u => u.role === "admin").length
   const createKey = async () => {
     if (!kUser || !kDesc) return setErr("Target UID and designation required")
     try {
@@ -142,15 +148,28 @@ export default function Admin({ token, onExit }) {
             <button className="hud-btn" onClick={createUser}>Authorize User</button>
           </div>
           <table className="adm-table">
-            <thead><tr><th>UID</th><th>Username</th><th>Clearance</th><th>Sessions</th><th>Msgs</th><th>Established</th><th>Override</th></tr></thead>
+            <thead><tr><th>UID</th><th>Username</th><th>Clearance</th><th>Sessions</th><th>Msgs</th><th>Established</th><th>Actions</th></tr></thead>
             <tbody>
-              {users.map(u => (
-                <tr key={u.id}>
-                  <td>#{u.id}</td><td className="adm-em">{u.username}</td><td>{u.role}</td>
-                  <td>{u.total_chats}</td><td>{u.total_messages}</td><td>{u.created_at}</td>
-                  <td><button className="hud-btn warn" onClick={() => delUser(u.id)}>Terminate</button></td>
-                </tr>
-              ))}
+              {users.map(u => {
+                const lastAdmin = u.role === "admin" && adminCount <= 1
+                return (
+                  <tr key={u.id}>
+                    <td>#{u.id}</td><td className="adm-em">{u.username}</td>
+                    <td>{u.role === "admin" ? <span className="adm-em">admin</span> : "user"}</td>
+                    <td>{u.total_chats}</td><td>{u.total_messages}</td><td>{u.created_at}</td>
+                    <td style={{ display: "flex", gap: 6 }}>
+                      {u.role === "admin"
+                        ? <button className="hud-btn" disabled={lastAdmin}
+                            title={lastAdmin ? "Can't revoke the last admin" : ""}
+                            onClick={() => setRole(u.id, "user")}>Revoke admin</button>
+                        : <button className="hud-btn" onClick={() => setRole(u.id, "admin")}>Make admin</button>}
+                      <button className="hud-btn warn" disabled={lastAdmin}
+                        title={lastAdmin ? "Can't delete the last admin" : ""}
+                        onClick={() => delUser(u.id)}>Terminate</button>
+                    </td>
+                  </tr>
+                )
+              })}
               {users.length === 0 && <tr><td colSpan="7" className="adm-empty">No users</td></tr>}
             </tbody>
           </table>

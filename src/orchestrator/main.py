@@ -218,6 +218,10 @@ class CreateUserRequest(BaseModel):
     role: Literal["user", "admin"] = "user"
 
 
+class RoleUpdateRequest(BaseModel):
+    role: Literal["user", "admin"]
+
+
 class CreateKeyRequest(BaseModel):
     user_id: int
     description: str
@@ -814,6 +818,13 @@ def admin_delete_user(user_id: int, request: Request):
         raise HTTPException(status_code=400, detail="Cannot delete self")
     conn = get_db()
     try:
+        target = conn.execute("SELECT role FROM users WHERE id = ?", (user_id,)).fetchone()
+        if target is None:
+            raise HTTPException(status_code=404, detail="No such user")
+        # Never allow removing the last admin — it would lock everyone out of the console.
+        if target["role"] == "admin" and \
+           conn.execute("SELECT COUNT(*) AS n FROM users WHERE role='admin'").fetchone()["n"] <= 1:
+            raise HTTPException(status_code=400, detail="Cannot delete the last admin")
         sessions = conn.execute("SELECT id FROM chat_sessions WHERE user_id = ?", (user_id,)).fetchall()
         all_msg_ids = []
         for (sid,) in sessions:
@@ -823,6 +834,8 @@ def admin_delete_user(user_id: int, request: Request):
         conn.execute("DELETE FROM chat_sessions WHERE user_id = ?", (user_id,))
         conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
         conn.commit()
+    except HTTPException:
+        raise
     except Exception as e:
         conn.rollback()
         logger.error("admin_delete_user(%s) failed: %s", user_id, e)
@@ -831,6 +844,25 @@ def admin_delete_user(user_id: int, request: Request):
         conn.close()
     memory.delete_vectors(all_msg_ids)
     return {"status": "ok"}
+
+
+@app.put("/admin/users/{user_id}/role")
+def admin_set_role(user_id: int, req: RoleUpdateRequest, request: Request):
+    """Promote a user to admin or demote back to user. Refuses to demote the last admin."""
+    _require_admin(request)
+    conn = get_db()
+    try:
+        target = conn.execute("SELECT role FROM users WHERE id = ?", (user_id,)).fetchone()
+        if target is None:
+            raise HTTPException(status_code=404, detail="No such user")
+        if target["role"] == "admin" and req.role == "user" and \
+           conn.execute("SELECT COUNT(*) AS n FROM users WHERE role='admin'").fetchone()["n"] <= 1:
+            raise HTTPException(status_code=400, detail="Cannot demote the last admin")
+        conn.execute("UPDATE users SET role = ? WHERE id = ?", (req.role, user_id))
+        conn.commit()
+        return {"status": "ok", "role": req.role}
+    finally:
+        conn.close()
 
 
 @app.post("/admin/api_keys")

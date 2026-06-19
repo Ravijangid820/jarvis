@@ -240,6 +240,43 @@ def test_device_key_never_wields_admin(client):
                        json={"device_id": "cam-admin", "type": "motion"}).status_code == 200
 
 
+def _uid(client, h, username):
+    return next(u["id"] for u in client.get("/admin/users", headers=h).json()["users"] if u["username"] == username)
+
+
+def test_role_promote_then_demote(client):
+    h = {"Authorization": "Bearer " + _tok(client, "tony", "pw-admin")}
+    _seed_user("roletmp", "pw", "user")
+    uid = _uid(client, h, "roletmp")
+    assert client.put(f"/admin/users/{uid}/role", headers=h, json={"role": "admin"}).status_code == 200
+    assert next(u["role"] for u in client.get("/admin/users", headers=h).json()["users"] if u["id"] == uid) == "admin"
+    assert client.put(f"/admin/users/{uid}/role", headers=h, json={"role": "user"}).status_code == 200
+    client.delete(f"/admin/users/{uid}", headers=h)          # cleanup → back to tony-only admin
+
+
+def test_promoted_user_gains_admin_access(client):
+    h = {"Authorization": "Bearer " + _tok(client, "tony", "pw-admin")}
+    _seed_user("promoteme", "pw-pm", "user")
+    uid = _uid(client, h, "promoteme")
+    ut = {"Authorization": "Bearer " + _tok(client, "promoteme", "pw-pm")}
+    assert client.get("/admin/users", headers=ut).status_code == 403     # not admin yet
+    client.put(f"/admin/users/{uid}/role", headers=h, json={"role": "admin"})
+    assert client.get("/admin/users", headers=ut).status_code == 200     # promotion is live for the session
+    client.delete(f"/admin/users/{uid}", headers=h)          # 2 admins → deleting promoteme leaves tony
+
+
+def test_cannot_demote_last_admin(client):
+    h = {"Authorization": "Bearer " + _tok(client, "tony", "pw-admin")}
+    tony_id = _uid(client, h, "tony")                        # the only admin
+    assert client.put(f"/admin/users/{tony_id}/role", headers=h, json={"role": "user"}).status_code == 400
+    assert next(u["role"] for u in client.get("/admin/users", headers=h).json()["users"] if u["id"] == tony_id) == "admin"
+
+
+def test_role_change_requires_admin(client):
+    ut = {"Authorization": "Bearer " + _tok(client, "pepper", "pw-user")}
+    assert client.put("/admin/users/1/role", headers=ut, json={"role": "admin"}).status_code == 403
+
+
 def test_volume_authz_denies_unprivileged(client):
     # pepper (plain user, can_control_devices=0) must NOT be able to queue a device command.
     tok = _tok(client, "pepper", "pw-user")
