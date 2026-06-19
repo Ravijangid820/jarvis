@@ -247,6 +247,16 @@ class TTSRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=600)
 
 
+class FaceEnrollRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=64)
+    embedding: List[float] = Field(..., min_length=8, max_length=2048)   # L2-normalized vector
+
+
+class FaceUpdateRequest(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    user_id: Optional[int] = None          # link face → account (null clears the link)
+
+
 # ----------------- Auth endpoints -----------------
 @app.post("/auth/login")
 def login(req: LoginRequest, request: Request):
@@ -404,6 +414,34 @@ def greeting(request: Request):
     just the wake word ("Jarvis" → "Yes, sir?")."""
     text = _jarvis_ack()
     return {"text": text, "audio": synthesize_tts(text)}
+
+
+# ----------------- Faces (enrollment + recognition data) -----------------
+@app.post("/faces/enroll")
+def enroll_face(req: FaceEnrollRequest, request: Request):
+    """Register a face embedding (computed on the edge/laptop). Admin-only — faces can drive
+    authorization, so enrollment is privileged. Re-enrolling a name replaces its embedding."""
+    _require_admin(request)
+    conn = get_db()
+    try:
+        conn.execute("DELETE FROM faces WHERE name = ?", (req.name.strip(),))
+        cur = conn.execute("INSERT INTO faces (name, embedding) VALUES (?, ?)",
+                           (req.name.strip(), json.dumps(req.embedding)))
+        conn.commit()
+        return {"status": "ok", "id": cur.lastrowid}
+    finally:
+        conn.close()
+
+
+@app.get("/faces/enrolled")
+def enrolled_faces(request: Request):
+    """The enrolled set for the edge agent to match against: {name: [embedding floats]}."""
+    conn = get_db()
+    try:
+        rows = conn.execute("SELECT name, embedding FROM faces").fetchall()
+        return {"enrolled": {r["name"]: json.loads(r["embedding"]) for r in rows}}
+    finally:
+        conn.close()
 
 
 def _can_control_devices(request: Request) -> bool:
@@ -784,6 +822,56 @@ def admin_events(request: Request, limit: int = 50):
                 e["data"] = {}
             events.append(e)
         return {"events": events, "count": len(events)}
+    finally:
+        conn.close()
+
+
+@app.get("/admin/faces")
+def admin_list_faces(request: Request):
+    """Enrolled faces for the admin Faces page (no embeddings — just metadata + linked user)."""
+    _require_admin(request)
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT f.id, f.name, f.user_id, u.username, f.created_at "
+            "FROM faces f LEFT JOIN users u ON f.user_id = u.id ORDER BY f.name").fetchall()
+        return {"faces": [dict(r) for r in rows]}
+    finally:
+        conn.close()
+
+
+@app.put("/admin/faces/{face_id}")
+def admin_update_face(face_id: int, req: FaceUpdateRequest, request: Request):
+    """Rename a face and/or link it to a user account. Only the fields actually sent are changed
+    (so a rename can't clobber the link); send user_id=null to explicitly clear the link."""
+    _require_admin(request)
+    fields = req.model_fields_set
+    conn = get_db()
+    try:
+        if not conn.execute("SELECT 1 FROM faces WHERE id = ?", (face_id,)).fetchone():
+            raise HTTPException(status_code=404, detail="No such face")
+        if "name" in fields and req.name:
+            conn.execute("UPDATE faces SET name = ? WHERE id = ?", (req.name.strip(), face_id))
+        if "user_id" in fields:
+            if req.user_id is not None and not conn.execute("SELECT 1 FROM users WHERE id = ?", (req.user_id,)).fetchone():
+                raise HTTPException(status_code=400, detail="No such user")
+            conn.execute("UPDATE faces SET user_id = ? WHERE id = ?", (req.user_id, face_id))
+        conn.commit()
+        return {"status": "ok"}
+    finally:
+        conn.close()
+
+
+@app.delete("/admin/faces/{face_id}")
+def admin_delete_face(face_id: int, request: Request):
+    _require_admin(request)
+    conn = get_db()
+    try:
+        cur = conn.execute("DELETE FROM faces WHERE id = ?", (face_id,))
+        conn.commit()
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="No such face")
+        return {"status": "ok"}
     finally:
         conn.close()
 

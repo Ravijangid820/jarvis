@@ -141,6 +141,21 @@ voice bridge uses this to speak replies).
 
 ---
 
+## Faces (recognition data)
+
+Detection/recognition run on the edge; the server only **stores enrolled embeddings** and links
+them to user accounts (so identity can drive per-user authorization). Enrollment is **admin-only**.
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| `POST` | `/faces/enroll` | `{ name, embedding[] }` | **admin** · register a face (embedding computed on the edge/laptop); re-enrolling a name replaces it. |
+| `GET` | `/faces/enrolled` | — | `{ "enrolled": { name: [embedding] } }` — the set the edge agent matches against. |
+| `GET` | `/admin/faces` | — | **admin** · `{ "faces": [{id, name, user_id, username, created_at}] }` (no embeddings). |
+| `PUT` | `/admin/faces/{id}` | `{ name?, user_id? }` | **admin** · rename and/or link to a user (only fields sent change; `user_id:null` clears the link). |
+| `DELETE` | `/admin/faces/{id}` | — | **admin** · remove an enrolled face. |
+
+---
+
 ## Misc / unauthenticated
 
 | Method | Path | Returns |

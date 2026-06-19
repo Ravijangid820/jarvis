@@ -91,3 +91,15 @@ CREATE TABLE IF NOT EXISTS device_commands (
     delivered_at DATETIME
 );
 CREATE INDEX IF NOT EXISTS idx_device_commands_pending ON device_commands(device_id, status, id);
+
+-- Enrolled faces for recognition. `embedding` is a JSON array of floats (L2-normalized) produced
+-- by the edge's face-embedding model; `user_id` optionally links a face to an account so identity
+-- can drive per-user authorization. Runtime recognition runs on the edge; only vectors are stored.
+CREATE TABLE IF NOT EXISTS faces (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    embedding TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_faces_name ON faces(name);

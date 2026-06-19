@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-19 — Face management: server store + admin API (foundation)
+
+- New `faces` table + endpoints: `POST /faces/enroll` (admin; stores an embedding computed on the
+  edge), `GET /faces/enrolled` (the edge pulls the known set to match locally), and admin
+  `GET`/`PUT`/`DELETE /admin/faces` to list, rename, **link a face → a user account** (for per-user
+  authz), and remove. Recognition stays on the edge; only vectors are stored. Tests 45 → 47.
+  (Next: the `jarvis_edge.enroll` CLI + an admin "Faces" sub-page.)
+
 ## 2026-06-19 — Edge faces: MediaPipe BlazeFace detector (with Haar fallback)
 
 - Face **detection** now prefers **MediaPipe BlazeFace** (more robust than the Haar cascade —

@@ -285,3 +285,29 @@ def test_greeting(client):
     admin = _tok(client, "tony", "pw-admin")
     r = client.get("/greeting", headers={"Authorization": "Bearer " + admin})
     assert r.status_code == 200 and "text" in r.json()
+
+
+def test_face_enroll_requires_admin(client):
+    tok = _tok(client, "pepper", "pw-user")
+    r = client.post("/faces/enroll", headers={"Authorization": "Bearer " + tok},
+                    json={"name": "x", "embedding": [0.1] * 16})
+    assert r.status_code == 403
+
+
+def test_face_enroll_list_link_rename_delete(client):
+    admin = _tok(client, "tony", "pw-admin")
+    h = {"Authorization": "Bearer " + admin}
+    assert client.post("/faces/enroll", headers=h, json={"name": "Ravi", "embedding": [0.1] * 16}).status_code == 200
+    # edge fetch sees the embedding
+    enrolled = client.get("/faces/enrolled", headers=h).json()["enrolled"]
+    assert "Ravi" in enrolled and len(enrolled["Ravi"]) == 16
+    fid = next(f["id"] for f in client.get("/admin/faces", headers=h).json()["faces"] if f["name"] == "Ravi")
+    # link to a user (look up pepper's id)
+    c = sqlite3.connect(_DB); pid = c.execute("SELECT id FROM users WHERE username='pepper'").fetchone()[0]; c.close()
+    assert client.put(f"/admin/faces/{fid}", headers=h, json={"user_id": pid}).status_code == 200
+    # rename must NOT clobber the link
+    assert client.put(f"/admin/faces/{fid}", headers=h, json={"name": "Ravi J"}).status_code == 200
+    row = next(f for f in client.get("/admin/faces", headers=h).json()["faces"] if f["id"] == fid)
+    assert row["name"] == "Ravi J" and row["user_id"] == pid and row["username"] == "pepper"
+    assert client.delete(f"/admin/faces/{fid}", headers=h).status_code == 200
+    assert all(f["id"] != fid for f in client.get("/admin/faces", headers=h).json()["faces"])
