@@ -10,6 +10,7 @@ import json
 import logging
 import signal
 import time
+import urllib.request
 from pathlib import Path
 
 from .capture import Camera
@@ -35,6 +36,18 @@ def _load_key(cfg):
     if p.stat().st_mode & 0o077:
         log.warning("%s is group/other-readable — run: chmod 600 %s", p, p)
     return p.read_text().strip()
+
+
+def _fetch_enrolled(server, key):
+    """Pull the centrally-managed enrolled faces ({name: embedding}) for local recognition."""
+    req = urllib.request.Request(server.rstrip("/") + "/faces/enrolled",
+                                 headers={"Authorization": "Bearer " + key})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.loads(r.read().decode()).get("enrolled", {})
+    except Exception as e:
+        log.warning("could not fetch enrolled faces: %s", e)
+        return {}
 
 
 def _build_heavy(det_cfg):
@@ -67,6 +80,12 @@ def run(config_path, dry_run=False):
 
     motion = MotionDetector(det_cfg.get("motion", {})) if det_cfg.get("motion", {}).get("enabled", True) else None
     heavy = _build_heavy(det_cfg)
+    # Recognition matches against centrally-managed identities — pull them from the server.
+    fdet = next((d for d in heavy if d.name == "faces"), None)
+    if fdet is not None and key:
+        enrolled = _fetch_enrolled(cfg["server"]["url"], key)
+        fdet.set_known(enrolled)
+        log.info("loaded %d enrolled face(s) from server", len(enrolled))
     last_run = {d.name: 0.0 for d in heavy}
     rr = 0
 

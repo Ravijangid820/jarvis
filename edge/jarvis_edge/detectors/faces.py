@@ -97,7 +97,11 @@ class FaceDetector(Detector):
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         return [tuple(map(int, b)) for b in self._cascade.detectMultiScale(gray, 1.2, 5, minSize=(60, 60))]
 
-    def _recognize(self, crop):
+    def embed(self, crop):
+        """Face crop → L2-normalized embedding (list[float]); None if no embedding model.
+        Used both for recognition and by the enrollment CLI."""
+        if self._embed is None:
+            return None
         cv2 = self._cv2
         face = cv2.resize(crop, (self._size, self._size)).astype("float32")
         face = (face - 127.5) / 128.0
@@ -105,13 +109,26 @@ class FaceDetector(Detector):
         name_in = self._embed.get_inputs()[0].name
         vec = self._embed.run(None, {name_in: blob})[0][0]
         norm = math.sqrt(sum(v * v for v in vec)) or 1.0
-        vec = [v / norm for v in vec]
+        return [float(v / norm) for v in vec]
+
+    def _recognize(self, crop):
+        vec = self.embed(crop)
+        if vec is None:
+            return (None, None)
         best, best_sim = None, -1.0
         for nm, ev in self._known.items():
             sim = sum(a * b for a, b in zip(vec, ev))      # both L2-normalized → cosine
             if sim > best_sim:
                 best, best_sim = nm, sim
         return (best, round(best_sim, 3)) if best_sim >= self._thresh else ("unknown", round(best_sim, 3))
+
+    def set_known(self, known):
+        """Replace the enrolled set (name → embedding). The agent pulls this from /faces/enrolled."""
+        self._known = dict(known or {})
+
+    def has_identity(self):
+        """True if recognition/enrollment is possible (the embedding model loaded)."""
+        return bool(self._ok and self._embed is not None)
 
     def process(self, frame):
         if not self._ok:

@@ -11,8 +11,11 @@ All notable changes to this project are documented in this file.
   `GET`/`PUT`/`DELETE /admin/faces` to list, rename, **link a face → a user account** (for per-user
   authz), and remove. Recognition stays on the edge; only vectors are stored. Tests 45 → 47.
 - **Admin "Faces" sub-page** — lists enrolled people, **links a face → a user account** (dropdown,
-  powers per-user device authz), and deletes; shows the enroll command. (Next: the
-  `jarvis_edge.enroll` CLI + the agent pulling `/faces/enrolled`.)
+  powers per-user device authz), and deletes; shows the enroll command.
+- **`jarvis_edge.enroll` CLI** — captures ~7 frames on the device, averages the face embedding, and
+  registers it (`POST /faces/enroll`). The **agent pulls `/faces/enrolled`** at startup so
+  recognition matches the centrally-managed identities. (`FaceDetector.embed()`/`set_known()`
+  factored out for reuse.) Enrollment needs an ONNX embedding model + an admin key.
 
 ## 2026-06-19 — Edge faces: MediaPipe BlazeFace detector (with Haar fallback)
 

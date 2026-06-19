@@ -108,6 +108,21 @@ uv run --no-project python -m jarvis_edge.agent --dry-run     # events logged, n
 uv run --no-project python -m jarvis_edge.agent               # events POST to /events → see them in /admin
 ```
 
+## Enroll a face (identity = who, not just where)
+
+MediaPipe finds the face; **identity** needs an embedding model — point
+`detectors.faces.embed_model` at an ONNX face-embedding model (e.g. MobileFaceNet) in your config,
+and use an **admin** API key (`/faces/enroll` is admin-only). Then, on the device with the camera:
+
+```bash
+cd edge
+uv run --no-project python -m jarvis_edge.enroll --name "Ravi"   # ~7 frames, averaged, registered
+```
+
+Then **manage / link** faces in the **admin → Faces** page (linking a face to a user account is what
+gates device actions by who's present). The running agent pulls the enrolled set from
+`/faces/enrolled` at startup, and recognition happens locally.
+
 ## Layout
 
 ```
@@ -115,12 +130,13 @@ edge/
   README.md            this file
   requirements.txt     Pi-side deps (separate from the server's pyproject)
   config.example.json  server URL, camera, per-detector toggles/thresholds
-  setup.sh             Pi bootstrap (64-bit check, apt + venv + pip)
+  setup.sh             Pi bootstrap (64-bit check, apt + uv venv + uv pip)
   jarvis_edge/
     capture.py         camera abstraction (picamera2 for CSI, OpenCV for USB)
     events.py          event client (POST + offline queue + retry)
-    agent.py           main loop + motion-gated scheduler
-    bench.py           per-detector FPS benchmark (run on the Pi)
+    agent.py           main loop + motion-gated scheduler (+ pulls enrolled faces)
+    enroll.py          enroll a face → server (capture, average embedding, POST)
+    bench.py           per-detector FPS benchmark (Pi or laptop webcam)
     detectors/
       base.py          Detector interface
       motion.py        MOG2 frame-diff (always available)
@@ -140,6 +156,10 @@ turn on **identity**. `pose`/`gestures` accept `model_complexity`.
    `vision_events`. (Acting on them — notifications/automation — can hang off this.)
 3. ✅ **Faces / pose / gestures:** implemented (faces identity is optional, model-gated). **Now:
    benchmark on the Pi** and tune `interval_s` / which to enable.
-4. **Enrollment:** add a helper to build `enrolled_file` embeddings from known-face images.
-5. **Actions:** map gestures → actions — define what "volume" targets (server media, a player,
+4. ✅ **Enrollment + face management:** `jarvis_edge.enroll` (CLI) → server `faces` store; admin
+   **Faces** page lists / links face→user / deletes; the agent pulls `/faces/enrolled`. Future:
+   in-browser capture enrollment.
+5. **Identity → authorization:** link a recognized face's user to the per-user device permissions
+   (the "only certain people can control the lights" goal).
+6. **Actions:** map gestures → actions — define what "volume" targets (server media, a player,
    or the Pi's own audio) before wiring.
