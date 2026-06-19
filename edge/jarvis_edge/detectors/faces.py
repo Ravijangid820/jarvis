@@ -1,8 +1,12 @@
 """Face detection + optional identity.
 
-Detection works out of the box (OpenCV Haar cascade ships with opencv-data; or a DNN SSD if
-you point `detector_proto`/`detector_model` at the res10 caffe files). Identity is optional and
-turns on when you provide `embed_model` (an ONNX face-embedding model, e.g. MobileFaceNet) and an
+Detection prefers **MediaPipe BlazeFace** (more robust than Haar — fewer false positives, handles
+angle/lighting, CPU-friendly), and automatically falls back to a DNN SSD (if you point
+`detector_proto`/`detector_model` at the res10 caffe files) or the OpenCV Haar cascade if MediaPipe
+isn't installed — so detection works on any device, just better where MediaPipe is present.
+
+MediaPipe finds *where* a face is; **identity** (*who* it is) is separate and optional: it turns on
+when you provide `embed_model` (an ONNX face-embedding model, e.g. MobileFaceNet) and an
 `enrolled_file` (JSON: {name: [embedding floats]}). Without those it emits `face_seen` with the
 bounding box and name=null.
 
@@ -27,6 +31,7 @@ class FaceDetector(Detector):
     def __init__(self, cfg):
         super().__init__(cfg)
         self._cv2 = None
+        self._mp = None           # MediaPipe BlazeFace detector (preferred)
         self._net = None          # DNN detector (optional)
         self._cascade = None      # Haar detector (fallback, always available)
         self._embed = None        # ONNX embedding session (optional)
@@ -41,13 +46,20 @@ class FaceDetector(Detector):
         try:
             import cv2
             self._cv2 = cv2
-            proto, model = self.cfg.get("detector_proto"), self.cfg.get("detector_model")
-            if proto and model and Path(proto).exists() and Path(model).exists():
-                self._net = cv2.dnn.readNetFromCaffe(proto, model)
-                log.info("faces: using DNN detector")
-            else:
-                self._cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-                log.info("faces: using Haar cascade detector")
+            # Preferred: MediaPipe BlazeFace. Fall back to DNN (if model files) or Haar.
+            try:
+                import mediapipe as mp
+                self._mp = mp.solutions.face_detection.FaceDetection(
+                    model_selection=0, min_detection_confidence=float(self.cfg.get("min_confidence", 0.6)))
+                log.info("faces: using MediaPipe BlazeFace detector")
+            except Exception:
+                proto, model = self.cfg.get("detector_proto"), self.cfg.get("detector_model")
+                if proto and model and Path(proto).exists() and Path(model).exists():
+                    self._net = cv2.dnn.readNetFromCaffe(proto, model)
+                    log.info("faces: MediaPipe unavailable — using DNN detector")
+                else:
+                    self._cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+                    log.info("faces: MediaPipe unavailable — using Haar cascade detector")
             emb = self.cfg.get("embed_model")
             if emb and Path(emb).exists():
                 import onnxruntime as ort
@@ -62,6 +74,15 @@ class FaceDetector(Detector):
 
     def _detect(self, frame):
         cv2 = self._cv2
+        h, w = frame.shape[:2]
+        if self._mp is not None:
+            res = self._mp.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            out = []
+            for d in (res.detections or []):
+                b = d.location_data.relative_bounding_box
+                x, y = int(b.xmin * w), int(b.ymin * h)
+                out.append((max(0, x), max(0, y), max(1, int(b.width * w)), max(1, int(b.height * h))))
+            return out
         if self._net is not None:
             h, w = frame.shape[:2]
             blob = cv2.dnn.blobFromImage(frame, 1.0, (300, 300), (104, 177, 123))

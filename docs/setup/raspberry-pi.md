@@ -124,14 +124,15 @@ edge/
     detectors/
       base.py          Detector interface
       motion.py        MOG2 frame-diff (always available)
-      faces.py         OpenCV detect (Haar/DNN) + optional ONNX identity
+      faces.py         MediaPipe BlazeFace (Haar/DNN fallback) + optional ONNX identity
       pose.py          MediaPipe Pose → presence/zone/posture
       gestures.py      MediaPipe Hands → open_palm/fist/thumb_up/down/point
 ```
 
-Optional model config (in each detector's config block): `faces` accepts `detector_proto` +
-`detector_model` (res10 DNN, else Haar), and `embed_model` (ONNX) + `enrolled_file` (JSON of
-`{name: [embedding]}`) to turn on identity. `pose`/`gestures` accept `model_complexity`.
+Optional model config (in each detector's config block): `faces` detection prefers **MediaPipe**
+(install it), with `detector_proto` + `detector_model` (res10 DNN) or Haar as fallbacks, and
+`min_confidence` to tune it; `embed_model` (ONNX) + `enrolled_file` (JSON of `{name: [embedding]}`)
+turn on **identity**. `pose`/`gestures` accept `model_complexity`.
 
 ## Roadmap
 1. ✅ **Foundation:** capture · motion · event client · agent loop · setup.

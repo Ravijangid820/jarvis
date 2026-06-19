@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-19 — Edge faces: MediaPipe BlazeFace detector (with Haar fallback)
+
+- Face **detection** now prefers **MediaPipe BlazeFace** (more robust than the Haar cascade —
+  fewer false positives, better with angle/lighting, CPU-friendly), automatically falling back to
+  DNN/Haar when MediaPipe isn't installed (so it still works on any device). **Identity** is
+  unchanged — the optional ONNX embedding still answers *who* (MediaPipe finds *where*). New
+  `min_confidence` config. Unifies the detector stack (pose/gestures already use MediaPipe).
+
 ## 2026-06-18 — Edge camera: testable on a laptop (no Pi needed)
 
 - The edge vision agent runs on a **laptop webcam** (the camera layer already falls back to OpenCV

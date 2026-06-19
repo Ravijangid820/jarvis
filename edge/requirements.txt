@@ -11,5 +11,5 @@ numpy<2
 requests>=2.31,<3
 
 # Heavy / optional — install only when you enable the matching detector (Pi 3: expect a few FPS):
-# mediapipe>=0.10,<0.11    # pose + hand gestures; 64-bit OS only, memory-tight on 1 GB
+# mediapipe>=0.10,<0.11    # face detection + pose + hand gestures (recommended); 64-bit OS only, memory-tight on 1 GB
 # onnxruntime>=1.17,<2     # face-identity embedding model (faces.py)
