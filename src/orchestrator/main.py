@@ -160,8 +160,12 @@ async def security_middleware(request: Request, call_next):
                 "WHERE k.key_string = ?", (hash_token(token),)).fetchone()
             if row:
                 request.state.user_id = row["user_id"]
-                request.state.is_admin = (row["role"] == "admin")
                 request.state.device_id = row["device_id"]
+                # Defense-in-depth: a DEVICE-scoped key never wields admin, even if minted under an
+                # admin account. A camera/edge key is for posting events + reading the enrolled set;
+                # it must not be usable for /admin/* or enrollment. This bounds a stolen device key's
+                # blast radius regardless of which user it belongs to.
+                request.state.is_admin = (row["role"] == "admin") and not row["device_id"]
                 is_authenticated = True
                 try:
                     conn.execute("UPDATE api_keys SET usage_count = usage_count + 1, "

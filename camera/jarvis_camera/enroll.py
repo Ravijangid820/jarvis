@@ -6,8 +6,10 @@
 
 MediaPipe finds the face; the **embedding model** (set `detectors.faces.embed_model` to an ONNX
 face-embedding model, e.g. MobileFaceNet) turns it into the vector that identifies a person. This
-POSTs to the server's `/faces/enroll`, which is **admin-only** — so the configured `api_key_file`
-must hold an admin API key. Afterwards the running agent picks it up from `/faces/enrolled`.
+POSTs to the server's `/faces/enroll`, which is **admin-only** — so it uses the **admin** key
+(`admin_key_file`, default `config/admin.key`), NOT the agent's device key. Keep that admin key off
+the device except while enrolling. Afterwards the running agent picks the face up from
+`/faces/enrolled`.
 """
 import argparse
 import json
@@ -21,17 +23,16 @@ from pathlib import Path
 
 from .capture import Camera
 from .detectors.faces import FaceDetector
+from .keyfile import load_key
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("camera.enroll")
 CAMERA_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _load_key(cfg):
-    p = Path(cfg["server"].get("api_key_file", "config/agent.key"))
-    if not p.is_absolute():
-        p = CAMERA_ROOT / p
-    return p.read_text().strip() if p.exists() else ""
+def _load_admin_key(cfg):
+    # Enrollment is privileged → the ADMIN key, deliberately a different file from the device key.
+    return load_key(cfg["server"].get("admin_key_file", "config/admin.key"), CAMERA_ROOT)
 
 
 def _largest(boxes):
@@ -74,9 +75,10 @@ def run(name, frames, config_path):
     norm = math.sqrt(sum(a * a for a in avg)) or 1.0
     avg = [a / norm for a in avg]
 
-    key = _load_key(cfg)
+    key = _load_admin_key(cfg)
     if not key:
-        sys.exit("No API key — put an ADMIN key in the configured api_key_file to enroll.")
+        sys.exit("No admin key — put an ADMIN API key in config/admin.key (admin_key_file) to enroll. "
+                 "(The device's agent.key can't enroll — enrollment is admin-only by design.)")
     url = cfg["server"]["url"].rstrip("/") + "/faces/enroll"
     body = json.dumps({"name": name, "embedding": avg}).encode("utf-8")
     req = urllib.request.Request(url, data=body, method="POST",

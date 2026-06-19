@@ -19,6 +19,7 @@ from .detectors.gestures import GestureDetector
 from .detectors.motion import MotionDetector
 from .detectors.pose import PoseDetector
 from .events import EventClient
+from .keyfile import load_key
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 log = logging.getLogger("camera.agent")
@@ -28,14 +29,8 @@ HEAVY = {"faces": FaceDetector, "pose": PoseDetector, "gestures": GestureDetecto
 
 
 def _load_key(cfg):
-    p = Path(cfg["server"].get("api_key_file", "config/agent.key"))
-    if not p.is_absolute():
-        p = CAMERA_ROOT / p
-    if not p.exists():
-        return ""
-    if p.stat().st_mode & 0o077:
-        log.warning("%s is group/other-readable — run: chmod 600 %s", p, p)
-    return p.read_text().strip()
+    # The always-on agent uses ONLY the low-privilege, device-bound key (never the admin key).
+    return load_key(cfg["server"].get("api_key_file", "config/agent.key"), CAMERA_ROOT)
 
 
 def _fetch_enrolled(server, key):

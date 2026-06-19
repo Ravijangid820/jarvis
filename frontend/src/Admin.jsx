@@ -218,8 +218,8 @@ export default function Admin({ token, onExit }) {
           <div className="adm-panel">
             <h2>Enrolled Faces</h2>
             <p className="adm-hint">
-              Enroll on the device (which has the camera + embedding model):
-              <code> .venv\Scripts\python -m jarvis_camera.enroll --name "Name" </code>.
+              Enroll on the device (which has the camera + embedding model + an admin key):
+              <code> .venv\Scripts\python -m jarvis_camera.facecli add --name "Name" </code>.
               Link a face to a user to gate device actions by who's present.
             </p>
             <table className="adm-table">

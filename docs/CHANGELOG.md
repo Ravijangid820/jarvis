@@ -4,6 +4,20 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-19 — Camera: face-management CLI + device-key privilege hardening
+
+- **`jarvis_camera.facecli`** — one CLI to `list` / `verify` / `add` / `delete` faces from the device
+  with the camera. `verify` is **fully local** (capture → recognize on-device → print who's there,
+  sends nothing). `list`/`verify` use the low-privilege **device** key; `add`/`delete` use a separate
+  **admin** key (`config/admin.key`) the always-on agent never loads. New `keyfile.py` centralizes
+  key loading + the device/admin split + perm warnings; `enroll` now uses the admin key file.
+- **[SECURITY] A device-scoped API key can no longer wield admin**, even if minted under an admin
+  account (`is_admin = role==admin AND not device_id`). Found by testing — an admin-owned device key
+  could hit `/admin/*` and `/faces/enroll`. Now `/admin/*` + enroll → **403** for device keys, while
+  `/faces/enrolled` (read) + `/events` still work. Bounds a stolen camera key's blast radius. Tests
+  52 → 53. Added a "Security & attack surface" section to the camera doc (outbound-only, no listener,
+  no imagery leaves the device, mint the camera key under a non-admin user).
+
 ## 2026-06-19 — Rename `edge/` → `camera/` (one canonical, Windows-first camera module)
 
 - The vision module is now **`camera/`** (package **`jarvis_camera`**), reflecting that it's a

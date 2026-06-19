@@ -1,9 +1,10 @@
 {
-  "device_id": "pi-livingroom",
+  "device_id": "laptop-cam",
   "server": {
     "url": "http://192.168.0.101:5000",
     "events_endpoint": "/events",
-    "api_key_file": "config/agent.key"
+    "api_key_file": "config/agent.key",
+    "admin_key_file": "config/admin.key"
   },
   "camera": {
     "backend": "auto",
@@ -14,7 +15,7 @@
   },
   "detectors": {
     "motion":   { "enabled": true,  "min_area": 1500, "cooldown_s": 3 },
-    "faces":    { "enabled": false, "interval_s": 5 },
+    "faces":    { "enabled": false, "interval_s": 5, "embed_model": "", "recognize_threshold": 0.45 },
     "pose":     { "enabled": false, "interval_s": 3 },
     "gestures": { "enabled": false, "interval_s": 2 }
   }

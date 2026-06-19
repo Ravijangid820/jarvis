@@ -141,25 +141,51 @@ cp config.example.json config/config.json
 access your camera*); close Teams/Zoom/etc. so the webcam is free; the server's `:5000` must be
 reachable from the laptop (it already is if you open the Jarvis web UI in the laptop's browser).
 
-## Enroll a face (identity = who, not just where)
+## Manage faces (verify · list · add · delete)
 
-MediaPipe finds the face; **identity** needs an embedding model — point
-`detectors.faces.embed_model` at an ONNX face-embedding model (e.g. MobileFaceNet) in your config,
-and use an **admin** API key (`/faces/enroll` is admin-only). Then, on the device with the camera:
+Identity (*who*, not just *where*) needs an **ONNX face-embedding model** (e.g. MobileFaceNet) —
+point `detectors.faces.embed_model` at it. One small CLI does the lot, from the device with the camera:
 
 ```bash
-cd camera
-.venv/bin/python -m jarvis_camera.enroll --name "Ravi"            # ~7 frames, averaged, registered
-#  Windows:  .venv\Scripts\python -m jarvis_camera.enroll --name "Ravi"
+cd camera                                   # Windows: use  .venv\Scripts\python  below
+.venv/bin/python -m jarvis_camera.facecli list                   # who is enrolled
+.venv/bin/python -m jarvis_camera.facecli verify --seconds 5     # who is at the camera NOW (local)
+.venv/bin/python -m jarvis_camera.facecli add --name "Ravi"      # enroll (~7 frames, averaged)
+.venv/bin/python -m jarvis_camera.facecli delete --name "Ravi"   # remove
 ```
 
-The `api_key_file` in your config must hold an **admin** key for enrollment. For a first test you can
-point a second config (or temporarily swap `agent.key`) to an admin key just to enroll, then put the
-device-bound key back for normal running.
+**Two keys, on purpose** (least privilege):
 
-Then **manage / link** faces in the **admin → Faces** page (linking a face to a user account is what
-gates device actions by who's present). The running agent pulls the enrolled set from
-`/faces/enrolled` at startup, and recognition happens locally.
+| Command | Key used | Why |
+|---|---|---|
+| `list`, `verify` | **device** key (`config/agent.key`) | read-only; `verify` is 100% local (sends nothing) |
+| `add`, `delete`  | **admin** key (`config/admin.key`) | enrolling/removing faces changes who's authorized |
+
+Mint the **device** key in the **admin → Keys** tab (set a Device ID like `laptop-cam`). The **admin**
+key is only needed for `add`/`delete` — put it in `config/admin.key`, and **delete that file when
+you're done managing** so the running device never holds a privileged credential. You can also just
+manage faces in the **admin → Faces** web page (link a face → a user account to gate device actions
+by who's present). The running agent pulls the enrolled set from `/faces/enrolled` and recognizes
+locally.
+
+## Security & attack surface
+
+This module is built to be hard to abuse even if the laptop/Pi it runs on is compromised:
+
+- **Nothing listens.** The agent is **outbound-only** — it POSTs events to the server and never opens
+  a port. There is no inbound network surface to attack on the camera device.
+- **No imagery leaves the device.** Only small JSON events (`{type, name, ...}`) cross the LAN;
+  frames and embeddings stay local.
+- **Least-privilege credential.** ⚠️ **Mint the camera's device key under a *non-admin* user.** A
+  device-bound key can post events as its device and read the enrolled set — nothing more. (The
+  server also *enforces* this: a device-scoped key is denied admin even if it was minted under an
+  admin account — defense-in-depth.) So a stolen `agent.key`'s blast radius is bounded.
+- **Privileged ops are separate and transient.** `add`/`delete` use a different file (`admin.key`)
+  that the always-on agent never loads; remove it after use.
+- **Keys are files, never committed.** `config/` is gitignored; the loader warns if a key file is
+  group/other-readable (POSIX). On Windows keep it under your user profile.
+- **LAN trust today.** Traffic is plaintext HTTP on the LAN (the agent's key + face names are sent in
+  clear) — acceptable on a trusted home LAN; move to HTTPS when TLS is enabled on the orchestrator.
 
 ## Layout
 
@@ -174,8 +200,10 @@ camera/
   jarvis_camera/
     capture.py         camera abstraction (picamera2 for CSI, OpenCV for USB)
     events.py          event client (POST + offline queue + retry)
+    keyfile.py         shared API-key loader (device vs admin key separation + perm checks)
     agent.py           main loop + motion-gated scheduler (+ pulls enrolled faces)
-    enroll.py          enroll a face → server (capture, average embedding, POST)
+    facecli.py         manage faces: list / verify / add / delete (device vs admin key)
+    enroll.py          enroll a face → server (capture, average embedding, POST; admin key)
     bench.py           per-detector FPS benchmark (Pi or laptop webcam)
     detectors/
       base.py          Detector interface

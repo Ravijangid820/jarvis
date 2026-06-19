@@ -228,6 +228,18 @@ def test_admin_mint_unbound_key_cannot_post_events(client):
                        json={"device_id": "x", "type": "motion"}).status_code == 403
 
 
+def test_device_key_never_wields_admin(client):
+    # Defense-in-depth: a device-bound key minted under an ADMIN account must NOT have admin powers
+    # (device-binding scopes the device, it must also drop privilege). Bounds a stolen camera key.
+    key = _seed_device_key("tony", "cam-admin")     # tony is an admin user
+    h = {"Authorization": "Bearer " + key}
+    assert client.get("/admin/faces", headers=h).status_code == 403       # no admin surface
+    assert client.get("/admin/services", headers=h).status_code == 403
+    assert client.get("/faces/enrolled", headers=h).status_code == 200    # but read-only is fine
+    assert client.post("/events", headers=h,                              # and it can do its job
+                       json={"device_id": "cam-admin", "type": "motion"}).status_code == 200
+
+
 def test_volume_authz_denies_unprivileged(client):
     # pepper (plain user, can_control_devices=0) must NOT be able to queue a device command.
     tok = _tok(client, "pepper", "pw-user")
