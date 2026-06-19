@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-19 — Camera: split task scripts (setup · run · service), Linux + Windows
+
+- Three purpose-specific scripts, each with a Linux/macOS/Pi `.sh` and a Windows `.ps1`:
+  **`setup`** (deps + model download), **`run`** (foreground test — nothing installed), **`service`**
+  (`install|uninstall|status` — least-privilege autostart).
+- **`service`** persistence is least-privilege by design: Linux = a **systemd *user* service** (runs
+  as you, never root; hardened; `loginctl enable-linger` for pre-login boot on a Pi); Windows = a
+  **Scheduled Task at logon** (your account, *not* elevated, no admin, no third-party wrapper). The
+  agent stays **outbound-only** — no listening port either way.
+
 ## 2026-06-19 — Camera: YuNet+SFace face stack + smart setup with verified model download
 
 - **Face stack → OpenCV YuNet (detect) + SFace (recognize).** YuNet returns 5 landmarks → SFace

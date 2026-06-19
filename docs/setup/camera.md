@@ -135,6 +135,23 @@ bash setup.sh                 # auto-detects Pi vs Linux vs macOS; installs deps
 access your camera*); close Teams/Zoom/etc. so the webcam is free; the server's `:5000` must be
 reachable from the laptop (it already is if you open the Jarvis web UI in the laptop's browser).
 
+## The three scripts (setup · run · service)
+
+Each task is its own script, with a Linux/macOS/Pi `.sh` and a Windows `.ps1`:
+
+| Task | Linux / macOS / Pi | Windows |
+|---|---|---|
+| **Install** deps + download/verify models | `bash setup.sh` (`--with-pose`) | `setup.ps1` (`-WithPose`) |
+| **Run once** (foreground test, no service) | `bash run.sh` (`--dry-run`) | `run.ps1` (`--dry-run`) |
+| **Make persistent** (autostart) | `bash service.sh install\|uninstall\|status` | `service.ps1 install\|uninstall\|status` |
+
+- **`run`** is just a foreground launch (Ctrl-C to stop) — nothing is installed, so it's the safe way
+  to test on a laptop without leaving anything behind.
+- **`service`** installs a **least-privilege autostart**: on Linux a **systemd *user* service** (runs
+  as you, never root; `loginctl enable-linger` to start before login on a headless Pi); on Windows a
+  **Scheduled Task at your logon** (runs as you, *not* elevated, no third-party wrapper, no admin
+  needed). Neither opens any listening port — the agent stays outbound-only.
+
 ## Manage faces (verify · list · add · delete)
 
 Detection (**YuNet**) and identity (**SFace**) both come from `setup`, so there's nothing to
@@ -190,8 +207,9 @@ camera/
   requirements.txt          Pi-side deps (separate from the server's pyproject)
   requirements-desktop.txt  laptop deps (opencv + numpy + requests; mediapipe only for pose/gestures)
   config.example.json       server URL, camera, per-detector toggles/thresholds
-  setup.sh                  Linux / macOS / Pi bootstrap (auto-detects; deps + model download)
-  setup.ps1                 Windows bootstrap (uv venv 3.12 + opencv + model download; -WithPose)
+  setup.sh / setup.ps1      install: auto-detect platform, deps + model download (Linux/Pi · Windows)
+  run.sh   / run.ps1        run once in the foreground (testing; no service)
+  service.sh / service.ps1  make persistent: systemd user service (Linux) · Scheduled Task (Windows)
   models/                   YuNet + SFace ONNX (downloaded + sha256-verified by setup; gitignored)
   jarvis_camera/
     capture.py         camera abstraction (picamera2 for CSI, OpenCV for USB)
