@@ -1,10 +1,9 @@
-# Desktop/laptop deps (Windows / macOS / Linux) — for testing the camera code WITHOUT a Pi.
+# Desktop/laptop deps (Windows / macOS / Linux). Installed by setup.ps1 / setup.sh into camera/.venv.
 # (On the Raspberry Pi, OpenCV/picamera2 come from apt instead — see requirements.txt + setup.sh.)
-#   cd camera && uv venv && uv pip install -r requirements-desktop.txt
+#   cd camera && uv venv --python 3.12 && uv pip install -r requirements-desktop.txt
 numpy<2
 requests>=2.31,<3
-opencv-python>=4.8        # webcam capture + motion detection (the minimum to test the camera)
+opencv-python>=4.8        # capture + motion + FACES (YuNet detect + SFace recognize via cv2)
 
-# Optional — install only if you want these detectors:
-# mediapipe>=0.10,<0.11    # face detection + pose + hand gestures (recommended)
-# onnxruntime>=1.17,<2     # face-identity embeddings (faces.py)
+# Optional — only for pose + hand gestures (faces do NOT need this):
+# mediapipe>=0.10,<0.11    # MediaPipe Pose + Hands  (setup.ps1 -WithPose / setup.sh --with-pose)

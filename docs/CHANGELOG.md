@@ -4,6 +4,22 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-19 — Camera: YuNet+SFace face stack + smart setup with verified model download
+
+- **Face stack → OpenCV YuNet (detect) + SFace (recognize).** YuNet returns 5 landmarks → SFace
+  **aligns** each face before embedding (128-D), which is more accurate than the old center-crop. Runs
+  through **opencv-python only** — drops MediaPipe + onnxruntime from the face path (MediaPipe now
+  only for optional pose/gestures). `recognize_threshold` is SFace cosine (default 0.363).
+- **Models auto-downloaded by setup, from the official OpenCV Zoo, SHA-256-verified** (hashes taken
+  from OpenCV's own git-LFS pointers; mismatch aborts the install — supply-chain check). Stored in
+  `camera/models/` (gitignored). Verified end-to-end here: download+verify, model load, detect, SFace
+  align/embed → 128-D unit vector, cosine match.
+- **Smart `setup.sh`** auto-detects **Raspberry Pi vs Linux vs macOS** and installs accordingly (apt
+  OpenCV+picamera2 on Pi; pip opencv on desktop), then fetches + verifies the models. `setup.ps1`
+  does the same on Windows. Faces need no extra deps; `--with-pose` / `-WithPose` adds mediapipe.
+- Note: switching the embedding model invalidates any previously-enrolled faces (different vector
+  space) — re-enroll. (None were enrolled in production.)
+
 ## 2026-06-19 — Camera: face-management CLI + device-key privilege hardening
 
 - **`jarvis_camera.facecli`** — one CLI to `list` / `verify` / `add` / `delete` faces from the device

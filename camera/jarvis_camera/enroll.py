@@ -4,9 +4,9 @@
   .venv/bin/python -m jarvis_camera.enroll --name "Ravi" [--frames 7] [--config config/config.json]
   (Windows:  .venv\\Scripts\\python -m jarvis_camera.enroll --name "Ravi")
 
-MediaPipe finds the face; the **embedding model** (set `detectors.faces.embed_model` to an ONNX
-face-embedding model, e.g. MobileFaceNet) turns it into the vector that identifies a person. This
-POSTs to the server's `/faces/enroll`, which is **admin-only** — so it uses the **admin** key
+YuNet finds + aligns the face; SFace turns it into the embedding that identifies a person (both
+models are downloaded by setup). This POSTs to the server's `/faces/enroll`, which is **admin-only**
+— so it uses the **admin** key
 (`admin_key_file`, default `config/admin.key`), NOT the agent's device key. Keep that admin key off
 the device except while enrolling. Afterwards the running agent picks the face up from
 `/faces/enrolled`.
@@ -35,16 +35,16 @@ def _load_admin_key(cfg):
     return load_key(cfg["server"].get("admin_key_file", "config/admin.key"), CAMERA_ROOT)
 
 
-def _largest(boxes):
-    return max(boxes, key=lambda b: b[2] * b[3]) if boxes else None
+def _largest(rows):
+    return max(rows, key=lambda r: r[2] * r[3]) if rows else None
 
 
 def run(name, frames, config_path):
     cfg = json.loads(Path(config_path).read_text())
     fd = FaceDetector(cfg.get("detectors", {}).get("faces", {}))
     if not fd.has_identity():
-        sys.exit("Enrollment needs the embedding model — set detectors.faces.embed_model (ONNX) in "
-                 "your config. (MediaPipe finds the face; the embedding model identifies it.)")
+        sys.exit("Enrollment needs the SFace embedding model — run setup to download it, or set "
+                 "detectors.faces.embed_model. (YuNet finds the face; SFace identifies it.)")
 
     cam_cfg = cfg.get("camera", {})
     cam = Camera(backend=cam_cfg.get("backend", "auto"), device=cam_cfg.get("device", 0),
@@ -57,11 +57,10 @@ def run(name, frames, config_path):
         frame = cam.read()
         if frame is None:
             time.sleep(0.05); continue
-        box = _largest(fd._detect(frame))
-        if not box:
+        row = _largest(fd.detect(frame))
+        if row is None:
             continue
-        x, y, w, h = box
-        v = fd.embed(frame[y:y + h, x:x + w])
+        v = fd.embed(frame, row)            # SFace aligns via YuNet's landmarks, then embeds
         if v:
             vecs.append(v)
             log.info("  captured %d/%d", len(vecs), frames)

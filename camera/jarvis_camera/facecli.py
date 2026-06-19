@@ -86,8 +86,8 @@ def cmd_verify(cfg, args):
     key = _device_key(cfg)
     fd = FaceDetector(cfg.get("detectors", {}).get("faces", {}))
     if not fd.has_identity():
-        sys.exit("Verify needs the embedding model + opencv/mediapipe — set detectors.faces.embed_model "
-                 "(ONNX, e.g. MobileFaceNet) and install deps (setup.ps1 -WithFaces).")
+        sys.exit("Verify needs OpenCV + the YuNet/SFace models — run setup (it downloads them) and "
+                 "set detectors.faces.detector_model / embed_model.")
     try:
         enrolled = _req("GET", cfg["server"]["url"].rstrip("/") + "/faces/enrolled", key).get("enrolled", {})
     except Exception as e:
@@ -105,11 +105,11 @@ def cmd_verify(cfg, args):
         frame = cam.read()
         if frame is None:
             time.sleep(0.05); continue
-        boxes = fd._detect(frame)
-        if not boxes:
+        rows = fd.detect(frame)
+        if not rows:
             continue
-        x, y, w, h = max(boxes, key=lambda b: b[2] * b[3])
-        name, score = fd._recognize(frame[y:y + h, x:x + w])
+        row = max(rows, key=lambda r: r[2] * r[3])
+        name, score = fd.recognize(frame, row)
         if name:
             votes[name] += 1
             if score is not None:

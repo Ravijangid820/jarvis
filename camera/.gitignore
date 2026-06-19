@@ -1,5 +1,6 @@
 # Runtime config + device API key (never commit); keep config.example.json at camera/ root.
 config/
 .venv/
+models/          # ONNX models are downloaded + sha256-verified by setup, not committed
 __pycache__/
 *.pyc

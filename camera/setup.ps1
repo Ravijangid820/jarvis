@@ -1,18 +1,19 @@
 <#
-  Bootstrap the Jarvis camera agent on a WINDOWS laptop — to test the camera WITHOUT a Pi.
-
-  Everything is sandboxed: a uv-managed Python 3.12 + a project-local .venv. Nothing is installed
-  globally (uv itself is a single user-level binary; all packages live in camera\.venv).
+  Bootstrap the Jarvis camera agent on a WINDOWS laptop. Sandboxed: a uv-managed Python 3.12 + a
+  project-local .venv. Nothing is installed globally (uv is a single user-level binary; all packages
+  live in camera\.venv). Faces (YuNet+SFace) need only opencv — the models are downloaded and
+  sha256-verified below. For Linux/macOS/Pi use setup.sh.
 
   Run from the camera\ directory:
-      powershell -ExecutionPolicy Bypass -File setup.ps1            # camera + motion only
-      powershell -ExecutionPolicy Bypass -File setup.ps1 -WithFaces # + face/pose/gesture + identity
+      powershell -ExecutionPolicy Bypass -File setup.ps1            # camera + faces
+      powershell -ExecutionPolicy Bypass -File setup.ps1 -WithPose  # also mediapipe (pose + gestures)
 #>
-param([switch]$WithFaces)
+param([switch]$WithPose)
 $ErrorActionPreference = "Stop"
 $cam = Split-Path -Parent $MyInvocation.MyCommand.Path
 function Info($m) { Write-Host "==> $m" -ForegroundColor Cyan }
 
+Info "Platform: Windows"
 Info "Checking for uv (the env/sandbox manager)"
 if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
   Write-Host "  uv not found. Install it once (user-level, NOT global), then re-run this script:" -ForegroundColor Yellow
@@ -21,35 +22,59 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
   exit 1
 }
 
-# MediaPipe has no Python 3.13 wheels yet — pin 3.12 (uv fetches a managed CPython into its own
-# cache under your user profile; it does NOT touch any system Python).
+# Pin 3.12 (keeps the optional mediapipe path open — it has no 3.13 wheels yet). uv fetches a managed
+# CPython into its own cache under your user profile; it does NOT touch any system Python.
 Info "Creating sandboxed Python 3.12 venv at camera\.venv"
 uv venv --python 3.12 "$cam\.venv"
 $py = Join-Path $cam ".venv\Scripts\python.exe"
 
-Info "Installing desktop deps into the venv (opencv-python + numpy + requests)"
+Info "Installing deps into the venv (opencv-python + numpy + requests)"
 uv pip install --python $py -r "$cam\requirements-desktop.txt"
 
-if ($WithFaces) {
-  Info "Installing face/pose/gesture deps (mediapipe + onnxruntime) into the venv"
-  uv pip install --python $py "mediapipe>=0.10,<0.11" "onnxruntime>=1.17,<2"
+if ($WithPose) {
+  Info "Optional pose/gestures: mediapipe"
+  uv pip install --python $py "mediapipe>=0.10,<0.11"
+}
+
+# ---- face models: official OpenCV Zoo, sha256-verified ----
+Info "Face models (YuNet + SFace) - official OpenCV Zoo, sha256-verified"
+$zoo = "https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models"
+$models = @(
+  @{ name = "face_detection_yunet_2023mar.onnx";
+     url  = "$zoo/face_detection_yunet/face_detection_yunet_2023mar.onnx";
+     sha  = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4" },
+  @{ name = "face_recognition_sface_2021dec.onnx";
+     url  = "$zoo/face_recognition_sface/face_recognition_sface_2021dec.onnx";
+     sha  = "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79" }
+)
+New-Item -ItemType Directory -Force -Path "$cam\models" | Out-Null
+foreach ($m in $models) {
+  $out = Join-Path $cam ("models\" + $m.name)
+  if ((Test-Path $out) -and ((Get-FileHash $out -Algorithm SHA256).Hash.ToLower() -eq $m.sha)) {
+    Write-Host "  $($m.name) cached"; continue
+  }
+  Write-Host "  downloading $($m.name) ..."
+  Invoke-WebRequest -Uri $m.url -OutFile $out
+  if ((Get-FileHash $out -Algorithm SHA256).Hash.ToLower() -ne $m.sha) {
+    Remove-Item $out; throw "SHA-256 mismatch for $($m.name) - refusing (supply-chain check failed)"
+  }
+  Write-Host "  $($m.name) verified"
 }
 
 Info "Config"
 New-Item -ItemType Directory -Force -Path "$cam\config" | Out-Null
 if (-not (Test-Path "$cam\config\config.json")) {
   Copy-Item "$cam\config.example.json" "$cam\config\config.json"
-  Write-Host "  wrote config\config.json — review it (see step 1 below)"
+  Write-Host "  wrote config\config.json - review it (see step 1 below)"
 }
 
 Write-Host ""
 Write-Host "Setup done. Run everything via the venv's Python (fully sandboxed):" -ForegroundColor Green
-Write-Host "  1. Edit config\config.json:" -ForegroundColor Green
-Write-Host "       device_id = `"laptop-cam`"   server.url = `"http://192.168.0.101:5000`""
-Write-Host "       camera.backend = `"auto`"     (for faces: detectors.faces.enabled = true)"
-Write-Host "  2. Test with NO server first (proves the webcam + detectors):"
-Write-Host "       .venv\Scripts\python -m jarvis_camera.bench --frames 60"
-Write-Host "       .venv\Scripts\python -m jarvis_camera.agent --dry-run"
-Write-Host "  3. Go live: on the SERVER mint a device key, save it to camera\config\agent.key, then:"
-Write-Host "       .venv\Scripts\python -m jarvis_camera.agent"
-Write-Host "     Watch it turn green in the admin -> Overview -> 'Camera . laptop-cam'."
+Write-Host "  1. Edit config\config.json: device_id, server.url (e.g. http://192.168.0.101:5000)."
+Write-Host "  2. On the SERVER: admin -> Keys, mint a DEVICE key (Device ID = this camera; under a"
+Write-Host "     NON-admin user) -> save to camera\config\agent.key"
+Write-Host "  3. Test (no server needed for verify):"
+Write-Host "       .venv\Scripts\python -m jarvis_camera.facecli verify     # who's at the camera (local)"
+Write-Host "       .venv\Scripts\python -m jarvis_camera.agent --dry-run    # events logged, not sent"
+Write-Host "  4. Go live:  .venv\Scripts\python -m jarvis_camera.agent      # turns green in admin -> Overview"
+Write-Host "  (To enroll/delete faces, also put an ADMIN key in camera\config\admin.key; remove it after.)"

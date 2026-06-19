@@ -15,7 +15,10 @@
   },
   "detectors": {
     "motion":   { "enabled": true,  "min_area": 1500, "cooldown_s": 3 },
-    "faces":    { "enabled": false, "interval_s": 5, "embed_model": "", "recognize_threshold": 0.45 },
+    "faces":    { "enabled": true,  "interval_s": 5,
+                  "detector_model": "models/face_detection_yunet_2023mar.onnx",
+                  "embed_model": "models/face_recognition_sface_2021dec.onnx",
+                  "score_threshold": 0.9, "recognize_threshold": 0.363 },
     "pose":     { "enabled": false, "interval_s": 3 },
     "gestures": { "enabled": false, "interval_s": 2 }
   }

@@ -1,18 +1,17 @@
-"""Face detection + optional identity.
+"""Face detection + identity on the OpenCV **YuNet + SFace** stack (CPU; no MediaPipe/onnxruntime).
 
-Detection prefers **MediaPipe BlazeFace** (more robust than Haar — fewer false positives, handles
-angle/lighting, CPU-friendly), and automatically falls back to a DNN SSD (if you point
-`detector_proto`/`detector_model` at the res10 caffe files) or the OpenCV Haar cascade if MediaPipe
-isn't installed — so detection works on any device, just better where MediaPipe is present.
+- **YuNet** (`cv2.FaceDetectorYN`) finds faces and returns 5 landmarks per face — fast + accurate on
+  CPU (tiny: ~75K params).
+- **SFace** (`cv2.FaceRecognizerSF`) uses those landmarks to **align** each face before producing a
+  128-D embedding. Alignment is what makes recognition accurate (vs a naive center-crop).
 
-MediaPipe finds *where* a face is; **identity** (*who* it is) is separate and optional: it turns on
-when you provide `embed_model` (an ONNX face-embedding model, e.g. MobileFaceNet) and an
-`enrolled_file` (JSON: {name: [embedding floats]}). Without those it emits `face_seen` with the
-bounding box and name=null.
+Both are small ONNX models from the **official OpenCV Zoo** (auto-downloaded + sha256-verified by
+setup). Everything runs through `opencv-python`, which the agent already needs — so the face path
+adds no extra runtime dependency.
 
-Pi 3 B+: keep this motion-gated and throttled (interval_s). All heavy imports are lazy and the
-detector degrades to a no-op (with one warning) if a dependency/model is missing — so enabling it
-never crashes the agent.
+Detection turns on when `detector_model` (YuNet) is set; identity additionally needs `embed_model`
+(SFace). Missing model → a one-warning no-op (the agent never crashes). Keep it motion-gated +
+throttled (`interval_s`) on a Pi.
 """
 import json
 import logging
@@ -22,6 +21,7 @@ from pathlib import Path
 from .base import Detector
 
 log = logging.getLogger("camera.faces")
+CAMERA_ROOT = Path(__file__).resolve().parents[2]
 
 
 class FaceDetector(Detector):
@@ -31,88 +31,74 @@ class FaceDetector(Detector):
     def __init__(self, cfg):
         super().__init__(cfg)
         self._cv2 = None
-        self._mp = None           # MediaPipe BlazeFace detector (preferred)
-        self._net = None          # DNN detector (optional)
-        self._cascade = None      # Haar detector (fallback, always available)
-        self._embed = None        # ONNX embedding session (optional)
-        self._known = {}          # name -> embedding (list[float])
-        self._thresh = float(self.cfg.get("recognize_threshold", 0.45))
-        self._size = int(self.cfg.get("embed_size", 112))
+        self._det = None          # YuNet detector
+        self._rec = None          # SFace recognizer
+        self._known = {}          # name -> embedding (list[float], L2-normalized)
+        self._size = (0, 0)       # last input size pushed to YuNet
+        self._score = float(self.cfg.get("score_threshold", 0.9))
+        self._nms = float(self.cfg.get("nms_threshold", 0.3))
+        self._topk = int(self.cfg.get("top_k", 5000))
+        self._thresh = float(self.cfg.get("recognize_threshold", 0.363))  # SFace cosine threshold
         self._ok = False
         self._warned = False
         self._init()
+
+    def _resolve(self, p):
+        """Resolve a model path (relative paths are relative to the camera/ root), or None."""
+        if not p:
+            return None
+        path = Path(p)
+        if not path.is_absolute():
+            path = CAMERA_ROOT / path
+        return path if path.exists() else None
 
     def _init(self):
         try:
             import cv2
             self._cv2 = cv2
-            # Preferred: MediaPipe BlazeFace. Fall back to DNN (if model files) or Haar.
-            try:
-                import mediapipe as mp
-                self._mp = mp.solutions.face_detection.FaceDetection(
-                    model_selection=0, min_detection_confidence=float(self.cfg.get("min_confidence", 0.6)))
-                log.info("faces: using MediaPipe BlazeFace detector")
-            except Exception:
-                proto, model = self.cfg.get("detector_proto"), self.cfg.get("detector_model")
-                if proto and model and Path(proto).exists() and Path(model).exists():
-                    self._net = cv2.dnn.readNetFromCaffe(proto, model)
-                    log.info("faces: MediaPipe unavailable — using DNN detector")
-                else:
-                    self._cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-                    log.info("faces: MediaPipe unavailable — using Haar cascade detector")
-            emb = self.cfg.get("embed_model")
-            if emb and Path(emb).exists():
-                import onnxruntime as ort
-                self._embed = ort.InferenceSession(emb, providers=["CPUExecutionProvider"])
-                ef = self.cfg.get("enrolled_file")
-                if ef and Path(ef).exists():
-                    self._known = json.loads(Path(ef).read_text())
-                log.info("faces: identity on (%d enrolled)", len(self._known))
+            det_model = self._resolve(self.cfg.get("detector_model"))
+            if det_model is None:
+                log.warning("faces: YuNet model not found — run setup to download it "
+                            "(detectors.faces.detector_model)")
+                return
+            self._det = cv2.FaceDetectorYN.create(str(det_model), "", (320, 320),
+                                                  self._score, self._nms, self._topk)
+            emb_model = self._resolve(self.cfg.get("embed_model"))
+            if emb_model is not None:
+                self._rec = cv2.FaceRecognizerSF.create(str(emb_model), "")
+                ef = self._resolve(self.cfg.get("enrolled_file"))
+                if ef is not None:
+                    self._known = json.loads(ef.read_text())
+                log.info("faces: YuNet + SFace identity ON (%d enrolled)", len(self._known))
+            else:
+                log.info("faces: YuNet detection ON (no SFace embed_model → no identity)")
             self._ok = True
         except Exception as e:
             log.warning("faces init failed: %s", e)
 
-    def _detect(self, frame):
-        cv2 = self._cv2
+    def detect(self, frame):
+        """Return a list of YuNet face rows (each: box[4] + 5 landmarks[10] + score[1]); [] if none."""
+        if self._det is None:
+            return []
         h, w = frame.shape[:2]
-        if self._mp is not None:
-            res = self._mp.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-            out = []
-            for d in (res.detections or []):
-                b = d.location_data.relative_bounding_box
-                x, y = int(b.xmin * w), int(b.ymin * h)
-                out.append((max(0, x), max(0, y), max(1, int(b.width * w)), max(1, int(b.height * h))))
-            return out
-        if self._net is not None:
-            h, w = frame.shape[:2]
-            blob = cv2.dnn.blobFromImage(frame, 1.0, (300, 300), (104, 177, 123))
-            self._net.setInput(blob)
-            det = self._net.forward()
-            out = []
-            for i in range(det.shape[2]):
-                if det[0, 0, i, 2] >= 0.6:
-                    x1, y1, x2, y2 = (det[0, 0, i, 3:7] * [w, h, w, h]).astype(int)
-                    out.append((max(0, x1), max(0, y1), max(1, x2 - x1), max(1, y2 - y1)))
-            return out
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        return [tuple(map(int, b)) for b in self._cascade.detectMultiScale(gray, 1.2, 5, minSize=(60, 60))]
+        if (w, h) != self._size:
+            self._det.setInputSize((w, h))
+            self._size = (w, h)
+        _, faces = self._det.detect(frame)
+        return [row for row in faces] if faces is not None else []
 
-    def embed(self, crop):
-        """Face crop → L2-normalized embedding (list[float]); None if no embedding model.
-        Used both for recognition and by the enrollment CLI."""
-        if self._embed is None:
+    def embed(self, frame, face_row):
+        """Align (SFace, using YuNet's landmarks) + embed one face → L2-normalized list[float]."""
+        if self._rec is None:
             return None
-        cv2 = self._cv2
-        face = cv2.resize(crop, (self._size, self._size)).astype("float32")
-        face = (face - 127.5) / 128.0
-        blob = face.transpose(2, 0, 1)[None, ...]          # NCHW
-        name_in = self._embed.get_inputs()[0].name
-        vec = self._embed.run(None, {name_in: blob})[0][0]
-        norm = math.sqrt(sum(v * v for v in vec)) or 1.0
-        return [float(v / norm) for v in vec]
+        aligned = self._rec.alignCrop(frame, face_row)
+        feat = self._rec.feature(aligned)[0]
+        norm = math.sqrt(float(sum(float(v) * float(v) for v in feat))) or 1.0
+        return [float(v) / norm for v in feat]
 
-    def _recognize(self, crop):
-        vec = self.embed(crop)
+    def recognize(self, frame, face_row):
+        """(name, cosine) for one face; ('unknown', score) if below threshold; (None, None) if no model."""
+        vec = self.embed(frame, face_row)
         if vec is None:
             return (None, None)
         best, best_sim = None, -1.0
@@ -120,29 +106,38 @@ class FaceDetector(Detector):
             sim = sum(a * b for a, b in zip(vec, ev))      # both L2-normalized → cosine
             if sim > best_sim:
                 best, best_sim = nm, sim
-        return (best, round(best_sim, 3)) if best_sim >= self._thresh else ("unknown", round(best_sim, 3))
+        if best_sim >= self._thresh:
+            return (best, round(best_sim, 3))
+        return ("unknown", round(best_sim, 3))
 
     def set_known(self, known):
         """Replace the enrolled set (name → embedding). The agent pulls this from /faces/enrolled."""
         self._known = dict(known or {})
 
     def has_identity(self):
-        """True if recognition/enrollment is possible (the embedding model loaded)."""
-        return bool(self._ok and self._embed is not None)
+        """True if recognition/enrollment is possible (SFace embedding model loaded)."""
+        return bool(self._ok and self._rec is not None)
+
+    @staticmethod
+    def _box(face_row):
+        x, y, w, h = (int(v) for v in face_row[:4])
+        return (max(0, x), max(0, y), max(1, w), max(1, h))
 
     def process(self, frame):
         if not self._ok:
             if not self._warned:
-                log.warning("faces unavailable (init failed) — no-op")
+                log.warning("faces unavailable (init failed / no model) — no-op")
                 self._warned = True
             return []
         events = []
-        for (x, y, w, h) in self._detect(frame):
+        for row in self.detect(frame):
             name, score = (None, None)
-            if self._embed is not None:
+            if self._rec is not None:
                 try:
-                    name, score = self._recognize(frame[y:y + h, x:x + w])
+                    name, score = self.recognize(frame, row)
                 except Exception as e:
                     log.debug("recognize failed: %s", e)
-            events.append({"type": "face_seen", "data": {"box": [int(x), int(y), int(w), int(h)], "name": name, "score": score}})
+            x, y, w, h = self._box(row)
+            events.append({"type": "face_seen",
+                           "data": {"box": [x, y, w, h], "name": name, "score": score}})
         return events

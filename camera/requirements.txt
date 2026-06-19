@@ -10,6 +10,8 @@
 numpy<2
 requests>=2.31,<3
 
-# Heavy / optional — install only when you enable the matching detector (Pi 3: expect a few FPS):
-# mediapipe>=0.10,<0.11    # face detection + pose + hand gestures (recommended); 64-bit OS only, memory-tight on 1 GB
-# onnxruntime>=1.17,<2     # face-identity embedding model (faces.py)
+# Faces (YuNet detect + SFace recognize) run via cv2 — no extra deps beyond OpenCV. The two ONNX
+# models are downloaded + sha256-verified by setup.sh into camera/models/.
+#
+# Heavy / optional — only for pose + hand gestures (faces do NOT need this; Pi 3: expect a few FPS):
+# mediapipe>=0.10,<0.11    # MediaPipe Pose + Hands; 64-bit OS only, memory-tight on 1 GB
