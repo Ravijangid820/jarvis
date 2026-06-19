@@ -6,6 +6,7 @@ export default function Admin({ token, onExit }) {
   const [stats, setStats] = useState({})
   const [users, setUsers] = useState([])
   const [keys, setKeys] = useState([])
+  const [faces, setFaces] = useState([])
   const [uName, setUName] = useState("")
   const [uPass, setUPass] = useState("")
   const [kUser, setKUser] = useState("")
@@ -27,8 +28,8 @@ export default function Admin({ token, onExit }) {
 
   const load = async () => {
     try {
-      const [s, u, k] = await Promise.all([api("/admin/stats"), api("/admin/users"), api("/admin/api_keys")])
-      setStats(s); setUsers(u.users || []); setKeys(k.keys || []); setErr("")
+      const [s, u, k, f] = await Promise.all([api("/admin/stats"), api("/admin/users"), api("/admin/api_keys"), api("/admin/faces")])
+      setStats(s); setUsers(u.users || []); setKeys(k.keys || []); setFaces(f.faces || []); setErr("")
     } catch (e) { setErr(e.message) }
   }
   useEffect(() => { load() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
@@ -50,6 +51,14 @@ export default function Admin({ token, onExit }) {
   const delKey = async (id) => {
     if (!confirm("Sever this uplink? External scripts lose access immediately.")) return
     try { await api("/admin/api_keys/" + id, "DELETE"); load() } catch (e) { setErr(e.message) }
+  }
+  const delFace = async (id) => {
+    if (!confirm("Delete this enrolled face?")) return
+    try { await api("/admin/faces/" + id, "DELETE"); load() } catch (e) { setErr(e.message) }
+  }
+  const linkFace = async (id, userId) => {
+    try { await api("/admin/faces/" + id, "PUT", { user_id: userId ? Number(userId) : null }); load() }
+    catch (e) { setErr(e.message) }
   }
 
   return (
@@ -108,6 +117,34 @@ export default function Admin({ token, onExit }) {
               </tr>
             ))}
             {keys.length === 0 && <tr><td colSpan="7" className="adm-empty">No keys</td></tr>}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="adm-panel">
+        <h2>Enrolled Faces</h2>
+        <p style={{ fontSize: '0.75rem', color: 'rgba(103,199,235,0.6)', marginBottom: '14px', lineHeight: 1.6 }}>
+          Enroll on the device (which has the camera + embedding model):
+          <code> uv run --no-project python -m jarvis_edge.enroll --name "Name" </code>.
+          Link a face to a user to gate device actions by who's present.
+        </p>
+        <table className="adm-table">
+          <thead><tr><th>Name</th><th>Linked User (authorization)</th><th>Enrolled</th><th>Override</th></tr></thead>
+          <tbody>
+            {faces.map(f => (
+              <tr key={f.id}>
+                <td className="adm-em">{f.name}</td>
+                <td>
+                  <select className="hud-input" value={f.user_id || ""} onChange={e => linkFace(f.id, e.target.value)} style={{ maxWidth: 200 }}>
+                    <option value="">— not linked —</option>
+                    {users.map(u => <option key={u.id} value={u.id}>{u.username}</option>)}
+                  </select>
+                </td>
+                <td>{f.created_at}</td>
+                <td><button className="hud-btn warn" onClick={() => delFace(f.id)}>Delete</button></td>
+              </tr>
+            ))}
+            {faces.length === 0 && <tr><td colSpan="4" className="adm-empty">No faces enrolled — use the enroll command above.</td></tr>}
           </tbody>
         </table>
       </div>
