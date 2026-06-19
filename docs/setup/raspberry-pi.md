@@ -60,12 +60,16 @@ events locally without sending.
 ```bash
 # install mediapipe (pose/gestures) into the venv first if you want to bench them:
 #   uv pip install --python .venv/bin/python mediapipe onnxruntime
-cd edge && uv run --no-project python -m jarvis_edge.bench --frames 60
+cd edge && .venv/bin/python -m jarvis_edge.bench --frames 60
 #   motion   :  28.0 FPS  (  35.7 ms/frame)
 #   faces    :   6.5 FPS  ( 153.0 ms/frame)
 #   pose     :   2.3 FPS  ( 435.0 ms/frame)   ← decide if this is usable for you
 #   gestures :   3.1 FPS  ( 322.0 ms/frame)
 ```
+
+> **Always run via the venv's python** (`.venv/bin/python …`, or `.venv\Scripts\python …` on
+> Windows). `uv run` is for the *server* project; from `edge/` it would pick the system Python (or
+> the server's env), not `edge/.venv` — so the sandboxed deps wouldn't be found.
 
 Use the numbers to set each detector's `interval_s` (and whether to enable it) in config.
 
@@ -77,36 +81,63 @@ bash edge/setup.sh          # 64-bit check, apt deps, uv venv + uv pip install, 
 #   uv run python src/scripts/manage.py mint-key <user> pi-vision <device_id>  →  edge/config/edge.key
 #   (the last arg binds the key to that device — it may then only post events as that device)
 cp edge/config.example.json edge/config/config.json   # review server.url / camera / detectors
-python -m jarvis_edge.agent --config edge/config/config.json        # or --dry-run
+cd edge && .venv/bin/python -m jarvis_edge.agent       # or add --dry-run
 ```
 
 ## Test on a laptop (no Pi) — uses your webcam
 
 The same code runs on a laptop: the camera layer falls back to **OpenCV/webcam** when picamera2
-isn't present. Great for developing the detectors before you have the Pi. (Windows/macOS/Linux.)
+isn't present, so you can test the whole pipeline before you have the Pi. Everything stays in a
+**uv-managed venv** (`edge/.venv`) + a **uv-managed Python** — nothing is installed globally.
+
+> MediaPipe (faces/pose/gestures) has **no Python 3.13 wheels yet**, so pin **3.12** for the venv
+> (`uv venv --python 3.12`). uv downloads a managed CPython 3.12 into its own cache — not a system
+> Python. Motion-only (opencv) works on any version.
+
+### Windows (PowerShell) — one script
+
+```powershell
+# 0. Install uv once if you don't have it (user-level binary, not a global Python package):
+#    powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+# 1. Get the code (small; models/builds are gitignored):
+git clone <repo> jarvis ; cd jarvis\edge
+# 2. Bootstrap the sandbox (add -WithFaces to also install mediapipe + onnxruntime):
+powershell -ExecutionPolicy Bypass -File setup.ps1 -WithFaces
+# 3. Edit config\config.json: device_id="laptop-cam", server.url="http://192.168.0.101:5000",
+#    camera.backend="auto"; for faces set detectors.faces.enabled=true.
+# 4. Test with NO server first (run via the venv's python — fully sandboxed):
+.venv\Scripts\python -m jarvis_edge.bench --frames 60
+.venv\Scripts\python -m jarvis_edge.agent --dry-run
+# 5. Go live: on the SERVER mint a device-bound key → save to edge\config\edge.key, then:
+.venv\Scripts\python -m jarvis_edge.agent      # events POST to /events → admin shows the camera green
+```
+
+### macOS / Linux
 
 ```bash
-# 1. Get just the edge code (or clone the whole repo — it's small; models are gitignored):
-git clone --filter=blob:none --sparse <repo> jarvis && cd jarvis && git sparse-checkout set edge
-
-# 2. A Python env + desktop deps via uv (motion needs only opencv-python):
-cd edge
-uv venv
-uv pip install -r requirements-desktop.txt             # add mediapipe/onnxruntime for pose/faces
-
-# 3. Config for the laptop webcam (you're now in edge/):
+# 1. Get the code (or sparse-checkout just edge/):
+git clone <repo> jarvis && cd jarvis/edge
+# 2. Sandbox: Python 3.12 venv + desktop deps (add mediapipe/onnxruntime for faces/pose):
+uv venv --python 3.12
+uv pip install --python .venv/bin/python -r requirements-desktop.txt
+uv pip install --python .venv/bin/python "mediapipe>=0.10,<0.11" "onnxruntime>=1.17,<2"   # optional: faces
+# 3. Config (you're in edge/):
 cp config.example.json config/config.json
-#    set  camera.backend = "opencv"  (or leave "auto"),  device = 0  (default webcam),
-#         device_id = "laptop-cam",  server.url = http://<server-ip>:5000
-
-# 4. Test the camera + detectors with NO server first (--no-project uses edge/.venv, not the server's):
-uv run --no-project python -m jarvis_edge.bench --frames 60   # per-detector FPS on your webcam
-uv run --no-project python -m jarvis_edge.agent --dry-run     # events logged, not sent
-
-# 5. Go live: on the SERVER mint a device-bound key, save it to edge/config/edge.key, then:
-#    uv run python src/scripts/manage.py mint-key <user> laptop-cam laptop-cam
-uv run --no-project python -m jarvis_edge.agent               # events POST to /events → see them in /admin
+#    device_id="laptop-cam", server.url="http://192.168.0.101:5000", camera.backend="auto"
+# 4. Test with NO server first — ALWAYS run via the venv's python (not `uv run`):
+.venv/bin/python -m jarvis_edge.bench --frames 60
+.venv/bin/python -m jarvis_edge.agent --dry-run
+# 5. Go live: on the SERVER mint a device-bound key, save to edge/config/edge.key, then:
+.venv/bin/python -m jarvis_edge.agent
 ```
+
+> Mint the device key **on the server**: `uv run python src/scripts/manage.py mint-key <user> laptop-cam laptop-cam`
+> (the last arg binds the key to `laptop-cam` so it can only post as that device). For **face
+> enrollment** you instead need an **admin** key (`/faces/enroll` is admin-only) — see below.
+
+**Windows gotchas:** allow camera access (Settings → Privacy & security → Camera → *Let desktop apps
+access your camera*); close Teams/Zoom/etc. so the webcam is free; the server's `:5000` must be
+reachable from the laptop (it already is if you open the Jarvis web UI in the laptop's browser).
 
 ## Enroll a face (identity = who, not just where)
 
@@ -116,8 +147,13 @@ and use an **admin** API key (`/faces/enroll` is admin-only). Then, on the devic
 
 ```bash
 cd edge
-uv run --no-project python -m jarvis_edge.enroll --name "Ravi"   # ~7 frames, averaged, registered
+.venv/bin/python -m jarvis_edge.enroll --name "Ravi"            # ~7 frames, averaged, registered
+#  Windows:  .venv\Scripts\python -m jarvis_edge.enroll --name "Ravi"
 ```
+
+The `api_key_file` in your config must hold an **admin** key for enrollment. For a first test you can
+point a second config (or temporarily swap `edge.key`) to an admin key just to enroll, then put the
+device-bound key back for normal running.
 
 Then **manage / link** faces in the **admin → Faces** page (linking a face to a user account is what
 gates device actions by who's present). The running agent pulls the enrolled set from
@@ -128,9 +164,11 @@ gates device actions by who's present). The running agent pulls the enrolled set
 ```
 edge/
   README.md            this file
-  requirements.txt     Pi-side deps (separate from the server's pyproject)
-  config.example.json  server URL, camera, per-detector toggles/thresholds
-  setup.sh             Pi bootstrap (64-bit check, apt + uv venv + uv pip)
+  requirements.txt          Pi-side deps (separate from the server's pyproject)
+  requirements-desktop.txt  laptop deps (opencv + numpy + requests; mediapipe/onnxruntime optional)
+  config.example.json       server URL, camera, per-detector toggles/thresholds
+  setup.sh                  Pi / Linux / macOS bootstrap (uv venv + uv pip)
+  setup.ps1                 Windows laptop bootstrap (uv venv 3.12 + uv pip; -WithFaces)
   jarvis_edge/
     capture.py         camera abstraction (picamera2 for CSI, OpenCV for USB)
     events.py          event client (POST + offline queue + retry)

@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-19 — Edge: Windows laptop setup + correct sandboxed run command
+
+- **`edge/setup.ps1`** — one-shot Windows bootstrap (uv-managed **Python 3.12** venv — MediaPipe has
+  no 3.13 wheels yet — + desktop deps; `-WithFaces` adds mediapipe + onnxruntime). Nothing global.
+- **Run-command fix:** `uv run --no-project python -m jarvis_edge.…` actually used the **system**
+  Python (or the server's env), not `edge/.venv`, so sandboxed deps were invisible. All edge docs +
+  scripts now run via the venv's python directly — `.venv/bin/python …` (Unix) / `.venv\Scripts\python …`
+  (Windows). Added a Windows section + camera/firewall gotchas to the edge setup doc.
+
 ## 2026-06-19 — Admin console: tabbed layout + live service status
 
 - The admin page is now **tabbed** (Overview · Users · Keys · Faces) instead of one long scroll —

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Enroll a face: capture a few frames from the camera, average the embedding, register it.
 
-  uv run --no-project python -m jarvis_edge.enroll --name "Ravi" [--frames 7] [--config config/config.json]
+  .venv/bin/python -m jarvis_edge.enroll --name "Ravi" [--frames 7] [--config config/config.json]
+  (Windows:  .venv\\Scripts\\python -m jarvis_edge.enroll --name "Ravi")
 
 MediaPipe finds the face; the **embedding model** (set `detectors.faces.embed_model` to an ONNX
 face-embedding model, e.g. MobileFaceNet) turns it into the vector that identifies a person. This

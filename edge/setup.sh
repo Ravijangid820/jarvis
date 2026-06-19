@@ -33,6 +33,7 @@ Setup done. Next:
        uv run python src/scripts/manage.py mint-key <user> pi-vision
      and save the printed key to:  $EDGE/config/edge.key
   2. Review $EDGE/config/config.json (server.url, camera, which detectors are enabled).
-  3. Try it:  cd "$EDGE" && uv run --no-project python -m jarvis_edge.agent --dry-run
-     (drop --dry-run once the server /events endpoint exists and the key is in place)
+  3. Try it:  cd "$EDGE" && .venv/bin/python -m jarvis_edge.agent --dry-run
+     (run via the venv's python so the sandboxed deps are used; drop --dry-run once the
+      server /events endpoint is reachable and the key is in place)
 EOF
