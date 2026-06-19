@@ -171,6 +171,34 @@ def test_events_data_too_large_rejected(client):
     assert r.status_code == 422
 
 
+def test_admin_services_requires_admin(client):
+    assert client.get("/admin/services").status_code == 401
+    user = _tok(client, "pepper", "pw-user")
+    assert client.get("/admin/services", headers={"Authorization": "Bearer " + user}).status_code == 403
+
+
+def test_admin_services_reports_subsystems(client):
+    admin = _tok(client, "tony", "pw-admin")
+    svc = client.get("/admin/services", headers={"Authorization": "Bearer " + admin}).json()["services"]
+    names = [s["name"] for s in svc]
+    assert "Orchestrator (API)" in names                      # always present + active
+    assert any(s["name"] == "Orchestrator (API)" and s["status"] == "active" for s in svc)
+    assert all(s["status"] in ("active", "inactive") for s in svc)
+
+
+def test_heartbeat_marks_camera_active_and_is_not_an_event(client):
+    key = _seed_device_key("pepper", "pi-hb")
+    assert client.post("/events", headers={"Authorization": "Bearer " + key},
+                       json={"device_id": "pi-hb", "type": "heartbeat"}).status_code == 200
+    admin = _tok(client, "tony", "pw-admin")
+    svc = client.get("/admin/services", headers={"Authorization": "Bearer " + admin}).json()["services"]
+    cam = next((s for s in svc if s["name"] == "Camera · pi-hb"), None)
+    assert cam is not None and cam["status"] == "active"      # recent heartbeat → green
+    # heartbeats are liveness pings, not stored in the vision_events feed
+    events = client.get("/admin/events", headers={"Authorization": "Bearer " + admin}).json()["events"]
+    assert all(e["type"] != "heartbeat" for e in events)
+
+
 def test_volume_authz_denies_unprivileged(client):
     # pepper (plain user, can_control_devices=0) must NOT be able to queue a device command.
     tok = _tok(client, "pepper", "pw-user")

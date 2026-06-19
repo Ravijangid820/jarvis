@@ -103,3 +103,11 @@ CREATE TABLE IF NOT EXISTS faces (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_faces_name ON faces(name);
+
+-- Liveness for edge devices (camera agents). The agent posts a periodic `heartbeat` event; we keep
+-- only the latest timestamp per device (not in vision_events, to avoid flooding it) so the admin
+-- console can show each camera as active (recent heartbeat) or inactive (stale / never seen).
+CREATE TABLE IF NOT EXISTS device_heartbeats (
+    device_id TEXT PRIMARY KEY,
+    last_seen DATETIME DEFAULT CURRENT_TIMESTAMP
+);

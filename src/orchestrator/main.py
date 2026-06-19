@@ -17,6 +17,8 @@ import random
 import sqlite3
 import secrets
 import time
+import urllib.request
+from urllib.parse import urlsplit
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -34,8 +36,8 @@ import memory
 from auth import hash_password, hash_token, verify_password
 from budget import is_default_session
 from config import (ADMIN_MAX_INPUT, ALLOWED_ORIGINS, COMPLETION_RESERVE_DEFAULT,
-                    CONFIG, INDEX_HTML, RATE_LIMIT_RPM, REACT_DIST_DIR, REGULAR_MAX_INPUT,
-                    STATIC_DIR, VALID_FACT_CATEGORIES, logger)
+                    CONFIG, INDEX_HTML, LLM_URL, PIPER_BIN, PIPER_MODEL, RATE_LIMIT_RPM,
+                    REACT_DIST_DIR, REGULAR_MAX_INPUT, STATIC_DIR, VALID_FACT_CATEGORIES, logger)
 from db import get_db, init_db
 from llm import llm_content, request_llm, request_llm_stream, synthesize_tts
 
@@ -387,6 +389,69 @@ def system_stats(request: Request) -> Dict[str, Any]:
     return _system_stats()
 
 
+DEVICE_ACTIVE_WINDOW_S = 90   # an edge device is "active" if seen within this many seconds
+
+
+def _ping_llm() -> bool:
+    """True if the llama backend answers its /health quickly (so the admin board reflects reality)."""
+    try:
+        p = urlsplit(LLM_URL)
+        with urllib.request.urlopen(f"{p.scheme}://{p.netloc}/health", timeout=1.5) as r:
+            return 200 <= r.status < 300
+    except Exception:
+        return False
+
+
+def _service_status() -> list:
+    """Status of each subsystem for the admin console: green (active) / red (inactive), with a
+    one-line detail. Camera/edge liveness is inferred from device_heartbeats (recent = running)."""
+    def s(name, ok, detail=""):
+        return {"name": name, "status": "active" if ok else "inactive", "detail": detail}
+
+    services = [
+        s("Orchestrator (API)", True, "serving this request"),
+        s("LLM (llama.cpp)", _ping_llm(), "qwen3.5-2b (fast brain)"),
+        s("Embeddings / RAG", memory.vectors_available(),
+          "vector search ready" if memory.vectors_available() else "model not loaded"),
+        s("Voice / TTS (Piper)", PIPER_BIN.exists() and PIPER_MODEL.exists(),
+          PIPER_MODEL.name if PIPER_MODEL.exists() else "piper binary/voice missing"),
+    ]
+
+    # Camera agents (Pi / laptop): one row per device that has ever reported, active if its last
+    # heartbeat/event is recent. This is the "is the model running on the hardware" indicator.
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT device_id, last_seen, (julianday('now') - julianday(last_seen)) * 86400 AS age "
+            "FROM device_heartbeats ORDER BY device_id"
+        ).fetchall()
+    finally:
+        conn.close()
+    if not rows:
+        services.append(s("Camera agent", False, "no edge device has reported yet"))
+    else:
+        for r in rows:
+            age = r["age"]
+            ok = age is not None and age < DEVICE_ACTIVE_WINDOW_S
+            if age is None:
+                detail = "last seen: unknown"
+            elif age < 90:
+                detail = f"last seen {int(age)}s ago"
+            elif age < 3600:
+                detail = f"last seen {int(age // 60)}m ago"
+            else:
+                detail = f"last seen {int(age // 3600)}h ago"
+            services.append(s(f"Camera · {r['device_id']}", ok, detail))
+    return services
+
+
+@app.get("/admin/services")
+def admin_services(request: Request) -> Dict[str, Any]:
+    """Per-subsystem health for the admin console (active/inactive + detail)."""
+    _require_admin(request)
+    return {"services": _service_status()}
+
+
 # ----------------- Voice / TTS -----------------
 @app.post("/tts")
 def tts(req: TTSRequest, request: Request):
@@ -557,9 +622,25 @@ def ingest_event(req: EventRequest, request: Request):
         raise HTTPException(status_code=403, detail="Only device-scoped API keys (or admins) may post events")
     conn = get_db()
     try:
+        # Heartbeats are liveness pings, not events — keep only the latest per device (don't flood
+        # vision_events) so the admin console can show the camera agent as active even in a quiet room.
+        if req.type == "heartbeat":
+            conn.execute(
+                "INSERT INTO device_heartbeats (device_id, last_seen) VALUES (?, CURRENT_TIMESTAMP) "
+                "ON CONFLICT(device_id) DO UPDATE SET last_seen = CURRENT_TIMESTAMP",
+                (device_id,),
+            )
+            conn.commit()
+            return {"status": "ok"}
         cur = conn.execute(
             "INSERT INTO vision_events (device_id, type, data, user_id) VALUES (?, ?, ?, ?)",
             (device_id, req.type, json.dumps(req.data or {}), request.state.user_id),
+        )
+        # Any real event also proves the device is alive — fold it into liveness too.
+        conn.execute(
+            "INSERT INTO device_heartbeats (device_id, last_seen) VALUES (?, CURRENT_TIMESTAMP) "
+            "ON CONFLICT(device_id) DO UPDATE SET last_seen = CURRENT_TIMESTAMP",
+            (device_id,),
         )
         conn.execute("DELETE FROM vision_events WHERE id <= ?", (cur.lastrowid - VISION_EVENTS_CAP,))
         conn.commit()

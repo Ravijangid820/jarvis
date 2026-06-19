@@ -4,6 +4,18 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-19 — Admin console: tabbed layout + live service status
+
+- The admin page is now **tabbed** (Overview · Users · Keys · Faces) instead of one long scroll —
+  each area is its own section, with counts on the Users/Keys/Faces tabs.
+- **System Services board** (Overview): live **green ACTIVE / red INACTIVE** status for each
+  subsystem — Orchestrator, LLM (pings llama `/health`), Embeddings/RAG, Voice/TTS (Piper), and one
+  row **per camera agent** (Pi / laptop). Camera liveness is the answer to "is the model running on
+  the hardware". The Faces tab shows the camera-agent status above the enrolled list. Auto-refreshes.
+- **Device liveness:** new `GET /admin/services`, a `device_heartbeats` table, and a `heartbeat`
+  event type — the edge agent pings every 30s so an idle-but-running camera still reports active
+  (heartbeats update liveness only; they're not stored in the `vision_events` feed). Tests 47 → 50.
+
 ## 2026-06-19 — Face management: server store + admin API (foundation)
 
 - New `faces` table + endpoints: `POST /faces/enroll` (admin; stores an embedding computed on the

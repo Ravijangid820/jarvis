@@ -88,6 +88,8 @@ def run(config_path, dry_run=False):
         log.info("loaded %d enrolled face(s) from server", len(enrolled))
     last_run = {d.name: 0.0 for d in heavy}
     rr = 0
+    last_hb = 0.0
+    HB_INTERVAL = 30.0    # liveness ping so the server shows this device active even in a quiet room
 
     state = {"go": True}
     # Register stop signals defensively — not every signal is settable on every platform
@@ -104,6 +106,9 @@ def run(config_path, dry_run=False):
     try:
         while state["go"]:
             t0 = time.time()
+            if t0 - last_hb >= HB_INTERVAL:        # prove liveness regardless of motion
+                client.send("heartbeat")
+                last_hb = t0
             frame = cam.read()
             if frame is None:
                 time.sleep(0.05)
