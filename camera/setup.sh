@@ -25,7 +25,12 @@ else
 fi
 cyan "Platform: $PLATFORM"
 
-command -v uv >/dev/null || { echo "  uv required — install it: curl -LsSf https://astral.sh/uv/install.sh | sh"; exit 1; }
+command -v uv >/dev/null || {
+  echo "  uv required. Prefer an auditable install (no pipe-to-run):"
+  echo "    pipx install uv     # or:  brew install uv  /  your distro's package manager"
+  echo "    fallback:  curl -LsSf https://astral.sh/uv/install.sh | sh"
+  exit 1
+}
 
 # ---- python env + deps (per platform) ----
 if [ "$PLATFORM" = "pi" ]; then

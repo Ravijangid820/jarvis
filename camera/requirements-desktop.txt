@@ -3,7 +3,7 @@
 #   cd camera && uv venv --python 3.12 && uv pip install -r requirements-desktop.txt
 numpy<2
 requests>=2.31,<3
-opencv-python>=4.8        # capture + motion + FACES (YuNet detect + SFace recognize via cv2)
+opencv-python>=4.8,<5     # capture + motion + FACES (YuNet detect + SFace recognize via cv2)
 
 # Optional — only for pose + hand gestures (faces do NOT need this):
 # mediapipe>=0.10,<0.11    # MediaPipe Pose + Hands  (setup.ps1 -WithPose / setup.sh --with-pose)

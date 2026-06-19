@@ -27,6 +27,7 @@ log = logging.getLogger("camera.agent")
 
 CAMERA_ROOT = base_dir()
 HEAVY = {"faces": FaceDetector, "pose": PoseDetector, "gestures": GestureDetector}
+_MAX_ENROLLED_BYTES = 16 * 1024 * 1024   # ample for names + 128-float embeddings; caps OOM from a bad server
 
 
 def _load_key(cfg):
@@ -40,7 +41,11 @@ def _fetch_enrolled(server, key):
                                  headers={"Authorization": "Bearer " + key})
     try:
         with urllib.request.urlopen(req, timeout=15) as r:
-            return json.loads(r.read().decode()).get("enrolled", {})
+            data = r.read(_MAX_ENROLLED_BYTES + 1)        # bound the read (don't trust the server's size)
+            if len(data) > _MAX_ENROLLED_BYTES:
+                log.warning("enrolled response too large (>%d bytes) — ignoring", _MAX_ENROLLED_BYTES)
+                return {}
+            return json.loads(data.decode()).get("enrolled", {})
     except Exception as e:
         log.warning("could not fetch enrolled faces: %s", e)
         return {}
@@ -64,6 +69,9 @@ def run(config_path, dry_run=False):
     if not key and not dry_run:
         log.warning("no API key file found — running as --dry-run (events logged, not sent)")
         dry_run = True
+    if key and str(cfg["server"]["url"]).lower().startswith("http://"):
+        log.warning("server.url is http:// — the API key is sent in cleartext on the LAN. "
+                    "Use https:// (TLS) once the orchestrator has it.")
 
     client = EventClient(cfg["server"]["url"], key, cfg.get("device_id", "pi"),
                          endpoint=cfg["server"].get("events_endpoint", "/events"), dry_run=dry_run)

@@ -277,6 +277,20 @@ def test_role_change_requires_admin(client):
     assert client.put("/admin/users/1/role", headers=ut, json={"role": "admin"}).status_code == 403
 
 
+def test_device_id_charset_rejected(client):
+    # device_id is constrained to [A-Za-z0-9._:-] (no spaces/newlines/control chars).
+    admin = _tok(client, "tony", "pw-admin")
+    h = {"Authorization": "Bearer " + admin}
+    uid = _uid(client, h, "pepper")
+    assert client.post("/admin/api_keys", headers=h,
+                       json={"user_id": uid, "description": "x", "device_id": "bad id!"}).status_code == 422
+    assert client.post("/events", headers=h,
+                       json={"device_id": "a\nb", "type": "motion"}).status_code == 422
+    # a clean id still works
+    assert client.post("/admin/api_keys", headers=h,
+                       json={"user_id": uid, "description": "x", "device_id": "ok-cam.1"}).status_code == 200
+
+
 def test_volume_authz_denies_unprivileged(client):
     # pepper (plain user, can_control_devices=0) must NOT be able to queue a device command.
     tok = _tok(client, "pepper", "pw-user")

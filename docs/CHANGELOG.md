@@ -4,6 +4,26 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-19 — Security review of the session's changes + hardening fixes
+
+Independent 3-part review (server · camera · CI/supply-chain/frontend) of everything added this
+session. **No critical/high issues** — the device-key admin-downscope, event provenance, last-admin
+guards, hash-verified model downloads, and XSS-safe/server-enforced frontend all verified correct.
+Applied the low/medium hardening it surfaced:
+
+- **Bounded reads** of the server's `/faces/enrolled` response in the agent + `facecli` (cap 16 MB) —
+  prevents OOM from a compromised/MITM'd server.
+- **Atomic last-admin guards** — role demote is now a single conditional `UPDATE`; user-delete wraps
+  the check+delete in `BEGIN IMMEDIATE` — closes a TOCTOU lock-out race.
+- **`device_id` charset** restricted to `[A-Za-z0-9._:-]` (events + key minting) — no control chars.
+- **device_heartbeats pruning** (drop rows >30 days) so the table can't grow unbounded.
+- **Key files auto-tightened** to `0600` on POSIX (was warn-only); **plaintext-HTTP warning** when the
+  agent would send its key over `http://`.
+- **CI least-privilege**: workflow default `contents: read`; `write` only in a tag-gated `release`
+  job. Auditable **uv install** alternative (winget / pipx) added to setup; `opencv-python<5` bound.
+- Open by design (documented): **TLS** (the LAN is still plaintext — the top remaining item) and a
+  hash-pinned dependency lockfile. Tests 57 → 58.
+
 ## 2026-06-19 — Camera: one-click install + reproducible Windows .exe (CI-built)
 
 - **One command:** `install.sh` / `install.ps1` chain *setup* + *service* (thin, readable wrappers —

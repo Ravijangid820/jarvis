@@ -227,7 +227,7 @@ class CreateKeyRequest(BaseModel):
     description: str
     # Optional: bind the key to one device (e.g. "laptop-cam"). A bound key may ONLY post events as
     # that device (F1). Edge/camera agents need this — a plain unbound non-admin key can't post events.
-    device_id: Optional[str] = Field(default=None, max_length=64)
+    device_id: Optional[str] = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9._:-]+$")
 
 
 class KnowledgeFactRequest(BaseModel):
@@ -236,7 +236,7 @@ class KnowledgeFactRequest(BaseModel):
 
 
 class EventRequest(BaseModel):
-    device_id: str = Field(..., min_length=1, max_length=64)
+    device_id: str = Field(..., min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._:-]+$")
     type: str = Field(..., min_length=1, max_length=32)
     ts: Optional[str] = Field(default=None, max_length=40)
     data: Optional[Dict[str, Any]] = None
@@ -641,6 +641,9 @@ def ingest_event(req: EventRequest, request: Request):
                 "ON CONFLICT(device_id) DO UPDATE SET last_seen = CURRENT_TIMESTAMP",
                 (device_id,),
             )
+            # Opportunistically prune long-dead devices so the table can't grow unbounded (an admin
+            # may post as any device_id) and the console doesn't list stale cameras forever.
+            conn.execute("DELETE FROM device_heartbeats WHERE last_seen < datetime('now', '-30 days')")
             conn.commit()
             return {"status": "ok"}
         cur = conn.execute(
@@ -818,6 +821,7 @@ def admin_delete_user(user_id: int, request: Request):
         raise HTTPException(status_code=400, detail="Cannot delete self")
     conn = get_db()
     try:
+        conn.execute("BEGIN IMMEDIATE")     # serialize the count check + deletes (no TOCTOU lockout race)
         target = conn.execute("SELECT role FROM users WHERE id = ?", (user_id,)).fetchone()
         if target is None:
             raise HTTPException(status_code=404, detail="No such user")
@@ -852,14 +856,17 @@ def admin_set_role(user_id: int, req: RoleUpdateRequest, request: Request):
     _require_admin(request)
     conn = get_db()
     try:
-        target = conn.execute("SELECT role FROM users WHERE id = ?", (user_id,)).fetchone()
-        if target is None:
+        if conn.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)).fetchone() is None:
             raise HTTPException(status_code=404, detail="No such user")
-        if target["role"] == "admin" and req.role == "user" and \
-           conn.execute("SELECT COUNT(*) AS n FROM users WHERE role='admin'").fetchone()["n"] <= 1:
-            raise HTTPException(status_code=400, detail="Cannot demote the last admin")
-        conn.execute("UPDATE users SET role = ? WHERE id = ?", (req.role, user_id))
+        # Atomic guard (no separate count→update, so no TOCTOU race): the demote applies only if it
+        # won't drop the admin count to zero.
+        cur = conn.execute(
+            "UPDATE users SET role = ? WHERE id = ? AND "
+            "(? != 'user' OR role != 'admin' OR (SELECT COUNT(*) FROM users WHERE role='admin') > 1)",
+            (req.role, user_id, req.role))
         conn.commit()
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=400, detail="Cannot demote the last admin")
         return {"status": "ok", "role": req.role}
     finally:
         conn.close()

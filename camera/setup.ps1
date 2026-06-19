@@ -17,7 +17,8 @@ Info "Platform: Windows"
 Info "Checking for uv (the env/sandbox manager)"
 if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
   Write-Host "  uv not found. Install it once (user-level, NOT global), then re-run this script:" -ForegroundColor Yellow
-  Write-Host '    powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"' -ForegroundColor Yellow
+  Write-Host "    winget install astral-sh.uv        # preferred: auditable + pinned, no pipe-to-run" -ForegroundColor Yellow
+  Write-Host '    or: powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"' -ForegroundColor Yellow
   Write-Host "  (then open a new terminal so PATH picks up uv)" -ForegroundColor Yellow
   exit 1
 }

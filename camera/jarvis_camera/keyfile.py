@@ -33,7 +33,11 @@ def load_key(path, root):
         return ""
     try:
         if os.name == "posix" and (p.stat().st_mode & 0o077):
-            log.warning("%s is group/other-readable — run: chmod 600 %s", p, p)
+            try:
+                p.chmod(0o600)                       # best-effort: tighten a too-open key file
+                log.warning("%s was group/other-readable — tightened to 600.", p)
+            except OSError:
+                log.warning("%s is group/other-readable and couldn't be tightened — run: chmod 600 %s", p, p)
     except OSError:
         pass
     return p.read_text().strip()

@@ -43,6 +43,9 @@ def _cfg(path):
     return json.loads(p.read_text())
 
 
+_MAX_RESP_BYTES = 16 * 1024 * 1024     # bound the response (don't trust the server's size)
+
+
 def _req(method, url, key, data=None, timeout=20):
     """Authenticated JSON request (outbound only). Returns parsed JSON ({} if empty body)."""
     body = json.dumps(data).encode("utf-8") if data is not None else None
@@ -51,7 +54,10 @@ def _req(method, url, key, data=None, timeout=20):
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=body, method=method, headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as r:
-        raw = r.read().decode()
+        raw = r.read(_MAX_RESP_BYTES + 1)
+        if len(raw) > _MAX_RESP_BYTES:
+            raise RuntimeError("server response too large")
+        raw = raw.decode()
         return json.loads(raw) if raw else {}
 
 

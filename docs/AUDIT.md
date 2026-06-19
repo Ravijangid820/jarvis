@@ -668,3 +668,33 @@ _Details of each finding below are unchanged from the original review._
 
 ## Verified clean (no action)
 SQL fully parameterized (incl. dynamic `IN (…)` — placeholders only); tokens + API keys hashed at rest, no plaintext path; frontend XSS-safe by construction (React nodes only, http(s)-only links with `rel="noopener noreferrer"`, no `dangerouslySetInnerHTML`, no external fetches); CORS locked to `[]`; no committed secrets (double-checked; no deleted-secret history); CI has no injection/secret-leak; volume agent genuinely outbound-only (no shell, no deserialization); SSRF surface config-only; static serving traversal-safe; session-expiry timezones correct.
+
+---
+
+# Follow-up review — 2026-06-19 (session changes: camera module, admin/role, .exe/CI)
+
+Independent 3-part pass (server endpoints · camera/ module · CI/supply-chain/frontend) over the
+~1.8k-line diff since `49e43b9`. **No critical/high.** Verified correct: device-scoped keys never
+wield admin (`is_admin = role=='admin' AND not device_id`); `/events` provenance binding (a device
+can't spoof another); all new SQL parameterized; `/admin/*` all `_require_admin`-gated; last-admin
+delete re-raises `HTTPException` (not masked as 500); the agent executes **no** server-supplied code
+(JSON floats only); **nothing in `camera/` opens a listening socket**; subprocess is argv-list `schtasks`
+(no shell, no untrusted input); service runs **non-root / non-elevated** (systemd *user* unit /
+LIMITED Scheduled Task); model download is SHA-256 pinned + **fail-closed** in python/bash/powershell;
+frontend is XSS-safe + server-enforced authz.
+
+Hardening applied this session:
+| Item | Sev | Fix |
+|---|---|---|
+| Unbounded `/faces/enrolled` read (OOM from bad server) | med | 16 MB read cap in agent + facecli |
+| TOCTOU lock-out race in last-admin demote/delete | low | atomic conditional `UPDATE` + `BEGIN IMMEDIATE` |
+| `device_id` allowed control chars | low | `pattern=[A-Za-z0-9._:-]` on events + key mint |
+| `device_heartbeats` unbounded growth | low | prune rows >30 days |
+| key file warn-only on loose perms | low | best-effort `chmod 600` on POSIX |
+| plaintext-HTTP key exposure (no signal) | med | agent warns when sending key over `http://` |
+| CI `contents: write` workflow-wide | low | default `read`; `write` only in tag-gated release job |
+| uv install only via pipe-to-run | med | winget/pipx auditable alternative documented |
+
+**Open by design (documented, not regressions):** TLS on the orchestrator (LAN still plaintext — the
+top remaining item; see [[jarvis-tls-pending]] equivalent), at-rest DB encryption, and a hash-pinned
+dependency lockfile (`uv pip compile` + `--require-hashes`) for fully tamper-evident `.exe` builds.
