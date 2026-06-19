@@ -11,7 +11,7 @@ import logging
 
 from .base import Detector
 
-log = logging.getLogger("edge.gestures")
+log = logging.getLogger("camera.gestures")
 
 _TIPS, _PIPS = (8, 12, 16, 20), (6, 10, 14, 18)
 

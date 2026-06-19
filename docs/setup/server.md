@@ -61,7 +61,7 @@ narrows write access to the data dirs (source + `.git` stay read-only to the ser
 ## Next
 
 - **Deploying changes / network / TLS / firewall:** [DEPLOY.md](../DEPLOY.md).
-- **Edge devices that talk to this server:** the [Raspberry Pi agent](raspberry-pi.md) and the
+- **Edge devices that talk to this server:** the [Raspberry Pi agent](camera.md) and the
   [Windows volume agent](volume-agent.md) authenticate with machine API keys. **Bind each key to
   its device** so it can only pull/post for that device:
   `manage.py mint-key <user> <description> <device_id>` (e.g. `… volume-agent laptop`).

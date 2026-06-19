@@ -1,4 +1,4 @@
-# Jarvis Edge — Raspberry Pi deps. SEPARATE from the server's pyproject (different machine/arch).
+# Jarvis Camera — Raspberry Pi deps. SEPARATE from the server's pyproject (different machine/arch).
 # Pi 3 B+ notes: use a 64-bit OS (needed for mediapipe wheels) and add a swapfile (only 1 GB RAM).
 #
 # Install OpenCV + picamera2 via apt (lighter/faster than building pip wheels on a Pi); see setup.sh:

@@ -21,7 +21,7 @@ from pathlib import Path
 
 from .base import Detector
 
-log = logging.getLogger("edge.faces")
+log = logging.getLogger("camera.faces")
 
 
 class FaceDetector(Detector):

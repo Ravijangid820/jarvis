@@ -1,4 +1,4 @@
-"""Jarvis edge agent: capture → motion gate → one heavy detector per cycle → POST events.
+"""Jarvis camera agent: capture → motion gate → one heavy detector per cycle → POST events.
 
 The Pi 3 B+ can't run pose + gestures + faces concurrently in real time, so the loop runs the
 cheap motion detector every frame and, only while there's motion, escalates to *one* enabled
@@ -21,16 +21,16 @@ from .detectors.pose import PoseDetector
 from .events import EventClient
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-log = logging.getLogger("edge.agent")
+log = logging.getLogger("camera.agent")
 
-EDGE_ROOT = Path(__file__).resolve().parents[1]
+CAMERA_ROOT = Path(__file__).resolve().parents[1]
 HEAVY = {"faces": FaceDetector, "pose": PoseDetector, "gestures": GestureDetector}
 
 
 def _load_key(cfg):
-    p = Path(cfg["server"].get("api_key_file", "config/edge.key"))
+    p = Path(cfg["server"].get("api_key_file", "config/agent.key"))
     if not p.is_absolute():
-        p = EDGE_ROOT / p
+        p = CAMERA_ROOT / p
     if not p.exists():
         return ""
     if p.stat().st_mode & 0o077:
@@ -145,8 +145,8 @@ def run(config_path, dry_run=False):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Jarvis edge vision agent")
-    ap.add_argument("--config", default=str(EDGE_ROOT / "config" / "config.json"))
+    ap = argparse.ArgumentParser(description="Jarvis camera vision agent")
+    ap.add_argument("--config", default=str(CAMERA_ROOT / "config" / "config.json"))
     ap.add_argument("--dry-run", action="store_true", help="log events instead of POSTing")
     args = ap.parse_args()
     run(args.config, dry_run=args.dry_run)

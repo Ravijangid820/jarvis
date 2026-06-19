@@ -1,7 +1,7 @@
 """Benchmark each detector's throughput — run on the Pi (or your laptop webcam) to see what it
 can handle before deploying.
 
-  python -m jarvis_edge.bench [--config config/config.json] [--frames 60]
+  python -m jarvis_camera.bench [--config config/config.json] [--frames 60]
 
 Reports achieved FPS + mean latency per detector (motion, faces, pose, gestures) using the
 config's camera/detector settings, so you can see e.g. "pose: 2.3 FPS" before deciding what to
@@ -20,7 +20,7 @@ from .detectors.motion import MotionDetector
 from .detectors.pose import PoseDetector
 
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
-EDGE_ROOT = Path(__file__).resolve().parents[1]
+CAMERA_ROOT = Path(__file__).resolve().parents[1]
 DETECTORS = [("motion", MotionDetector), ("faces", FaceDetector),
              ("pose", PoseDetector), ("gestures", GestureDetector)]
 
@@ -51,8 +51,8 @@ def _bench(name, det, cam, frames):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Benchmark edge detectors on this device")
-    ap.add_argument("--config", default=str(EDGE_ROOT / "config" / "config.json"))
+    ap = argparse.ArgumentParser(description="Benchmark camera detectors on this device")
+    ap.add_argument("--config", default=str(CAMERA_ROOT / "config" / "config.json"))
     ap.add_argument("--frames", type=int, default=60)
     args = ap.parse_args()
     cfg = json.loads(Path(args.config).read_text())

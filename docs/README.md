@@ -11,7 +11,7 @@ deploying. They run on different machines and have independent environments.
 | Component | Runs on | Setup doc | Entry point |
 |---|---|---|---|
 | **Server** — orchestrator + web UI | the Proxmox LXC | [setup/server.md](setup/server.md) (+ [DEPLOY.md](DEPLOY.md) for re-deploys) | `bash src/scripts/setup.sh` |
-| **Raspberry Pi vision agent** — camera, motion/face/pose/gestures | the Pi | [setup/raspberry-pi.md](setup/raspberry-pi.md) | `bash edge/setup.sh` → `python -m jarvis_edge.bench` |
+| **Camera vision agent** — motion/face/pose/gestures (laptop webcam or Pi) | the device | [setup/camera.md](setup/camera.md) | `camera/setup.ps1` (Win) · `bash camera/setup.sh` (Pi) |
 | **Windows volume agent** — controls the laptop/BT volume | the laptop | [setup/volume-agent.md](setup/volume-agent.md) | `python volume_agent.py` |
 
 ## Core docs
@@ -20,7 +20,7 @@ deploying. They run on different machines and have independent environments.
 |---|---|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Components, the orchestrator module graph, design decisions, security model |
 | [WORKFLOWS.md](WORKFLOWS.md) | Runtime flows: chat request lifecycle, prompt token-budgeting, RAG, fact extraction, the voice loop, auth |
-| [API.md](API.md) | Full HTTP endpoint reference (auth, chat, sessions, knowledge, admin, edge events, device control) |
+| [API.md](API.md) | Full HTTP endpoint reference (auth, chat, sessions, knowledge, admin, camera/vision events, device control) |
 | [SPECS.md](SPECS.md) | Hardware, models, performance, the config reference, and the DB schema |
 | [DEPLOY.md](DEPLOY.md) | Deploy runbook: units, re-embed migration, Tailscale/localhost firewall, the admin CLI |
 | [AUDIT.md](AUDIT.md) | The 81-finding self-audit (2026-06-15) + a 2026-06-17 follow-up review (F1–F24) covering the device/edge/agent subsystems |
@@ -41,7 +41,7 @@ src/orchestrator/   FastAPI app — see ARCHITECTURE.md for the module graph
 src/scripts/        setup.sh + download_models.sh + build_native.sh (bootstrap), run_listener.sh
                     (voice), manage.py (admin CLI), reembed_memory.py (migration), fetch_fonts.py
 frontend/           React 19 + Vite chat UI (+ admin console)
-edge/               Raspberry Pi camera/vision agent — own env (setup: docs/setup/raspberry-pi.md)
+camera/             on-device camera/vision agent (laptop webcam or Pi) — own env (setup: docs/setup/camera.md)
 clients/            device agents on other machines — e.g. clients/volume-agent/ (Windows volume)
 config/             schema.sql + jarvis.example.json (real jarvis.json is gitignored)
 systemd/            llama-fast + jarvis-orchestrator service units

@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-19 — Rename `edge/` → `camera/` (one canonical, Windows-first camera module)
+
+- The vision module is now **`camera/`** (package **`jarvis_camera`**), reflecting that it's a
+  general on-device camera agent — laptop webcam *or* Pi — not a Pi-only "edge" thing. `git mv`
+  preserved history; logger namespace `edge.*` → `camera.*`; the device key file is now
+  `camera/config/agent.key`. No code duplication (the whole point — fewer copies to keep secure).
+- Run commands are now `python -m jarvis_camera.{agent,enroll,bench}`. Docs renamed
+  `setup/raspberry-pi.md` → `setup/camera.md` (Windows-first, Pi still covered); README/admin-UI
+  hints updated. Server endpoints, schema, and the event contract are unchanged.
+
 ## 2026-06-19 — Admin: mint device-bound (camera/edge) keys from the UI
 
 - The **Keys** tab now has a **Device ID** field — minting with one creates a **device-bound** key,
@@ -211,7 +221,7 @@ Deferred: F9/F16 (accepted), F17, F22 (CSP mitigates), F24 (functional). Tests: 
 ## 2026-06-16 — Docs: grouped setup guides under docs/setup/
 
 - Per-component setup docs now live together under **`docs/setup/`**: `server.md` (new,
-  consolidated), `raspberry-pi.md` (moved from `edge/README.md`), `volume-agent.md` (moved from
+  consolidated), `camera.md` (moved from `edge/README.md`), `volume-agent.md` (moved from
   `clients/volume-agent/README.md`). The `edge/` and `clients/volume-agent/` dirs keep a short
   pointer README. The docs index links all three under "Setup guides (by component)".
 

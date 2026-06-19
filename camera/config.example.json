@@ -3,7 +3,7 @@
   "server": {
     "url": "http://192.168.0.101:5000",
     "events_endpoint": "/events",
-    "api_key_file": "config/edge.key"
+    "api_key_file": "config/agent.key"
   },
   "camera": {
     "backend": "auto",

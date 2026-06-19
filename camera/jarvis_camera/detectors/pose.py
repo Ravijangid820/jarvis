@@ -11,7 +11,7 @@ import logging
 
 from .base import Detector
 
-log = logging.getLogger("edge.pose")
+log = logging.getLogger("camera.pose")
 
 
 class PoseDetector(Detector):

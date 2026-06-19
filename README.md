@@ -101,7 +101,7 @@ uv run pytest -q && uv run ruff check src/orchestrator src/scripts tests
 │   ├── manage.py               ← admin CLI (create-admin / reset-password / mint-key)
 │   └── reembed_memory.py       ← one-time vector-store migration
 ├── frontend/                   ← React 19 + Vite chat UI (+ admin console)
-├── edge/                       ← Raspberry Pi camera/vision agent (own env)
+├── camera/                     ← on-device camera/vision agent — laptop webcam or Pi (own env)
 ├── clients/                    ← device agents (e.g. clients/volume-agent/ — Windows volume)
 ├── config/
 │   ├── jarvis.example.json     ← config template (real jarvis.json is gitignored)
@@ -196,7 +196,7 @@ Full docs live in **[docs/](docs/README.md)**:
 
 | Doc | What's in it |
 |---|---|
-| **Setup guides** → [server](docs/setup/server.md) · [Raspberry Pi](docs/setup/raspberry-pi.md) · [volume agent](docs/setup/volume-agent.md) | Per-component install (root or dedicated user) |
+| **Setup guides** → [server](docs/setup/server.md) · [Raspberry Pi](docs/setup/camera.md) · [volume agent](docs/setup/volume-agent.md) | Per-component install (root or dedicated user) |
 | [Architecture](docs/ARCHITECTURE.md) | Components, module graph, design decisions, security model |
 | [Workflows](docs/WORKFLOWS.md) | Chat lifecycle, prompt token-budgeting, RAG, fact extraction, voice loop |
 | [API Reference](docs/API.md) | Every HTTP endpoint, auth, request/response shapes |

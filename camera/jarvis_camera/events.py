@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 
 import requests
 
-log = logging.getLogger("edge.events")
+log = logging.getLogger("camera.events")
 
 
 def _now_iso():
@@ -34,7 +34,7 @@ class EventClient:
     def start(self):
         if self.dry_run:
             return
-        self._worker = threading.Thread(target=self._drain, daemon=True, name="edge-events")
+        self._worker = threading.Thread(target=self._drain, daemon=True, name="camera-events")
         self._worker.start()
 
     def send(self, type, data=None):

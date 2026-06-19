@@ -9,7 +9,7 @@ import time
 
 from .base import Detector
 
-log = logging.getLogger("edge.motion")
+log = logging.getLogger("camera.motion")
 
 
 class MotionDetector(Detector):

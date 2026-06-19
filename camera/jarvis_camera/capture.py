@@ -6,7 +6,7 @@ Backend is chosen by config: "auto" prefers picamera2 if importable, else OpenCV
 """
 import logging
 
-log = logging.getLogger("edge.capture")
+log = logging.getLogger("camera.capture")
 
 
 class Camera:

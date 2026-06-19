@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Enroll a face: capture a few frames from the camera, average the embedding, register it.
 
-  .venv/bin/python -m jarvis_edge.enroll --name "Ravi" [--frames 7] [--config config/config.json]
-  (Windows:  .venv\\Scripts\\python -m jarvis_edge.enroll --name "Ravi")
+  .venv/bin/python -m jarvis_camera.enroll --name "Ravi" [--frames 7] [--config config/config.json]
+  (Windows:  .venv\\Scripts\\python -m jarvis_camera.enroll --name "Ravi")
 
 MediaPipe finds the face; the **embedding model** (set `detectors.faces.embed_model` to an ONNX
 face-embedding model, e.g. MobileFaceNet) turns it into the vector that identifies a person. This
@@ -23,14 +23,14 @@ from .capture import Camera
 from .detectors.faces import FaceDetector
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-log = logging.getLogger("edge.enroll")
-EDGE_ROOT = Path(__file__).resolve().parents[1]
+log = logging.getLogger("camera.enroll")
+CAMERA_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _load_key(cfg):
-    p = Path(cfg["server"].get("api_key_file", "config/edge.key"))
+    p = Path(cfg["server"].get("api_key_file", "config/agent.key"))
     if not p.is_absolute():
-        p = EDGE_ROOT / p
+        p = CAMERA_ROOT / p
     return p.read_text().strip() if p.exists() else ""
 
 
@@ -95,7 +95,7 @@ def main():
     ap = argparse.ArgumentParser(description="Enroll a face for Jarvis recognition")
     ap.add_argument("--name", required=True, help="person's name (display label)")
     ap.add_argument("--frames", type=int, default=7, help="good frames to average (default 7)")
-    ap.add_argument("--config", default=str(EDGE_ROOT / "config" / "config.json"))
+    ap.add_argument("--config", default=str(CAMERA_ROOT / "config" / "config.json"))
     args = ap.parse_args()
     run(args.name, args.frames, args.config)
 

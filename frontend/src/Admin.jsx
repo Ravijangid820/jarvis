@@ -173,8 +173,8 @@ export default function Admin({ token, onExit }) {
             UPLINK ESTABLISHED · copy now (shown once): <strong>{minted}</strong>
             {mintedDev && <div style={{ marginTop: 8, fontSize: '0.78rem' }}>
               Device-bound to <strong>{mintedDev}</strong> · on that device, save this into
-              <code> edge/config/edge.key</code> (Windows: <code>edge\config\edge.key</code>), then run
-              <code> .venv\Scripts\python -m jarvis_edge.agent</code>.
+              <code> camera/config/agent.key</code> (Windows: <code>camera\config\agent.key</code>), then run
+              <code> .venv\Scripts\python -m jarvis_camera.agent</code>.
             </div>}
           </div>}
           <table className="adm-table">
@@ -201,7 +201,7 @@ export default function Admin({ token, onExit }) {
             <p className="adm-hint">Where face recognition runs. Active = the edge device is running and
               reaching the server (heartbeat within 90s). To connect one: mint a <strong>device-bound key</strong>
               in the <button className="adm-link" onClick={() => setTab("keys")}>Keys</button> tab, save it to
-              <code> edge/config/edge.key</code> on that device, and run the agent.</p>
+              <code> camera/config/agent.key</code> on that device, and run the agent.</p>
             <div className="adm-services">
               {cameras.map((sv, i) => (
                 <div className="adm-svc" key={i}>
@@ -219,7 +219,7 @@ export default function Admin({ token, onExit }) {
             <h2>Enrolled Faces</h2>
             <p className="adm-hint">
               Enroll on the device (which has the camera + embedding model):
-              <code> uv run --no-project python -m jarvis_edge.enroll --name "Name" </code>.
+              <code> .venv\Scripts\python -m jarvis_camera.enroll --name "Name" </code>.
               Link a face to a user to gate device actions by who's present.
             </p>
             <table className="adm-table">

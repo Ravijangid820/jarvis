@@ -1,6 +1,6 @@
 # Desktop/laptop deps (Windows / macOS / Linux) — for testing the camera code WITHOUT a Pi.
 # (On the Raspberry Pi, OpenCV/picamera2 come from apt instead — see requirements.txt + setup.sh.)
-#   cd edge && uv venv && uv pip install -r requirements-desktop.txt
+#   cd camera && uv venv && uv pip install -r requirements-desktop.txt
 numpy<2
 requests>=2.31,<3
 opencv-python>=4.8        # webcam capture + motion detection (the minimum to test the camera)

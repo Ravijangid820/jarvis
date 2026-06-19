@@ -1,15 +1,17 @@
-# Jarvis Edge (Raspberry Pi vision agent)
+# Jarvis Camera (on-device vision agent)
 
 An on-device agent that watches a camera and sends **high-level events** (not video) to the
-Jarvis orchestrator. All recognition runs **on the Pi** so the server isn't loaded, and no
-imagery ever leaves the device — only small JSON events over the LAN.
+Jarvis orchestrator. All recognition runs **on the device** so the server isn't loaded, and no
+imagery ever leaves the device — only small JSON events over the LAN. The **same code** runs on a
+**Windows/macOS/Linux laptop webcam** (start here — see *Test on a laptop* below) and a **Raspberry
+Pi** camera; the capture layer picks the backend automatically.
 
-> **Code:** [`edge/`](../../edge/) in the repo. Run the commands below **on the Pi, from the `edge/` directory.**
+> **Code:** [`camera/`](../../camera/) in the repo. Run the commands below **on the device with the
+> camera, from the `camera/` directory** (the laptop you're testing on, or the Pi).
 
-> Status: **scaffold, untested on hardware.** Written ahead of having the Pi connected. The
-> foundation (capture, motion, event client, agent loop) is standard. The heavy detectors
-> (faces/pose/gestures) are now **implemented** but unrun on this hardware — use `bench.py`
-> (below) on the Pi to measure real FPS and decide what to enable.
+> Status: **runs on a laptop webcam today; untested on Pi hardware.** The foundation (capture,
+> motion, event client, agent loop) is standard. The heavy detectors (faces/pose/gestures) are
+> **implemented**; on a Pi, use `bench.py` (below) to measure real FPS and decide what to enable.
 
 ## Hardware reality (Raspberry Pi 3 B+, 1 GB RAM)
 
@@ -44,7 +46,7 @@ camera ─► capture.py ─► agent.py (loop)
 
 ## Event contract (Pi → orchestrator)
 
-`POST {server.url}{server.events_endpoint}` with `Authorization: Bearer <edge key>`:
+`POST {server.url}{server.events_endpoint}` with `Authorization: Bearer <device key>`:
 
 ```json
 { "device_id": "pi-livingroom", "type": "motion|face_seen|pose|gesture",
@@ -60,7 +62,7 @@ events locally without sending.
 ```bash
 # install mediapipe (pose/gestures) into the venv first if you want to bench them:
 #   uv pip install --python .venv/bin/python mediapipe onnxruntime
-cd edge && .venv/bin/python -m jarvis_edge.bench --frames 60
+cd camera && .venv/bin/python -m jarvis_camera.bench --frames 60
 #   motion   :  28.0 FPS  (  35.7 ms/frame)
 #   faces    :   6.5 FPS  ( 153.0 ms/frame)
 #   pose     :   2.3 FPS  ( 435.0 ms/frame)   ← decide if this is usable for you
@@ -68,27 +70,27 @@ cd edge && .venv/bin/python -m jarvis_edge.bench --frames 60
 ```
 
 > **Always run via the venv's python** (`.venv/bin/python …`, or `.venv\Scripts\python …` on
-> Windows). `uv run` is for the *server* project; from `edge/` it would pick the system Python (or
-> the server's env), not `edge/.venv` — so the sandboxed deps wouldn't be found.
+> Windows). `uv run` is for the *server* project; from `camera/` it would pick the system Python (or
+> the server's env), not `camera/.venv` — so the sandboxed deps wouldn't be found.
 
 Use the numbers to set each detector's `interval_s` (and whether to enable it) in config.
 
 ## Setup (on the Pi)
 
 ```bash
-bash edge/setup.sh          # 64-bit check, apt deps, uv venv + uv pip install, config
+bash camera/setup.sh          # 64-bit check, apt deps, uv venv + uv pip install, config
 # then on the SERVER, mint a key for this device and copy it to the Pi:
-#   uv run python src/scripts/manage.py mint-key <user> pi-vision <device_id>  →  edge/config/edge.key
+#   uv run python src/scripts/manage.py mint-key <user> pi-vision <device_id>  →  camera/config/agent.key
 #   (the last arg binds the key to that device — it may then only post events as that device)
-cp edge/config.example.json edge/config/config.json   # review server.url / camera / detectors
-cd edge && .venv/bin/python -m jarvis_edge.agent       # or add --dry-run
+cp camera/config.example.json camera/config/config.json   # review server.url / camera / detectors
+cd camera && .venv/bin/python -m jarvis_camera.agent       # or add --dry-run
 ```
 
 ## Test on a laptop (no Pi) — uses your webcam
 
 The same code runs on a laptop: the camera layer falls back to **OpenCV/webcam** when picamera2
 isn't present, so you can test the whole pipeline before you have the Pi. Everything stays in a
-**uv-managed venv** (`edge/.venv`) + a **uv-managed Python** — nothing is installed globally.
+**uv-managed venv** (`camera/.venv`) + a **uv-managed Python** — nothing is installed globally.
 
 > MediaPipe (faces/pose/gestures) has **no Python 3.13 wheels yet**, so pin **3.12** for the venv
 > (`uv venv --python 3.12`). uv downloads a managed CPython 3.12 into its own cache — not a system
@@ -100,35 +102,35 @@ isn't present, so you can test the whole pipeline before you have the Pi. Everyt
 # 0. Install uv once if you don't have it (user-level binary, not a global Python package):
 #    powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 # 1. Get the code (small; models/builds are gitignored):
-git clone <repo> jarvis ; cd jarvis\edge
+git clone <repo> jarvis ; cd jarvis\camera
 # 2. Bootstrap the sandbox (add -WithFaces to also install mediapipe + onnxruntime):
 powershell -ExecutionPolicy Bypass -File setup.ps1 -WithFaces
 # 3. Edit config\config.json: device_id="laptop-cam", server.url="http://192.168.0.101:5000",
 #    camera.backend="auto"; for faces set detectors.faces.enabled=true.
 # 4. Test with NO server first (run via the venv's python — fully sandboxed):
-.venv\Scripts\python -m jarvis_edge.bench --frames 60
-.venv\Scripts\python -m jarvis_edge.agent --dry-run
-# 5. Go live: on the SERVER mint a device-bound key → save to edge\config\edge.key, then:
-.venv\Scripts\python -m jarvis_edge.agent      # events POST to /events → admin shows the camera green
+.venv\Scripts\python -m jarvis_camera.bench --frames 60
+.venv\Scripts\python -m jarvis_camera.agent --dry-run
+# 5. Go live: on the SERVER mint a device-bound key → save to camera\config\agent.key, then:
+.venv\Scripts\python -m jarvis_camera.agent      # events POST to /events → admin shows the camera green
 ```
 
 ### macOS / Linux
 
 ```bash
-# 1. Get the code (or sparse-checkout just edge/):
-git clone <repo> jarvis && cd jarvis/edge
+# 1. Get the code (or sparse-checkout just camera/):
+git clone <repo> jarvis && cd jarvis/camera
 # 2. Sandbox: Python 3.12 venv + desktop deps (add mediapipe/onnxruntime for faces/pose):
 uv venv --python 3.12
 uv pip install --python .venv/bin/python -r requirements-desktop.txt
 uv pip install --python .venv/bin/python "mediapipe>=0.10,<0.11" "onnxruntime>=1.17,<2"   # optional: faces
-# 3. Config (you're in edge/):
+# 3. Config (you're in camera/):
 cp config.example.json config/config.json
 #    device_id="laptop-cam", server.url="http://192.168.0.101:5000", camera.backend="auto"
 # 4. Test with NO server first — ALWAYS run via the venv's python (not `uv run`):
-.venv/bin/python -m jarvis_edge.bench --frames 60
-.venv/bin/python -m jarvis_edge.agent --dry-run
-# 5. Go live: on the SERVER mint a device-bound key, save to edge/config/edge.key, then:
-.venv/bin/python -m jarvis_edge.agent
+.venv/bin/python -m jarvis_camera.bench --frames 60
+.venv/bin/python -m jarvis_camera.agent --dry-run
+# 5. Go live: on the SERVER mint a device-bound key, save to camera/config/agent.key, then:
+.venv/bin/python -m jarvis_camera.agent
 ```
 
 > Mint the device key **on the server**: `uv run python src/scripts/manage.py mint-key <user> laptop-cam laptop-cam`
@@ -146,13 +148,13 @@ MediaPipe finds the face; **identity** needs an embedding model — point
 and use an **admin** API key (`/faces/enroll` is admin-only). Then, on the device with the camera:
 
 ```bash
-cd edge
-.venv/bin/python -m jarvis_edge.enroll --name "Ravi"            # ~7 frames, averaged, registered
-#  Windows:  .venv\Scripts\python -m jarvis_edge.enroll --name "Ravi"
+cd camera
+.venv/bin/python -m jarvis_camera.enroll --name "Ravi"            # ~7 frames, averaged, registered
+#  Windows:  .venv\Scripts\python -m jarvis_camera.enroll --name "Ravi"
 ```
 
 The `api_key_file` in your config must hold an **admin** key for enrollment. For a first test you can
-point a second config (or temporarily swap `edge.key`) to an admin key just to enroll, then put the
+point a second config (or temporarily swap `agent.key`) to an admin key just to enroll, then put the
 device-bound key back for normal running.
 
 Then **manage / link** faces in the **admin → Faces** page (linking a face to a user account is what
@@ -162,14 +164,14 @@ gates device actions by who's present). The running agent pulls the enrolled set
 ## Layout
 
 ```
-edge/
+camera/
   README.md            this file
   requirements.txt          Pi-side deps (separate from the server's pyproject)
   requirements-desktop.txt  laptop deps (opencv + numpy + requests; mediapipe/onnxruntime optional)
   config.example.json       server URL, camera, per-detector toggles/thresholds
   setup.sh                  Pi / Linux / macOS bootstrap (uv venv + uv pip)
   setup.ps1                 Windows laptop bootstrap (uv venv 3.12 + uv pip; -WithFaces)
-  jarvis_edge/
+  jarvis_camera/
     capture.py         camera abstraction (picamera2 for CSI, OpenCV for USB)
     events.py          event client (POST + offline queue + retry)
     agent.py           main loop + motion-gated scheduler (+ pulls enrolled faces)
@@ -194,7 +196,7 @@ turn on **identity**. `pose`/`gestures` accept `model_complexity`.
    `vision_events`. (Acting on them — notifications/automation — can hang off this.)
 3. ✅ **Faces / pose / gestures:** implemented (faces identity is optional, model-gated). **Now:
    benchmark on the Pi** and tune `interval_s` / which to enable.
-4. ✅ **Enrollment + face management:** `jarvis_edge.enroll` (CLI) → server `faces` store; admin
+4. ✅ **Enrollment + face management:** `jarvis_camera.enroll` (CLI) → server `faces` store; admin
    **Faces** page lists / links face→user / deletes; the agent pulls `/faces/enrolled`. Future:
    in-browser capture enrollment.
 5. **Identity → authorization:** link a recognized face's user to the per-user device permissions
