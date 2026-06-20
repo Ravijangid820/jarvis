@@ -107,10 +107,10 @@ git clone <repo> jarvis ; cd jarvis\camera
 # 2. One script: venv + opencv + download/verify the face models  (add -WithPose for pose/gestures):
 powershell -ExecutionPolicy Bypass -File setup.ps1
 # 3. Edit config\config.json: device_id, server.url="http://192.168.0.101:5000".
-# 4. Test with NO server first (run via the venv's python — fully sandboxed):
-.venv\Scripts\python -m jarvis_camera.facecli verify     # who's at the camera now (fully local)
-.venv\Scripts\python -m jarvis_camera.agent --dry-run    # events logged, not sent
-# 5. Go live: save a device key to camera\config\agent.key (step below), then:
+# 4. Test with NO key/server first (run via the venv's python — fully sandboxed):
+.venv\Scripts\python -m jarvis_camera.agent --dry-run    # webcam on, events logged, nothing sent
+# 5. Save the device key (helper avoids PowerShell quoting pitfalls), then go live:
+powershell -ExecutionPolicy Bypass -File set-key.ps1 jk-yourkey
 .venv\Scripts\python -m jarvis_camera.agent              # events POST → admin shows the camera green
 ```
 
@@ -120,16 +120,18 @@ powershell -ExecutionPolicy Bypass -File setup.ps1
 git clone <repo> jarvis && cd jarvis/camera
 bash setup.sh                 # auto-detects Pi vs Linux vs macOS; installs deps + downloads models
 #   bash setup.sh --with-pose # also install mediapipe (pose + hand gestures)
-# then edit config/config.json (server.url, camera.device), and run via the venv's python:
-.venv/bin/python -m jarvis_camera.facecli verify
+# edit config/config.json (server.url, camera.device); test, save the key, go live:
 .venv/bin/python -m jarvis_camera.agent --dry-run
+bash set-key.sh jk-yourkey
 .venv/bin/python -m jarvis_camera.agent
 ```
 
 > Mint the device key **on the server**: admin → **Keys** → set a Device ID (e.g. `laptop-cam`),
-> **under a non-admin user**, and save it to `camera/config/agent.key`. (CLI alternative:
-> `uv run python src/scripts/manage.py mint-key <non-admin-user> laptop-cam laptop-cam`.) Enrolling
-> faces additionally needs an **admin** key in `camera/config/admin.key` — see below.
+> **under a non-admin user**, then save it with **`set-key.ps1 jk-…`** (Windows) / **`set-key.sh jk-…`**
+> (Unix) — these write `config/agent.key` exactly (no quoting/encoding pitfalls). To write it by hand
+> instead, use the explicit form `Set-Content -Path config\agent.key -Value 'jk-…' -NoNewline` (the
+> positional form can bind the args in the wrong order). Enrolling faces needs an **admin** key:
+> `set-key.ps1 jk-… -Admin` (Unix: `set-key.sh jk-… --admin`) → `config/admin.key`; remove it after.
 
 **Windows gotchas:** allow camera access (Settings → Privacy & security → Camera → *Let desktop apps
 access your camera*); close Teams/Zoom/etc. so the webcam is free; the server's `:5000` must be
@@ -238,6 +240,7 @@ camera/
   run.sh   / run.ps1        run once in the foreground (testing; no service)
   service.sh / service.ps1  make persistent: systemd user service (Linux) · Scheduled Task (Windows)
   install.sh / install.ps1  one command: setup + service (thin readable wrappers)
+  set-key.sh / set-key.ps1  write config/agent.key (or admin.key) safely — no quoting pitfalls
   run_exe.py                PyInstaller entry → jarvis-camera.exe (built in CI)
   models/                   YuNet + SFace ONNX (downloaded + sha256-verified by setup; gitignored)
   jarvis_camera/

@@ -195,8 +195,8 @@ export default function Admin({ token, onExit }) {
           {minted && <div className="adm-minted">
             UPLINK ESTABLISHED · copy now (shown once): <strong>{minted}</strong>
             {mintedDev && <div style={{ marginTop: 8, fontSize: '0.78rem' }}>
-              Device-bound to <strong>{mintedDev}</strong> · on that device, save this into
-              <code> camera/config/agent.key</code> (Windows: <code>camera\config\agent.key</code>), then run
+              Device-bound to <strong>{mintedDev}</strong> · on that device save it with
+              <code> set-key.ps1 {minted}</code> (Unix: <code>bash set-key.sh {minted}</code>), then run
               <code> .venv\Scripts\python -m jarvis_camera.agent</code>.
             </div>}
           </div>}

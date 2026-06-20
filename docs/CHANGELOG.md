@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-20 — Camera: `set-key` helper (no PowerShell quoting pitfalls)
+
+- New **`set-key.ps1` / `set-key.sh`** write `config/agent.key` (or `config/admin.key` with `-Admin` /
+  `--admin`) with exact bytes (no BOM, no trailing newline, 0600). Fixes a real footgun: the
+  positional `Set-Content -NoNewline config\agent.key 'jk-…'` could bind the args in the wrong order
+  (creating a file *named* after the key). Setup scripts, the camera doc, and the admin minted-key
+  hint now point at the helper; the doc also shows the explicit `Set-Content -Path … -Value …` form.
+
 ## 2026-06-19 — Security review of the session's changes + hardening fixes
 
 Independent 3-part review (server · camera · CI/supply-chain/frontend) of everything added this

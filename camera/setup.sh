@@ -83,11 +83,11 @@ mkdir -p "$CAMERA/config"
 cat <<EOF
 
 Setup done ($PLATFORM). Next:
-  1. On the SERVER, mint a DEVICE key (admin → Keys, set a Device ID like this camera's name; mint it
-     under a NON-admin user) and save it to:  $CAMERA/config/agent.key   (chmod 600)
+  1. On the SERVER, mint a DEVICE key (admin → Keys, Device ID = this camera's name; under a
+     NON-admin user), then save it with the helper:  bash set-key.sh jk-yourkey
   2. Review $CAMERA/config/config.json (server.url, camera.device, which detectors are enabled).
   3. Try it (run via the venv's python):
-       cd "$CAMERA" && .venv/bin/python -m jarvis_camera.facecli verify     # who's at the camera (local)
        cd "$CAMERA" && .venv/bin/python -m jarvis_camera.agent --dry-run    # events logged, not sent
-  To enroll/delete faces you also need an ADMIN key in $CAMERA/config/admin.key (remove it when done).
+       cd "$CAMERA" && .venv/bin/python -m jarvis_camera.agent             # go live
+  To enroll faces: bash set-key.sh jk-ADMINkey --admin , then facecli add --name '...' (remove admin.key after).
 EOF
