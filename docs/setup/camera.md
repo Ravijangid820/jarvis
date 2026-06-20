@@ -206,6 +206,13 @@ Mint the **device** key in the **admin → Keys** tab (set a Device ID like `lap
 key is only needed for the *CLI* `add`/`delete` — put it in `config/admin.key`, and **delete that file
 when you're done** so the running device never holds a privileged credential.
 
+**HTTPS / TLS:** the server runs over **HTTPS** (local CA — see `src/scripts/setup_tls.sh` on the
+server). On each camera device, copy the server's **`tls/ca.crt`** to **`camera/config/ca.crt`** and
+set `server.url` to `https://…` + `server.ca_cert` to `config/ca.crt` (the config example already
+does). The agent then **verifies** the server (encrypted + MITM-safe). In a browser, import `ca.crt`
+as a trusted root once to avoid the warning. Verification is never skipped — without the CA the agent
+fails closed.
+
 **Enroll from the web UI (no CLI / no admin key on the device):** in **admin → Faces → “Enroll a face
 (from a camera)”**, pick the camera + a name and click *Request Enrollment*. A **live preview** (the
 camera frame with the detected face boxed) appears so you can see what's being captured. The server

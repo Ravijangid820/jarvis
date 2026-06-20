@@ -1,10 +1,11 @@
 {
   "device_id": "laptop-cam",
   "server": {
-    "url": "http://192.168.0.101:5000",
+    "url": "https://192.168.0.101:5000",
     "events_endpoint": "/events",
     "api_key_file": "config/agent.key",
-    "admin_key_file": "config/admin.key"
+    "admin_key_file": "config/admin.key",
+    "ca_cert": "config/ca.crt"
   },
   "camera": {
     "backend": "auto",

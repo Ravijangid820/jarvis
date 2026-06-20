@@ -4,6 +4,23 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-20 — TLS: HTTPS for the orchestrator (local CA), encrypted LAN
+
+- The orchestrator now serves **HTTPS** — closes the standing plaintext-LAN gap (login, session tokens,
+  API keys, events, and the enroll preview frames are all encrypted in transit, with server
+  authentication against MITM).
+- **`src/scripts/setup_tls.sh`** generates a **local CA** + a server cert with SANs (IP + localhost +
+  hostnames; configurable via `TLS_IP`/`TLS_HOSTS`). CA private key stays root-only; the cert carries
+  proper `basicConstraints`/`keyUsage` so **strict OpenSSL 3 / Python verification passes** (not just
+  curl). Enabled live via a systemd drop-in (`systemd/jarvis-orchestrator.service.d/tls.conf`,
+  `--ssl-certfile/--ssl-keyfile`); reversible by removing the drop-in.
+- **Camera client verifies properly:** new `jarvis_camera/net.py` builds an SSL context / requests
+  `verify=` from `server.ca_cert`; threaded through events, agent, facecli, enroll. Config example now
+  defaults to `https://…` + `ca_cert: config/ca.crt`. Verification is never disabled (fails closed).
+- Verified end-to-end: HTTPS health/login/admin over the CA; strict Python TLS verifies with the CA
+  and rejects without it; plain HTTP on :5000 now refused. Clients must trust `tls/ca.crt` (browser +
+  agents) and switch their URL to `https://`.
+
 ## 2026-06-20 — Faces: live enroll preview in the web UI
 
 - During a web-UI enrollment the admin now sees a **live camera preview with the detected face boxed**

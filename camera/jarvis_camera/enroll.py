@@ -25,6 +25,7 @@ from .capture import Camera
 from .detectors.faces import FaceDetector
 from .keyfile import load_key
 from .paths import base_dir
+from . import net
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("camera.enroll")
@@ -99,7 +100,7 @@ def run(name, frames, config_path, replace=False):
     req = urllib.request.Request(url, data=body, method="POST",
                                  headers={"Content-Type": "application/json", "Authorization": "Bearer " + key})
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(req, timeout=30, context=net.ssl_context(cfg)) as r:
             json.loads(r.read().decode())
         verb = "replaced — now 1 embedding for" if replace else "added an embedding for"
         log.info("✓ %s '%s' (averaged %d frames). Manage in the admin Faces page.", verb, name, len(vecs))

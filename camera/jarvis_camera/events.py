@@ -21,11 +21,13 @@ def _now_iso():
 
 
 class EventClient:
-    def __init__(self, url, api_key, device_id, endpoint="/events", dry_run=False, timeout=5, max_queue=500):
+    def __init__(self, url, api_key, device_id, endpoint="/events", dry_run=False, timeout=5,
+                 max_queue=500, verify=True):
         self.endpoint = url.rstrip("/") + endpoint
         self.device_id = device_id
         self.dry_run = dry_run
         self.timeout = timeout
+        self.verify = verify          # requests verify= : CA path (https w/ local CA) or True
         self._headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         self._q = queue.Queue(maxsize=max_queue)
         self._stop = threading.Event()
@@ -56,7 +58,8 @@ class EventClient:
                 continue
             while not self._stop.is_set():
                 try:
-                    r = requests.post(self.endpoint, headers=self._headers, json=evt, timeout=self.timeout)
+                    r = requests.post(self.endpoint, headers=self._headers, json=evt,
+                                      timeout=self.timeout, verify=self.verify)
                     if r.status_code < 300:
                         backoff = 1
                         break

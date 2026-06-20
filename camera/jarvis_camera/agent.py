@@ -18,6 +18,7 @@ from .detectors.faces import FaceDetector
 from .detectors.gestures import GestureDetector
 from .detectors.motion import MotionDetector
 from .detectors.pose import PoseDetector
+from . import net
 from .enroll import capture_average
 from .events import EventClient
 from .keyfile import load_key
@@ -36,12 +37,12 @@ def _load_key(cfg):
     return load_key(cfg["server"].get("api_key_file", "config/agent.key"), CAMERA_ROOT)
 
 
-def _fetch_enrolled(server, key):
+def _fetch_enrolled(server, key, ctx=None):
     """Pull the centrally-managed enrolled faces ({name: embedding}) for local recognition."""
     req = urllib.request.Request(server.rstrip("/") + "/faces/enrolled",
                                  headers={"Authorization": "Bearer " + key})
     try:
-        with urllib.request.urlopen(req, timeout=15) as r:
+        with urllib.request.urlopen(req, timeout=15, context=ctx) as r:
             data = r.read(_MAX_ENROLLED_BYTES + 1)        # bound the read (don't trust the server's size)
             if len(data) > _MAX_ENROLLED_BYTES:
                 log.warning("enrolled response too large (>%d bytes) — ignoring", _MAX_ENROLLED_BYTES)
@@ -52,23 +53,23 @@ def _fetch_enrolled(server, key):
         return {}
 
 
-def _poll_enroll(server, key):
+def _poll_enroll(server, key, ctx=None):
     """Check for a pending enroll request for THIS device (server binds it to our key)."""
     req = urllib.request.Request(server.rstrip("/") + "/faces/enroll-request",
                                  headers={"Authorization": "Bearer " + key})
-    with urllib.request.urlopen(req, timeout=10) as r:
+    with urllib.request.urlopen(req, timeout=10, context=ctx) as r:
         return json.loads(r.read(_MAX_ENROLLED_BYTES + 1).decode()).get("request")
 
 
-def _submit_enroll(server, key, request_id, embedding=None, error=None):
+def _submit_enroll(server, key, request_id, embedding=None, error=None, ctx=None):
     body = json.dumps({"request_id": request_id, "embedding": embedding, "error": error}).encode("utf-8")
     req = urllib.request.Request(server.rstrip("/") + "/faces/enroll-result", data=body, method="POST",
                                  headers={"Content-Type": "application/json", "Authorization": "Bearer " + key})
-    with urllib.request.urlopen(req, timeout=20) as r:
+    with urllib.request.urlopen(req, timeout=20, context=ctx) as r:
         r.read(4096)
 
 
-def _preview_uploader(server, key, request_id):
+def _preview_uploader(server, key, request_id, ctx=None):
     """Return an on_frame(frame, row, captured, total) callback that relays annotated JPEG frames to
     the server (throttled) so the admin UI can show what the camera sees during enrollment."""
     import base64
@@ -95,7 +96,7 @@ def _preview_uploader(server, key, request_id):
             req = urllib.request.Request(server.rstrip("/") + "/faces/enroll-preview", data=body,
                                          method="POST", headers={"Content-Type": "application/json",
                                                                  "Authorization": "Bearer " + key})
-            with urllib.request.urlopen(req, timeout=3) as r:
+            with urllib.request.urlopen(req, timeout=3, context=ctx) as r:
                 r.read(256)
         except Exception as e:
             log.debug("preview upload failed: %s", e)
@@ -103,10 +104,10 @@ def _preview_uploader(server, key, request_id):
     return on_frame
 
 
-def _maybe_enroll(server, key, cam, fdet, frames=7):
+def _maybe_enroll(server, key, cam, fdet, frames=7, ctx=None):
     """If an admin queued an enroll request for this device, capture on-camera + submit the embedding."""
     try:
-        reqd = _poll_enroll(server, key)
+        reqd = _poll_enroll(server, key, ctx)
     except Exception as e:
         log.debug("enroll poll failed: %s", e)
         return
@@ -116,16 +117,16 @@ def _maybe_enroll(server, key, cam, fdet, frames=7):
     log.info("enroll request #%s: capturing '%s' — look at the camera", rid, name)
     try:
         vec = capture_average(cam, fdet, frames, log_progress=False,
-                              on_frame=_preview_uploader(server, key, rid))
+                              on_frame=_preview_uploader(server, key, rid, ctx))
     except Exception as e:
         vec = None
         log.warning("enroll capture failed: %s", e)
     try:
         if vec:
-            _submit_enroll(server, key, rid, embedding=vec)
+            _submit_enroll(server, key, rid, embedding=vec, ctx=ctx)
             log.info("✓ enrolled '%s' from this camera", name)
         else:
-            _submit_enroll(server, key, rid, error="no clear face captured")
+            _submit_enroll(server, key, rid, error="no clear face captured", ctx=ctx)
             log.warning("enroll '%s' failed: no clear face", name)
     except Exception as e:
         log.warning("enroll submit failed: %s", e)
@@ -149,12 +150,18 @@ def run(config_path, dry_run=False):
     if not key and not dry_run:
         log.warning("no API key file found — running as --dry-run (events logged, not sent)")
         dry_run = True
-    if key and str(cfg["server"]["url"]).lower().startswith("http://"):
+    url = str(cfg["server"]["url"])
+    if key and url.lower().startswith("http://"):
         log.warning("server.url is http:// — the API key is sent in cleartext on the LAN. "
                     "Use https:// (TLS) once the orchestrator has it.")
+    ctx = net.ssl_context(cfg)        # verify against the configured CA on https (else default/no-op)
+    if url.lower().startswith("https://") and ctx is None:
+        log.warning("https without server.ca_cert — verifying against system CAs (a local CA won't be "
+                    "trusted). Set server.ca_cert to config/ca.crt.")
 
-    client = EventClient(cfg["server"]["url"], key, cfg.get("device_id", "pi"),
-                         endpoint=cfg["server"].get("events_endpoint", "/events"), dry_run=dry_run)
+    client = EventClient(url, key, cfg.get("device_id", "pi"),
+                         endpoint=cfg["server"].get("events_endpoint", "/events"),
+                         dry_run=dry_run, verify=net.verify_arg(cfg))
     client.start()
 
     cam = Camera(backend=cam_cfg.get("backend", "auto"), device=cam_cfg.get("device", 0),
@@ -167,7 +174,7 @@ def run(config_path, dry_run=False):
     # Recognition matches against centrally-managed identities — pull them from the server.
     fdet = next((d for d in heavy if d.name == "faces"), None)
     if fdet is not None and key:
-        enrolled = _fetch_enrolled(cfg["server"]["url"], key)
+        enrolled = _fetch_enrolled(url, key, ctx)
         fdet.set_known(enrolled)
         log.info("loaded %d enrolled face(s) from server", len(enrolled))
     last_run = {d.name: 0.0 for d in heavy}
@@ -198,7 +205,7 @@ def run(config_path, dry_run=False):
                 last_hb = t0
             if can_enroll and t0 - last_enroll >= ENROLL_INTERVAL:   # admin-queued enroll-from-UI
                 last_enroll = t0
-                _maybe_enroll(cfg["server"]["url"], key, cam, fdet)
+                _maybe_enroll(url, key, cam, fdet, ctx=ctx)
             frame = cam.read()
             if frame is None:
                 time.sleep(0.05)

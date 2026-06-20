@@ -27,7 +27,7 @@ from .capture import Camera
 from .detectors.faces import FaceDetector
 from .keyfile import load_key
 from .paths import base_dir
-from . import enroll
+from . import enroll, net
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("camera.facecli")
@@ -46,14 +46,14 @@ def _cfg(path):
 _MAX_RESP_BYTES = 16 * 1024 * 1024     # bound the response (don't trust the server's size)
 
 
-def _req(method, url, key, data=None, timeout=20):
+def _req(method, url, key, data=None, timeout=20, ctx=None):
     """Authenticated JSON request (outbound only). Returns parsed JSON ({} if empty body)."""
     body = json.dumps(data).encode("utf-8") if data is not None else None
     headers = {"Authorization": "Bearer " + key}
     if body is not None:
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=body, method=method, headers=headers)
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
         raw = r.read(_MAX_RESP_BYTES + 1)
         if len(raw) > _MAX_RESP_BYTES:
             raise RuntimeError("server response too large")
@@ -79,7 +79,7 @@ def _admin_key(cfg):
 def cmd_list(cfg, args):
     key = _device_key(cfg)
     try:
-        enrolled = _req("GET", cfg["server"]["url"].rstrip("/") + "/faces/enrolled", key).get("enrolled", {})
+        enrolled = _req("GET", cfg["server"]["url"].rstrip("/") + "/faces/enrolled", key, ctx=net.ssl_context(cfg)).get("enrolled", {})
     except urllib.error.HTTPError as e:
         sys.exit(f"server HTTP {e.code} listing faces")
     if not enrolled:
@@ -96,7 +96,7 @@ def cmd_verify(cfg, args):
         sys.exit("Verify needs OpenCV + the YuNet/SFace models — run setup (it downloads them) and "
                  "set detectors.faces.detector_model / embed_model.")
     try:
-        enrolled = _req("GET", cfg["server"]["url"].rstrip("/") + "/faces/enrolled", key).get("enrolled", {})
+        enrolled = _req("GET", cfg["server"]["url"].rstrip("/") + "/faces/enrolled", key, ctx=net.ssl_context(cfg)).get("enrolled", {})
     except Exception as e:
         log.warning("could not fetch enrolled set (%s) — continuing with none", e)
         enrolled = {}
@@ -139,14 +139,14 @@ def cmd_delete(cfg, args):
     key = _admin_key(cfg)
     base = cfg["server"]["url"].rstrip("/")
     try:
-        faces = _req("GET", base + "/admin/faces", key).get("faces", [])
+        faces = _req("GET", base + "/admin/faces", key, ctx=net.ssl_context(cfg)).get("faces", [])
     except urllib.error.HTTPError as e:
         sys.exit(f"server HTTP {e.code} — /admin/faces is admin-only; is config/admin.key an admin key?")
     matches = [f for f in faces if f["name"] == args.name]
     if not matches:
         sys.exit(f"No enrolled face named '{args.name}'. Run `list` to see the names.")
     for f in matches:
-        _req("DELETE", f"{base}/admin/faces/{f['id']}", key)
+        _req("DELETE", f"{base}/admin/faces/{f['id']}", key, ctx=net.ssl_context(cfg))
         log.info("deleted face '%s' (id %s)", f["name"], f["id"])
     print(f"Deleted {len(matches)} face(s) named '{args.name}'.")
 
