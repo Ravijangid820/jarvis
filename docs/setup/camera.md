@@ -206,13 +206,30 @@ Mint the **device** key in the **admin → Keys** tab (set a Device ID like `lap
 key is only needed for the *CLI* `add`/`delete` — put it in `config/admin.key`, and **delete that file
 when you're done** so the running device never holds a privileged credential.
 
-**HTTPS / TLS:** the server runs over **HTTPS** (local CA — see `src/scripts/setup_tls.sh` on the
-server). The public CA cert is **bundled at `camera/ca.crt`** (it ships with the repo, so every clone
-already has it — no copying), and the config defaults to `server.url: https://…` + `ca_cert: ca.crt`,
-so the agent **verifies** the server out of the box (encrypted + MITM-safe; never skips — fails closed
-without the CA). Only the **browser** needs a one-time step: import `camera/ca.crt` into Trusted Root
-Certification Authorities to drop the warning. (If you regenerate the CA, `setup_tls.sh` refreshes
-`camera/ca.crt` — commit it.)
+## HTTPS / TLS (per-deployment local CA)
+
+The server runs over **HTTPS** using a **local CA that each deployment generates for itself** — so
+certs are **never committed** (a cert is unique to one install; another developer running this in
+their home makes their own). On the **server**, once: `bash src/scripts/setup_tls.sh` (creates the CA
++ cert, prints the CA fingerprint), then enable the systemd TLS drop-in. The server then publishes its
+**public** CA at `https://<server>:5000/ca.crt` (private key never leaves the box).
+
+Each device fetches *that* server's CA and verifies against it:
+
+- **Camera agent:** `bash get-ca.sh` (Windows: `get-ca.ps1`) downloads the CA into `config/ca.crt`
+  and prints its SHA-256 — **compare it to the server's `setup_tls.sh` output** before trusting (the
+  bootstrap fetch is over an untrusted connection). Config defaults to `server.url: https://…` +
+  `ca_cert: config/ca.crt`, so the agent then verifies (MITM-safe; fails closed without the CA).
+- **Browser (desktop):** open `https://<server>:5000/ca.crt`, then import it into **Trusted Root
+  Certification Authorities** (Windows) / Keychain (macOS) to get a clean padlock.
+- **Phone (Android):** open `https://<server>:5000/ca.crt` in the browser to download it, then
+  **Settings → Security → Encryption & credentials → Install a certificate → CA certificate**, pick
+  the file (Android warns "your network may be monitored" — expected for a private CA). Chrome then
+  trusts it for browsing the web UI. **iOS:** open the URL → install the profile → **Settings →
+  General → About → Certificate Trust Settings** → enable full trust for the Jarvis CA.
+
+(There's no agent on a phone — it only browses the web UI, so it just needs the browser to trust the
+CA.) If you regenerate the CA, every device re-runs `get-ca` / re-imports.
 
 **Enroll from the web UI (no CLI / no admin key on the device):** in **admin → Faces → “Enroll a face
 (from a camera)”**, pick the camera + a name and click *Request Enrollment*. A **live preview** (the

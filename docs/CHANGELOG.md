@@ -4,7 +4,17 @@ All notable changes to this project are documented in this file.
 
 ---
 
-## 2026-06-20 — TLS: HTTPS for the orchestrator (local CA), encrypted LAN
+## 2026-06-20 — TLS: per-deployment CA distribution (not committed) + mobile
+
+- **Fix:** the CA cert is **per-deployment, never committed** (a previous commit bundled it, which
+  would be the wrong trust anchor for anyone else cloning the repo). Removed `camera/ca.crt` from git
+  and gitignored it; each install generates its own CA via `setup_tls.sh`.
+- **Distribution:** new public **`GET /ca.crt`** serves the deployment's own CA cert (public cert
+  only; auth-exempt). Helpers **`camera/get-ca.sh` / `get-ca.ps1`** download it into `config/ca.crt`
+  and print its SHA-256 to **verify against the server's `setup_tls.sh` fingerprint** (so the
+  untrusted bootstrap fetch can't be silently MITM'd). `setup_tls.sh` now prints that fingerprint.
+- **Mobile/Android + iOS** instructions added (open `/ca.crt`, install as a user/profile CA → the
+  phone browser trusts the web UI; phones have no agent, just the browser). Tests 62 → 63.
 
 - The orchestrator now serves **HTTPS** — closes the standing plaintext-LAN gap (login, session tokens,
   API keys, events, and the enroll preview frames are all encrypted in transit, with server

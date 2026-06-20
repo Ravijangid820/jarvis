@@ -72,7 +72,9 @@ if (-not (Test-Path "$cam\config\config.json")) {
 Write-Host ""
 Write-Host "Setup done. Run everything via the venv's Python (fully sandboxed):" -ForegroundColor Green
 Write-Host "  1. Edit config\config.json: device_id, server.url (e.g. http://192.168.0.101:5000)."
-Write-Host "  2. On the SERVER: admin -> Keys, mint a DEVICE key (Device ID = this camera; under a"
+Write-Host "  2. Trust the server's HTTPS cert (downloads + verifies into config\ca.crt):"
+Write-Host "       powershell -ExecutionPolicy Bypass -File get-ca.ps1"
+Write-Host "  3. On the SERVER: admin -> Keys, mint a DEVICE key (Device ID = this camera; under a"
 Write-Host "     NON-admin user), then save it with the helper (avoids quoting pitfalls):"
 Write-Host "       powershell -ExecutionPolicy Bypass -File set-key.ps1 jk-yourkey"
 Write-Host "  3. Test first (no key/server needed):"

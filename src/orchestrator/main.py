@@ -35,7 +35,7 @@ import chat
 import memory
 from auth import hash_password, hash_token, verify_password
 from budget import is_default_session
-from config import (ADMIN_MAX_INPUT, ALLOWED_ORIGINS, COMPLETION_RESERVE_DEFAULT,
+from config import (ADMIN_MAX_INPUT, ALLOWED_ORIGINS, BASE_DIR, COMPLETION_RESERVE_DEFAULT,
                     CONFIG, INDEX_HTML, LLM_URL, PIPER_BIN, PIPER_MODEL, RATE_LIMIT_RPM,
                     REACT_DIST_DIR, REGULAR_MAX_INPUT, STATIC_DIR, VALID_FACT_CATEGORIES, logger)
 from db import get_db, init_db
@@ -126,7 +126,7 @@ def _apply_security_headers(response: Response, cache: str = "no-store") -> Resp
 @app.middleware("http")
 async def security_middleware(request: Request, call_next):
     path = request.url.path
-    if (request.method == "OPTIONS" or path in ["/health", "/", "/admin", "/auth/login", "/favicon.svg"]
+    if (request.method == "OPTIONS" or path in ["/health", "/", "/admin", "/auth/login", "/favicon.svg", "/ca.crt"]
             or path.startswith("/static/") or path.startswith("/assets/")):
         resp = await call_next(request)
         # Vite emits content-hashed bundles under /assets — safe to cache forever.
@@ -1285,6 +1285,17 @@ def serve_favicon():
     if not favicon.exists():
         raise HTTPException(status_code=404)
     return FileResponse(favicon, media_type="image/svg+xml")
+
+
+@app.get("/ca.crt")
+def serve_ca_cert():
+    """Public: this deployment's local-CA certificate, so any device/browser can trust the server.
+    Only the PUBLIC cert is served — the CA private key never leaves the box. 404 if TLS isn't set up.
+    (Per-deployment: each install generates its own CA via src/scripts/setup_tls.sh.)"""
+    ca = BASE_DIR / "tls" / "ca.crt"
+    if not ca.exists():
+        raise HTTPException(status_code=404, detail="No CA cert (TLS not set up on this server)")
+    return FileResponse(ca, media_type="application/x-pem-file", filename="ca.crt")
 
 
 if REACT_DIST_DIR.exists():

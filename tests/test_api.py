@@ -476,6 +476,12 @@ def test_enroll_request_flow(client):
     client.delete(f"/admin/faces/{pid}", headers=h)
 
 
+def test_ca_cert_is_public(client):
+    # /ca.crt must be reachable WITHOUT a token (devices bootstrap trust from it). In the test env
+    # there's no tls/ca.crt, so it's 404 (reachable, no cert) — crucially NOT 401 (auth required).
+    assert client.get("/ca.crt").status_code == 404
+
+
 def test_enroll_request_create_requires_admin(client):
     user = _tok(client, "pepper", "pw-user")
     assert client.post("/admin/faces/enroll-request", headers={"Authorization": "Bearer " + user},

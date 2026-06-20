@@ -83,9 +83,10 @@ mkdir -p "$CAMERA/config"
 cat <<EOF
 
 Setup done ($PLATFORM). Next:
-  1. On the SERVER, mint a DEVICE key (admin → Keys, Device ID = this camera's name; under a
+  1. Trust the server's HTTPS cert:  bash get-ca.sh   (downloads + verifies into config/ca.crt)
+  2. On the SERVER, mint a DEVICE key (admin → Keys, Device ID = this camera's name; under a
      NON-admin user), then save it with the helper:  bash set-key.sh jk-yourkey
-  2. Review $CAMERA/config/config.json (server.url, camera.device, which detectors are enabled).
+  3. Review $CAMERA/config/config.json (server.url, camera.device, which detectors are enabled).
   3. Try it (run via the venv's python):
        cd "$CAMERA" && .venv/bin/python -m jarvis_camera.agent --dry-run    # events logged, not sent
        cd "$CAMERA" && .venv/bin/python -m jarvis_camera.agent             # go live
