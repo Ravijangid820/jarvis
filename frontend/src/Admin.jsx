@@ -70,8 +70,9 @@ export default function Admin({ token, onExit }) {
     try { await api("/admin/users/" + id + "/role", "PUT", { role }); load() } catch (e) { setErr(e.message) }
   }
   const adminCount = users.filter(u => u.role === "admin").length
+  const userName = (id) => { const u = users.find(x => x.id === id); return u ? u.username : "#" + id }
   const createKey = async () => {
-    if (!kUser || !kDesc) return setErr("Target UID and designation required")
+    if (!kUser || !kDesc) return setErr("Select a user and a designation")
     try {
       const d = await api("/admin/api_keys", "POST", { user_id: Number(kUser), description: kDesc, device_id: kDev.trim() || null })
       setMinted(d.key); setMintedDev(d.device_id || ""); setKUser(""); setKDesc(""); setKDev(""); load()
@@ -183,7 +184,10 @@ export default function Admin({ token, onExit }) {
             <strong> device-bound</strong> key — required for a camera/edge agent (it may only post events as
             that device). Leave it blank for a generic integration key (e.g. Home Assistant).</p>
           <div className="adm-form">
-            <input className="hud-input" placeholder="TARGET UID" value={kUser} onChange={e => setKUser(e.target.value)} style={{ maxWidth: 130 }} />
+            <select className="hud-input" value={kUser} onChange={e => setKUser(e.target.value)} style={{ maxWidth: 200 }}>
+              <option value="">— select user —</option>
+              {users.map(u => <option key={u.id} value={u.id}>{u.username}{u.role === "admin" ? " (admin)" : ""}</option>)}
+            </select>
             <input className="hud-input" placeholder="DESIGNATION (e.g. Living-room camera)" value={kDesc} onChange={e => setKDesc(e.target.value)} />
             <input className="hud-input" placeholder="DEVICE ID (optional, e.g. laptop-cam)" value={kDev} onChange={e => setKDev(e.target.value)} style={{ maxWidth: 230 }} />
             <button className="hud-btn" onClick={createKey}>Generate Uplink</button>
@@ -197,11 +201,11 @@ export default function Admin({ token, onExit }) {
             </div>}
           </div>}
           <table className="adm-table">
-            <thead><tr><th>Key</th><th>UID</th><th>Designation</th><th>Device</th><th>Requests</th><th>Last Ping</th><th>Established</th><th>Override</th></tr></thead>
+            <thead><tr><th>Key</th><th>User</th><th>Designation</th><th>Device</th><th>Requests</th><th>Last Ping</th><th>Established</th><th>Override</th></tr></thead>
             <tbody>
               {keys.map(k => (
                 <tr key={k.id}>
-                  <td><code>{k.key_string}</code></td><td>#{k.user_id}</td><td>{k.description}</td>
+                  <td><code>{k.key_string}</code></td><td className="adm-em">{userName(k.user_id)}</td><td>{k.description}</td>
                   <td>{k.device_id ? <span className="adm-em">{k.device_id}</span> : <span style={{ opacity: 0.4 }}>—</span>}</td>
                   <td>{k.usage_count || 0}</td><td>{k.last_used_at || "Never"}</td><td>{k.created_at}</td>
                   <td><button className="hud-btn warn" onClick={() => delKey(k.id)}>Sever</button></td>
