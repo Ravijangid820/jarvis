@@ -85,8 +85,13 @@ safety-net migrations.
 | `chat_sessions` | conversations | `id` (uuid or `u<id>-default`), `title`, `user_id` |
 | `conversation_history` | messages | `id`, `session_id`, `speaker` (`user`/`jarvis`), `content`, `facts_extracted` |
 | `auth_sessions` | web-login tokens | `token`, `user_id`, `expires_at` |
-| `api_keys` | machine integrations | `key_string`, `user_id`, `description`, `usage_count`, `last_used_at` |
+| `api_keys` | machine integrations | `key_string`, `user_id`, `description`, `device_id` (binds to one device), `usage_count`, `last_used_at` |
 | `user_knowledge` | persistent facts | `id`, `user_id`, `category`, `content`, `source` |
+| `vision_events` | camera events | `id`, `device_id`, `type`, `data` (JSON), `user_id`, `created_at` (last 5000 kept) |
+| `device_heartbeats` | camera liveness | `device_id` (PK), `last_seen` (powers admin active/inactive) |
+| `persons` | recognizable people | `id`, `name` (unique), `user_id` (→ account for authz), `created_at` |
+| `face_embeddings` | embeddings per person | `id`, `person_id` (→ persons, cascade), `embedding` (JSON), `source` |
+| `enroll_requests` | enroll-from-UI queue | `id`, `device_id`, `name`, `status` (pending/done/failed), `requested_by` |
 
 Long-term recall vectors are **not** in SQLite — they live in ChromaDB (`jarvis_memory_cos`,
 cosine space), keyed by the `conversation_history.id`.

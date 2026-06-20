@@ -4,6 +4,18 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-20 — Docs: a setup guide per component + API/schema refresh
+
+- **New setup guides:** [setup/tls.md](setup/tls.md) (local-CA HTTPS — server, agents, browser,
+  Android/iOS) and [setup/voice.md](setup/voice.md) (wake-word listener). Every runnable piece now has
+  its own guide (server · tls · camera · voice · volume-agent), all linked from the docs index.
+- **API.md** updated for this session's endpoints: `/admin/services`, `/admin/users/{id}/role`,
+  `device_id` on key minting, the faces persons/embeddings model + enroll-request/result/preview flow,
+  the `heartbeat` event, and `/ca.crt`.
+- **SPECS.md** schema table now lists `vision_events`, `device_heartbeats`, `persons`,
+  `face_embeddings`, `enroll_requests`, and `api_keys.device_id`. Index audit line refreshed; all
+  intra-doc links verified.
+
 ## 2026-06-20 — TLS: per-deployment CA distribution (not committed) + mobile
 
 - **Fix:** the CA cert is **per-deployment, never committed** (a previous commit bundled it, which

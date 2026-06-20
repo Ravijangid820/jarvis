@@ -11,7 +11,9 @@ deploying. They run on different machines and have independent environments.
 | Component | Runs on | Setup doc | Entry point |
 |---|---|---|---|
 | **Server** — orchestrator + web UI | the Proxmox LXC | [setup/server.md](setup/server.md) (+ [DEPLOY.md](DEPLOY.md) for re-deploys) | `bash src/scripts/setup.sh` |
+| **TLS / HTTPS** — encrypt the LAN (local CA) | the server + each device | [setup/tls.md](setup/tls.md) | `bash src/scripts/setup_tls.sh` |
 | **Camera vision agent** — motion/face/pose/gestures (laptop webcam or Pi) | the device | [setup/camera.md](setup/camera.md) | `camera/setup.ps1` (Win) · `bash camera/setup.sh` (Pi) |
+| **Voice listener** — wake word → `/inbox` (whisper) | the server box | [setup/voice.md](setup/voice.md) | `bash src/scripts/run_listener.sh` |
 | **Windows volume agent** — controls the laptop/BT volume | the laptop | [setup/volume-agent.md](setup/volume-agent.md) | `python volume_agent.py` |
 
 ## Core docs
@@ -23,7 +25,7 @@ deploying. They run on different machines and have independent environments.
 | [API.md](API.md) | Full HTTP endpoint reference (auth, chat, sessions, knowledge, admin, camera/vision events, device control) |
 | [SPECS.md](SPECS.md) | Hardware, models, performance, the config reference, and the DB schema |
 | [DEPLOY.md](DEPLOY.md) | Deploy runbook: units, re-embed migration, Tailscale/localhost firewall, the admin CLI |
-| [AUDIT.md](AUDIT.md) | The 81-finding self-audit (2026-06-15) + a 2026-06-17 follow-up review (F1–F24) covering the device/edge/agent subsystems |
+| [AUDIT.md](AUDIT.md) | Security audits: the 81-finding self-audit (2026-06-15), the F1–F24 follow-up (2026-06-17), and the 2026-06-19 review of the camera/admin/role changes (no crit/high) |
 
 ## History / reference
 

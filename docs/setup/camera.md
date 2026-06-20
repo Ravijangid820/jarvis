@@ -275,11 +275,13 @@ camera/
   service.sh / service.ps1  make persistent: systemd user service (Linux) · Scheduled Task (Windows)
   install.sh / install.ps1  one command: setup + service (thin readable wrappers)
   set-key.sh / set-key.ps1  write config/agent.key (or admin.key) safely — no quoting pitfalls
+  get-ca.sh / get-ca.ps1    download + verify the server's TLS CA into config/ca.crt
   run_exe.py                PyInstaller entry → jarvis-camera.exe (built in CI)
   models/                   YuNet + SFace ONNX (downloaded + sha256-verified by setup; gitignored)
   jarvis_camera/
     capture.py         camera abstraction (picamera2 for CSI, OpenCV for USB)
     paths.py           base dir (camera/ from source, or the .exe's folder when frozen)
+    net.py             HTTPS verification helper (verify against config/ca.crt)
     models.py          download + sha256-verify the OpenCV-Zoo models (used by the .exe first run)
     events.py          event client (POST + offline queue + retry)
     keyfile.py         shared API-key loader (device vs admin key separation + perm checks)

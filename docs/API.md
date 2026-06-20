@@ -4,8 +4,9 @@ Base URL: `http://<host>:5000`. All responses are JSON unless noted.
 
 ## Authentication
 
-Every endpoint except `/health`, `/`, `/admin`, `/auth/login`, and the static mounts requires a
-**Bearer token** — either a web-login **session token** or a per-user **API key**:
+Every endpoint except `/health`, `/`, `/admin`, `/auth/login`, `/ca.crt`, `/favicon.svg`, and the
+static mounts requires a **Bearer token** — either a web-login **session token** or a per-user
+**API key**:
 
 ```
 Authorization: Bearer <token>
@@ -90,14 +91,16 @@ Valid categories: `personal, family, preferences, location, work, education, int
 
 ---
 
-## Events (edge devices)
+## Events (camera devices)
 
 | Method | Path | Body | Returns |
 |---|---|---|---|
-| `POST` | `/events` | `{ device_id, type, ts?, data? }` | `{ "status": "ok", "id": int }` — ingest an edge/vision event. **A device-scoped API key records the event under its own bound device (the body `device_id` can't spoof another); admins may post as any device; plain users are denied.** `data` ≤ 4 KB; only the last 5000 events are retained. |
+| `POST` | `/events` | `{ device_id, type, ts?, data? }` | `{ "status": "ok", "id": int }` — ingest a camera/vision event. **A device-scoped API key records the event under its own bound device (the body `device_id` can't spoof another); admins may post as any device; plain users are denied.** `device_id` is `[A-Za-z0-9._:-]`; `data` ≤ 4 KB; only the last 5000 events are retained. |
 
-Used by the Raspberry Pi camera agent (`edge/`) to report high-level events (`motion`,
-`face_seen`, `pose`, `gesture`); `data` is type-specific JSON. No imagery is sent.
+Used by the camera agent (`camera/`) to report high-level events (`motion`, `face_seen`, `pose`,
+`gesture`); `data` is type-specific JSON. No imagery is sent. A special `type:"heartbeat"` is **not**
+stored in the events feed — it upserts the device's `last_seen` in `device_heartbeats` (powers the
+admin "Camera · …" active/inactive status); the agent pings it ~every 30s.
 
 ---
 
@@ -120,12 +123,14 @@ the LLM.
 |---|---|---|---|
 | `POST` | `/admin/users` | `{ username, password, role? }` | `{ "status": "ok" }` (`400` if username exists) |
 | `GET` | `/admin/users` | — | `{ "users": [{id, username, role, created_at, total_chats, total_messages}] }` |
-| `DELETE` | `/admin/users/{id}` | — | `{ "status": "ok" }` (cannot delete self) |
-| `POST` | `/admin/api_keys` | `{ user_id, description }` | `{ "key": "jk-…" }` (full key shown once; stored hashed) |
-| `GET` | `/admin/api_keys` | — | `{ "keys": [{id, key_string(prefix only), user_id, description, usage_count, last_used_at, created_at}] }` |
+| `PUT` | `/admin/users/{id}/role` | `{ role: "user"\|"admin" }` | `{ "status": "ok", "role" }` — promote/demote; **`400` if it would demote the last admin**. Live for the user's existing session. |
+| `DELETE` | `/admin/users/{id}` | — | `{ "status": "ok" }` (cannot delete self; **`400` on the last admin**) |
+| `POST` | `/admin/api_keys` | `{ user_id, description, device_id? }` | `{ "key": "jk-…", "device_id" }` — full key shown once (hashed at rest). A `device_id` (`[A-Za-z0-9._:-]`) mints a **device-bound** key (required for a camera/edge agent; such keys can never wield admin even if the user is admin). |
+| `GET` | `/admin/api_keys` | — | `{ "keys": [{id, key_string(prefix only), user_id, description, device_id, usage_count, last_used_at, created_at}] }` |
 | `DELETE` | `/admin/api_keys/{id}` | — | `{ "status": "ok" }` |
 | `GET` | `/admin/stats` | — | `{ "users": int, "chats": int, "messages": int }` |
-| `GET` | `/admin/events?limit=N` | — | `{ "events": [{id, device_id, type, data, created_at}], "count": int }` (recent edge events, newest first) |
+| `GET` | `/admin/services` | — | `{ "services": [{name, status: active\|inactive, detail}] }` — live subsystem health (orchestrator, LLM, embeddings, TTS, + one row per camera agent from `device_heartbeats`). |
+| `GET` | `/admin/events?limit=N` | — | `{ "events": [{id, device_id, type, data, created_at}], "count": int }` (recent camera events, newest first) |
 
 ---
 
@@ -143,16 +148,33 @@ voice bridge uses this to speak replies).
 
 ## Faces (recognition data)
 
-Detection/recognition run on the edge; the server only **stores enrolled embeddings** and links
-them to user accounts (so identity can drive per-user authorization). Enrollment is **admin-only**.
+Detection/recognition run on the device; the server **stores embeddings** only (never imagery). Data
+model: a **person** (`persons`) has many **embeddings** (`face_embeddings`) — recognition matches the
+best of them. A person can be **linked to a user account** so identity drives per-user authorization.
+
+**Manage (admin):**
 
 | Method | Path | Body | Returns |
 |---|---|---|---|
-| `POST` | `/faces/enroll` | `{ name, embedding[] }` | **admin** · register a face (embedding computed on the edge/laptop); re-enrolling a name replaces it. |
-| `GET` | `/faces/enrolled` | — | `{ "enrolled": { name: [embedding] } }` — the set the edge agent matches against. |
-| `GET` | `/admin/faces` | — | **admin** · `{ "faces": [{id, name, user_id, username, created_at}] }` (no embeddings). |
-| `PUT` | `/admin/faces/{id}` | `{ name?, user_id? }` | **admin** · rename and/or link to a user (only fields sent change; `user_id:null` clears the link). |
-| `DELETE` | `/admin/faces/{id}` | — | **admin** · remove an enrolled face. |
+| `POST` | `/faces/enroll` | `{ name, embedding[8..2048], source?, replace? }` | **admin** · add an embedding to a person (creating them if new); `replace:true` clears their set first. |
+| `GET` | `/faces/enrolled` | — | `{ "enrolled": { name: [embedding, …] } }` — list per person; the set the agent matches against (auth required). |
+| `GET` | `/admin/faces` | — | **admin** · `{ "faces": [{id, name, user_id, username, embedding_count, last_seen, created_at}] }`. |
+| `GET` | `/admin/faces/{id}/embeddings` | — | **admin** · `{ "embeddings": [{id, source, created_at}] }` for a person. |
+| `PUT` | `/admin/faces/{id}` | `{ name?, user_id? }` | **admin** · rename (UNIQUE) and/or link a user (only fields sent change; `user_id:null` clears). |
+| `DELETE` | `/admin/faces/{id}` | — | **admin** · delete a person + all their embeddings. |
+| `DELETE` | `/admin/faces/embeddings/{id}` | — | **admin** · delete one embedding (person stays). |
+
+**Enroll from the web UI** — an admin queues a request for a camera; that device's agent captures +
+submits on-device (the device key can only *fulfill* a request made for it — it can't enroll arbitrarily):
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| `POST` | `/admin/faces/enroll-request` | `{ name, device_id }` | **admin** · queue a pending enroll for a device. |
+| `GET` | `/admin/faces/enroll-requests` | — | **admin** · recent requests `[{id, device_id, name, status, detail, …}]`. |
+| `GET` | `/faces/enroll-request` | — | **device key** · the pending request for THIS device (`{request:{id,name}}` or null). |
+| `POST` | `/faces/enroll-result` | `{ request_id, embedding?, error? }` | **device key** (own request) · submit the captured embedding (creates the person/embedding) or report failure. |
+| `POST` | `/faces/enroll-preview` | `{ request_id, image(b64 jpeg), captured, total }` | **device key** (own request) · relay a live preview frame (RAM-only, ~30s TTL). |
+| `GET` | `/faces/enroll-preview?request_id=N` | — | **admin** · latest preview frame `{preview:{image,captured,total}}` for the live UI. |
 
 ---
 
@@ -165,6 +187,7 @@ them to user accounts (so identity can drive per-user authorization). Enrollment
 | `GET` | `/` | React SPA (`frontend/dist/index.html`) |
 | `GET` | `/admin` | Serves the React SPA, which renders the admin console (admin-gated client-side + on every `/admin/*` endpoint) |
 | `GET` | `/favicon.svg` | App icon (served from the dist root) |
+| `GET` | `/ca.crt` | This deployment's **public** local-CA certificate, so devices/browsers can trust the HTTPS server (`404` if TLS isn't set up). Only the public cert — the CA key never leaves the box. See [setup/tls.md](setup/tls.md). |
 | — | `/assets/*`, `/static/*` | Static frontend + admin assets (`/assets/*` cached immutably) |
 
 ---
