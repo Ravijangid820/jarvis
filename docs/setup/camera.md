@@ -207,11 +207,12 @@ key is only needed for the *CLI* `add`/`delete` — put it in `config/admin.key`
 when you're done** so the running device never holds a privileged credential.
 
 **HTTPS / TLS:** the server runs over **HTTPS** (local CA — see `src/scripts/setup_tls.sh` on the
-server). On each camera device, copy the server's **`tls/ca.crt`** to **`camera/config/ca.crt`** and
-set `server.url` to `https://…` + `server.ca_cert` to `config/ca.crt` (the config example already
-does). The agent then **verifies** the server (encrypted + MITM-safe). In a browser, import `ca.crt`
-as a trusted root once to avoid the warning. Verification is never skipped — without the CA the agent
-fails closed.
+server). The public CA cert is **bundled at `camera/ca.crt`** (it ships with the repo, so every clone
+already has it — no copying), and the config defaults to `server.url: https://…` + `ca_cert: ca.crt`,
+so the agent **verifies** the server out of the box (encrypted + MITM-safe; never skips — fails closed
+without the CA). Only the **browser** needs a one-time step: import `camera/ca.crt` into Trusted Root
+Certification Authorities to drop the warning. (If you regenerate the CA, `setup_tls.sh` refreshes
+`camera/ca.crt` — commit it.)
 
 **Enroll from the web UI (no CLI / no admin key on the device):** in **admin → Faces → “Enroll a face
 (from a camera)”**, pick the camera + a name and click *Request Enrollment*. A **live preview** (the

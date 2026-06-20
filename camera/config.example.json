@@ -5,7 +5,7 @@
     "events_endpoint": "/events",
     "api_key_file": "config/agent.key",
     "admin_key_file": "config/admin.key",
-    "ca_cert": "config/ca.crt"
+    "ca_cert": "ca.crt"
   },
   "camera": {
     "backend": "auto",

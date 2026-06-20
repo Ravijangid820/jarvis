@@ -61,6 +61,11 @@ chown "$SVC_USER:$SVC_USER" "$TLS/server.key" "$TLS/server.crt" 2>/dev/null || t
 chmod 640 "$TLS/server.key"; chmod 644 "$TLS/server.crt" "$TLS/ca.crt"
 chmod 600 "$TLS/ca.key"                      # CA key: signing only, keep locked down
 
+# Bundle the PUBLIC CA cert into camera/ (tracked in git) so every clone/device gets it via the
+# trusted GitHub channel — no manual copy. (Only ca.crt; the private ca.key never leaves here.)
+cp "$TLS/ca.crt" "$ROOT/camera/ca.crt"
+echo "▸ refreshed camera/ca.crt (commit it so devices pick up the trust anchor)"
+
 echo
 echo "Done. Files in $TLS/ :  ca.crt (trust this on clients)  server.crt  server.key  ca.key(keep secret)"
 echo "Next:"
