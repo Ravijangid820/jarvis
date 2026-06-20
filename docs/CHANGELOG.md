@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-20 — Faces: live enroll preview in the web UI
+
+- During a web-UI enrollment the admin now sees a **live camera preview with the detected face boxed**
+  + a "captured n/total" counter. The agent relays annotated JPEG frames (~3 fps, throttled) to new
+  `POST /faces/enroll-preview` (device-key, request-bound); the UI polls `GET /faces/enroll-preview`
+  (admin-only). Frames are **RAM-only on the server** (`_ENROLL_PREVIEWS`, ~30s TTL, capped) — never
+  written to disk/DB. This is the one scoped exception to "no imagery leaves the device," active only
+  during an admin-initiated enroll. Tests 61 → 62; relay verified end-to-end (post → admin reads back;
+  device-key view denied 403).
+
 ## 2026-06-20 — Faces: enroll a face from the web UI (Phase B)
 
 - **Admin → Faces → "Enroll a face (from a camera)"**: pick a camera + a name → *Request Enrollment*.

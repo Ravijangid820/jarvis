@@ -207,8 +207,10 @@ key is only needed for the *CLI* `add`/`delete` — put it in `config/admin.key`
 when you're done** so the running device never holds a privileged credential.
 
 **Enroll from the web UI (no CLI / no admin key on the device):** in **admin → Faces → “Enroll a face
-(from a camera)”**, pick the camera + a name and click *Request Enrollment*. The server queues a
-request; the running agent on that device picks it up, captures + embeds on-camera, and registers it —
+(from a camera)”**, pick the camera + a name and click *Request Enrollment*. A **live preview** (the
+camera frame with the detected face boxed) appears so you can see what's being captured. The server
+queues a request; the running agent on that device picks it up, captures + embeds on-camera, and
+registers it —
 so the camera key never gains general enroll rights (it can only fulfill a request an admin created
 for it). Each person can hold **multiple embeddings**; enroll again (any angle) to add more, and
 **view/delete individual embeddings** or **rename**/link people in the same page. The agent pulls the
@@ -220,8 +222,10 @@ This module is built to be hard to abuse even if the laptop/Pi it runs on is com
 
 - **Nothing listens.** The agent is **outbound-only** — it POSTs events to the server and never opens
   a port. There is no inbound network surface to attack on the camera device.
-- **No imagery leaves the device.** Only small JSON events (`{type, name, ...}`) cross the LAN;
-  frames and embeddings stay local.
+- **No imagery leaves the device** — with one scoped exception: the **live enroll preview**. While an
+  admin-initiated enrollment is active, the agent relays annotated frames so the admin can see the
+  capture. Those frames are held **in server RAM only** (never written to disk/DB), expire in ~30s,
+  and are **admin-only** to view. Normal operation still sends only JSON events.
 - **Least-privilege credential.** ⚠️ **Mint the camera's device key under a *non-admin* user.** A
   device-bound key can post events as its device and read the enrolled set — nothing more. (The
   server also *enforces* this: a device-scoped key is denied admin even if it was minted under an

@@ -28,6 +28,7 @@ export default function Admin({ token, onExit }) {
   const [enrollName, setEnrollName] = useState("")
   const [enrollDev, setEnrollDev] = useState("")
   const [enrollReqs, setEnrollReqs] = useState([])
+  const [preview, setPreview] = useState(null)     // {image, captured, total} during an active enroll
   const [err, setErr] = useState("")
 
   const api = async (path, method = "GET", body) => {
@@ -63,6 +64,23 @@ export default function Admin({ token, onExit }) {
     }, 15000)
     return () => clearInterval(t)
   }, [])  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // While an enroll is in progress, poll its live preview (fast) + status/faces (so it flips to DONE
+  // and the new person appears promptly).
+  const activeReqId = enrollReqs.find(r => r.status === "pending")?.id
+  useEffect(() => {
+    if (!activeReqId) { setPreview(null); return }
+    let alive = true
+    const pv = async () => { try { const d = await api(`/faces/enroll-preview?request_id=${activeReqId}`); if (alive) setPreview(d.preview || null) } catch { /* ignore */ } }
+    const st = async () => {
+      try { const [d, f] = await Promise.all([api("/admin/faces/enroll-requests"), api("/admin/faces")]); if (alive) { setEnrollReqs(d.requests || []); setFaces(f.faces || []) } }
+      catch { /* ignore */ }
+    }
+    pv()
+    const t1 = setInterval(pv, 350)
+    const t2 = setInterval(st, 1500)
+    return () => { alive = false; clearInterval(t1); clearInterval(t2) }
+  }, [activeReqId])  // eslint-disable-line react-hooks/exhaustive-deps
 
   const createUser = async () => {
     if (!uName || !uPass) return setErr("Username and password required")
@@ -287,6 +305,19 @@ export default function Admin({ token, onExit }) {
               <button className="hud-btn" onClick={requestEnroll} disabled={cameraDevices.length === 0}>Request Enrollment</button>
             </div>
             {cameraDevices.length === 0 && <p className="adm-hint">No camera agents seen yet — start one (run the agent) so it can receive the request.</p>}
+            {activeReqId && (
+              <div style={{ margin: "12px 0" }}>
+                {preview && preview.image ? (
+                  <>
+                    <img src={`data:image/jpeg;base64,${preview.image}`} alt="live enroll preview"
+                         style={{ maxWidth: 480, width: "100%", border: "1px solid var(--holo-cyan)", display: "block", clipPath: "var(--clip-angle-sm)" }} />
+                    <p className="adm-hint">● LIVE — capturing {preview.captured}/{preview.total}. Look at the camera; the green box is the detected face.</p>
+                  </>
+                ) : (
+                  <p className="adm-hint">Waiting for the camera feed… make sure the agent is running on that device.</p>
+                )}
+              </div>
+            )}
             {enrollReqs.length > 0 && (
               <table className="adm-table" style={{ marginTop: 4 }}>
                 <thead><tr><th>Requested</th><th>Name</th><th>Camera</th><th>Status</th></tr></thead>

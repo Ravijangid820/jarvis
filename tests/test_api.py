@@ -480,3 +480,23 @@ def test_enroll_request_create_requires_admin(client):
     user = _tok(client, "pepper", "pw-user")
     assert client.post("/admin/faces/enroll-request", headers={"Authorization": "Bearer " + user},
                        json={"name": "x", "device_id": "d"}).status_code == 403
+
+
+def test_enroll_preview_relay(client):
+    admin = _tok(client, "tony", "pw-admin")
+    h = {"Authorization": "Bearer " + admin}
+    rid = client.post("/admin/faces/enroll-request", headers=h, json={"name": "Pv", "device_id": "pv-cam"}).json()["id"]
+    key = _seed_device_key("pepper", "pv-cam")
+    other = _seed_device_key("pepper", "pv-other")
+    img = "QUJD"  # opaque base64; server stores/returns it verbatim
+    # a different device may NOT post a preview for this request
+    assert client.post("/faces/enroll-preview", headers={"Authorization": "Bearer " + other},
+                       json={"request_id": rid, "image": img, "captured": 1, "total": 7}).status_code == 403
+    # the right device posts; admin reads it back
+    assert client.post("/faces/enroll-preview", headers={"Authorization": "Bearer " + key},
+                       json={"request_id": rid, "image": img, "captured": 2, "total": 7}).status_code == 200
+    pv = client.get(f"/faces/enroll-preview?request_id={rid}", headers=h).json()["preview"]
+    assert pv and pv["image"] == img and pv["captured"] == 2
+    # viewing imagery is admin-only — a device key cannot read the preview
+    assert client.get(f"/faces/enroll-preview?request_id={rid}",
+                      headers={"Authorization": "Bearer " + key}).status_code == 403

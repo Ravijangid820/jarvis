@@ -68,6 +68,41 @@ def _submit_enroll(server, key, request_id, embedding=None, error=None):
         r.read(4096)
 
 
+def _preview_uploader(server, key, request_id):
+    """Return an on_frame(frame, row, captured, total) callback that relays annotated JPEG frames to
+    the server (throttled) so the admin UI can show what the camera sees during enrollment."""
+    import base64
+    state = {"last": 0.0}
+
+    def on_frame(frame, row, captured, total):
+        now = time.time()
+        if now - state["last"] < 0.3:           # ~3 fps is plenty for a preview
+            return
+        state["last"] = now
+        try:
+            import cv2
+            f = frame
+            if row is not None:
+                x, y, w, h = (int(v) for v in row[:4])
+                f = frame.copy()
+                cv2.rectangle(f, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            ok, buf = cv2.imencode(".jpg", f, [cv2.IMWRITE_JPEG_QUALITY, 60])
+            if not ok:
+                return
+            img = base64.b64encode(buf.tobytes()).decode("ascii")
+            body = json.dumps({"request_id": request_id, "image": img,
+                               "captured": captured, "total": total}).encode("utf-8")
+            req = urllib.request.Request(server.rstrip("/") + "/faces/enroll-preview", data=body,
+                                         method="POST", headers={"Content-Type": "application/json",
+                                                                 "Authorization": "Bearer " + key})
+            with urllib.request.urlopen(req, timeout=3) as r:
+                r.read(256)
+        except Exception as e:
+            log.debug("preview upload failed: %s", e)
+
+    return on_frame
+
+
 def _maybe_enroll(server, key, cam, fdet, frames=7):
     """If an admin queued an enroll request for this device, capture on-camera + submit the embedding."""
     try:
@@ -80,7 +115,8 @@ def _maybe_enroll(server, key, cam, fdet, frames=7):
     rid, name = reqd.get("id"), reqd.get("name")
     log.info("enroll request #%s: capturing '%s' — look at the camera", rid, name)
     try:
-        vec = capture_average(cam, fdet, frames, log_progress=False)
+        vec = capture_average(cam, fdet, frames, log_progress=False,
+                              on_frame=_preview_uploader(server, key, rid))
     except Exception as e:
         vec = None
         log.warning("enroll capture failed: %s", e)

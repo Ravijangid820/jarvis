@@ -40,9 +40,10 @@ def _largest(rows):
     return max(rows, key=lambda r: r[2] * r[3]) if rows else None
 
 
-def capture_average(cam, fd, frames, log_progress=True):
+def capture_average(cam, fd, frames, log_progress=True, on_frame=None):
     """Capture `frames` good face embeddings from an OPEN camera and return their L2-normalized
-    average, or None if too few faces were seen. Shared by the CLI and the agent's enroll handler."""
+    average, or None if too few faces were seen. Shared by the CLI and the agent's enroll handler.
+    `on_frame(frame, row, captured, total)` is called for every read frame (for the live preview)."""
     vecs, tries = [], 0
     while len(vecs) < frames and tries < frames * 15:
         tries += 1
@@ -50,6 +51,11 @@ def capture_average(cam, fd, frames, log_progress=True):
         if frame is None:
             time.sleep(0.05); continue
         row = _largest(fd.detect(frame))
+        if on_frame is not None:
+            try:
+                on_frame(frame, row, len(vecs), frames)
+            except Exception:
+                pass
         if row is None:
             continue
         v = fd.embed(frame, row)            # SFace aligns via YuNet's landmarks, then embeds

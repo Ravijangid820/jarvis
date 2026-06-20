@@ -283,6 +283,13 @@ class EnrollResult(BaseModel):
     error: Optional[str] = Field(default=None, max_length=200)
 
 
+class EnrollPreview(BaseModel):
+    request_id: int
+    image: str = Field(..., max_length=700000)   # base64 JPEG (annotated frame); ~500 KB cap
+    captured: int = 0
+    total: int = 0
+
+
 # ----------------- Auth endpoints -----------------
 @app.post("/auth/login")
 def login(req: LoginRequest, request: Request):
@@ -602,6 +609,49 @@ def post_enroll_result(req: EnrollResult, request: Request):
         return {"status": "ok", "person_id": person_id}
     finally:
         conn.close()
+
+
+# Live enroll preview frames — kept ONLY in memory (never written to disk/DB), short TTL, admin-only
+# to view. This is the one place imagery leaves the device, and only while an admin-initiated enroll
+# is active.
+_ENROLL_PREVIEWS: Dict[int, Dict[str, Any]] = {}
+_PREVIEW_TTL_S = 30
+
+
+@app.post("/faces/enroll-preview")
+def post_enroll_preview(req: EnrollPreview, request: Request):
+    """The agent posts annotated frames for an in-progress enroll (device key, bound to its request)."""
+    dev = getattr(request.state, "device_id", None)
+    is_admin = getattr(request.state, "is_admin", False)
+    if not dev and not is_admin:
+        raise HTTPException(status_code=403, detail="device-scoped key (or admin) required")
+    conn = get_db()
+    try:
+        r = conn.execute("SELECT device_id FROM enroll_requests WHERE id = ?", (req.request_id,)).fetchone()
+    finally:
+        conn.close()
+    if r is None:
+        raise HTTPException(status_code=404, detail="No such request")
+    if not is_admin and r["device_id"] != dev:
+        raise HTTPException(status_code=403, detail="Not your device's request")
+    now = time.time()
+    for k in [k for k, v in _ENROLL_PREVIEWS.items() if now - v["ts"] > _PREVIEW_TTL_S]:
+        _ENROLL_PREVIEWS.pop(k, None)
+    if len(_ENROLL_PREVIEWS) > 20:                 # safety cap (RAM-only)
+        _ENROLL_PREVIEWS.clear()
+    _ENROLL_PREVIEWS[req.request_id] = {"image": req.image, "captured": req.captured,
+                                        "total": req.total, "ts": now}
+    return {"status": "ok"}
+
+
+@app.get("/faces/enroll-preview")
+def get_enroll_preview(request: Request, request_id: int):
+    """Latest preview frame for an enroll request (admin-only — it's imagery)."""
+    _require_admin(request)
+    p = _ENROLL_PREVIEWS.get(request_id)
+    if not p or time.time() - p["ts"] > _PREVIEW_TTL_S:
+        return {"preview": None}
+    return {"preview": {"image": p["image"], "captured": p["captured"], "total": p["total"]}}
 
 
 def _can_control_devices(request: Request) -> bool:
