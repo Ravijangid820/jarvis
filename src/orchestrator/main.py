@@ -263,11 +263,13 @@ class TTSRequest(BaseModel):
 class FaceEnrollRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=64)
     embedding: List[float] = Field(..., min_length=8, max_length=2048)   # L2-normalized vector
+    source: Optional[str] = Field(default=None, max_length=64)           # device_id / "cli"
+    replace: bool = False          # if true, clear this person's existing embeddings first
 
 
 class FaceUpdateRequest(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=64)
-    user_id: Optional[int] = None          # link face → account (null clears the link)
+    user_id: Optional[int] = None          # link person → account (null clears the link)
 
 
 # ----------------- Auth endpoints -----------------
@@ -495,27 +497,40 @@ def greeting(request: Request):
 # ----------------- Faces (enrollment + recognition data) -----------------
 @app.post("/faces/enroll")
 def enroll_face(req: FaceEnrollRequest, request: Request):
-    """Register a face embedding (computed on the edge/laptop). Admin-only — faces can drive
-    authorization, so enrollment is privileged. Re-enrolling a name replaces its embedding."""
+    """Register a face embedding (computed on the edge/laptop) for a person. Admin-only — faces can
+    drive authorization, so enrollment is privileged. Adds to the person's embeddings (creating the
+    person if new); pass replace=true to start their set over."""
     _require_admin(request)
+    name = req.name.strip()
     conn = get_db()
     try:
-        conn.execute("DELETE FROM faces WHERE name = ?", (req.name.strip(),))
-        cur = conn.execute("INSERT INTO faces (name, embedding) VALUES (?, ?)",
-                           (req.name.strip(), json.dumps(req.embedding)))
+        row = conn.execute("SELECT id FROM persons WHERE name = ?", (name,)).fetchone()
+        person_id = row["id"] if row else conn.execute(
+            "INSERT INTO persons (name) VALUES (?)", (name,)).lastrowid
+        if req.replace:
+            conn.execute("DELETE FROM face_embeddings WHERE person_id = ?", (person_id,))
+        cur = conn.execute(
+            "INSERT INTO face_embeddings (person_id, embedding, source) VALUES (?, ?, ?)",
+            (person_id, json.dumps(req.embedding), (req.source or "").strip() or None))
         conn.commit()
-        return {"status": "ok", "id": cur.lastrowid}
+        return {"status": "ok", "person_id": person_id, "embedding_id": cur.lastrowid}
     finally:
         conn.close()
 
 
 @app.get("/faces/enrolled")
 def enrolled_faces(request: Request):
-    """The enrolled set for the edge agent to match against: {name: [embedding floats]}."""
+    """The enrolled set for the edge agent: {name: [embedding, ...]} (a list per person — recognition
+    matches against the best of all)."""
     conn = get_db()
     try:
-        rows = conn.execute("SELECT name, embedding FROM faces").fetchall()
-        return {"enrolled": {r["name"]: json.loads(r["embedding"]) for r in rows}}
+        rows = conn.execute(
+            "SELECT p.name AS name, e.embedding AS embedding "
+            "FROM face_embeddings e JOIN persons p ON e.person_id = p.id").fetchall()
+        out: Dict[str, Any] = {}
+        for r in rows:
+            out.setdefault(r["name"], []).append(json.loads(r["embedding"]))
+        return {"enrolled": out}
     finally:
         conn.close()
 
@@ -957,49 +972,90 @@ def admin_events(request: Request, limit: int = 50):
 
 @app.get("/admin/faces")
 def admin_list_faces(request: Request):
-    """Enrolled faces for the admin Faces page (no embeddings — just metadata + linked user)."""
+    """Enrolled people for the admin Faces page: name, linked user, embedding count, last sighting."""
     _require_admin(request)
     conn = get_db()
     try:
         rows = conn.execute(
-            "SELECT f.id, f.name, f.user_id, u.username, f.created_at "
-            "FROM faces f LEFT JOIN users u ON f.user_id = u.id ORDER BY f.name").fetchall()
+            "SELECT p.id, p.name, p.user_id, u.username, p.created_at, "
+            "  COUNT(e.id) AS embedding_count, "
+            "  (SELECT MAX(v.created_at) FROM vision_events v "
+            "     WHERE v.type='face_seen' AND json_extract(v.data,'$.name')=p.name) AS last_seen "
+            "FROM persons p LEFT JOIN users u ON p.user_id = u.id "
+            "LEFT JOIN face_embeddings e ON e.person_id = p.id "
+            "GROUP BY p.id ORDER BY p.name").fetchall()
         return {"faces": [dict(r) for r in rows]}
     finally:
         conn.close()
 
 
-@app.put("/admin/faces/{face_id}")
-def admin_update_face(face_id: int, req: FaceUpdateRequest, request: Request):
-    """Rename a face and/or link it to a user account. Only the fields actually sent are changed
-    (so a rename can't clobber the link); send user_id=null to explicitly clear the link."""
+@app.get("/admin/faces/{person_id}/embeddings")
+def admin_list_embeddings(person_id: int, request: Request):
+    """The individual embeddings for a person (for the details/expand view)."""
+    _require_admin(request)
+    conn = get_db()
+    try:
+        if not conn.execute("SELECT 1 FROM persons WHERE id = ?", (person_id,)).fetchone():
+            raise HTTPException(status_code=404, detail="No such person")
+        rows = conn.execute(
+            "SELECT id, source, created_at FROM face_embeddings WHERE person_id = ? ORDER BY id",
+            (person_id,)).fetchall()
+        return {"embeddings": [dict(r) for r in rows]}
+    finally:
+        conn.close()
+
+
+@app.put("/admin/faces/{person_id}")
+def admin_update_face(person_id: int, req: FaceUpdateRequest, request: Request):
+    """Rename a person and/or link them to a user account. Only the fields actually sent change
+    (so a rename can't clobber the link); send user_id=null to clear the link."""
     _require_admin(request)
     fields = req.model_fields_set
     conn = get_db()
     try:
-        if not conn.execute("SELECT 1 FROM faces WHERE id = ?", (face_id,)).fetchone():
-            raise HTTPException(status_code=404, detail="No such face")
+        if not conn.execute("SELECT 1 FROM persons WHERE id = ?", (person_id,)).fetchone():
+            raise HTTPException(status_code=404, detail="No such person")
         if "name" in fields and req.name:
-            conn.execute("UPDATE faces SET name = ? WHERE id = ?", (req.name.strip(), face_id))
+            if conn.execute("SELECT 1 FROM persons WHERE name = ? AND id != ?",
+                            (req.name.strip(), person_id)).fetchone():
+                raise HTTPException(status_code=400, detail="A person with that name already exists")
+            conn.execute("UPDATE persons SET name = ? WHERE id = ?", (req.name.strip(), person_id))
         if "user_id" in fields:
             if req.user_id is not None and not conn.execute("SELECT 1 FROM users WHERE id = ?", (req.user_id,)).fetchone():
                 raise HTTPException(status_code=400, detail="No such user")
-            conn.execute("UPDATE faces SET user_id = ? WHERE id = ?", (req.user_id, face_id))
+            conn.execute("UPDATE persons SET user_id = ? WHERE id = ?", (req.user_id, person_id))
         conn.commit()
         return {"status": "ok"}
     finally:
         conn.close()
 
 
-@app.delete("/admin/faces/{face_id}")
-def admin_delete_face(face_id: int, request: Request):
+@app.delete("/admin/faces/{person_id}")
+def admin_delete_face(person_id: int, request: Request):
+    """Delete a person and all their embeddings."""
     _require_admin(request)
     conn = get_db()
     try:
-        cur = conn.execute("DELETE FROM faces WHERE id = ?", (face_id,))
+        conn.execute("DELETE FROM face_embeddings WHERE person_id = ?", (person_id,))
+        cur = conn.execute("DELETE FROM persons WHERE id = ?", (person_id,))
         conn.commit()
         if cur.rowcount == 0:
-            raise HTTPException(status_code=404, detail="No such face")
+            raise HTTPException(status_code=404, detail="No such person")
+        return {"status": "ok"}
+    finally:
+        conn.close()
+
+
+@app.delete("/admin/faces/embeddings/{embedding_id}")
+def admin_delete_embedding(embedding_id: int, request: Request):
+    """Delete one embedding (the person stays — useful to prune a bad capture)."""
+    _require_admin(request)
+    conn = get_db()
+    try:
+        cur = conn.execute("DELETE FROM face_embeddings WHERE id = ?", (embedding_id,))
+        conn.commit()
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="No such embedding")
         return {"status": "ok"}
     finally:
         conn.close()

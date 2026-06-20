@@ -98,22 +98,28 @@ class FaceDetector(Detector):
         return [float(v) / norm for v in feat]
 
     def recognize(self, frame, face_row):
-        """(name, cosine) for one face; ('unknown', score) if below threshold; (None, None) if no model."""
+        """(name, cosine) for one face; ('unknown', score) if below threshold; (None, None) if no model.
+        Each person may have MANY embeddings — score against the best of them."""
         vec = self.embed(frame, face_row)
         if vec is None:
             return (None, None)
         best, best_sim = None, -1.0
-        for nm, ev in self._known.items():
-            sim = sum(a * b for a, b in zip(vec, ev))      # both L2-normalized → cosine
-            if sim > best_sim:
-                best, best_sim = nm, sim
+        for nm, embs in self._known.items():
+            for ev in embs:                                # both L2-normalized → cosine
+                sim = sum(a * b for a, b in zip(vec, ev))
+                if sim > best_sim:
+                    best, best_sim = nm, sim
         if best_sim >= self._thresh:
             return (best, round(best_sim, 3))
         return ("unknown", round(best_sim, 3))
 
     def set_known(self, known):
-        """Replace the enrolled set (name → embedding). The agent pulls this from /faces/enrolled."""
-        self._known = dict(known or {})
+        """Replace the enrolled set. Accepts {name: [emb, ...]} (multiple per person) or the older
+        {name: emb} — normalized to a list per name. The agent pulls this from /faces/enrolled."""
+        norm = {}
+        for nm, val in (known or {}).items():
+            norm[nm] = val if (val and isinstance(val[0], (list, tuple))) else [val]
+        self._known = norm
 
     def has_identity(self):
         """True if recognition/enrollment is possible (SFace embedding model loaded)."""

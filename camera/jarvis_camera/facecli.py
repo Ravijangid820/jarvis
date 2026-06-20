@@ -132,7 +132,7 @@ def cmd_verify(cfg, args):
 
 def cmd_add(cfg, args):
     # Reuse the enrollment flow (capture -> average embedding -> POST), which uses the ADMIN key.
-    enroll.run(args.name, args.frames, args.config)
+    enroll.run(args.name, args.frames, args.config, replace=getattr(args, "replace", False))
 
 
 def cmd_delete(cfg, args):
@@ -158,9 +158,10 @@ def main():
     sub.add_parser("list", help="list enrolled face names (device key, read-only)")
     v = sub.add_parser("verify", help="identify who is at the camera now (fully local)")
     v.add_argument("--seconds", type=int, default=5, help="how long to sample (default 5)")
-    a = sub.add_parser("add", help="enroll a face (admin key)")
+    a = sub.add_parser("add", help="enroll a face — adds an embedding (admin key)")
     a.add_argument("--name", required=True, help="person's display name")
     a.add_argument("--frames", type=int, default=7, help="good frames to average (default 7)")
+    a.add_argument("--replace", action="store_true", help="replace this person's embeddings instead of adding")
     d = sub.add_parser("delete", help="delete an enrolled face by name (admin key)")
     d.add_argument("--name", required=True, help="exact enrolled name to remove")
     args = ap.parse_args()

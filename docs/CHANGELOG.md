@@ -4,6 +4,22 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-20 — Faces: persons → many embeddings + richer admin management (Phase A)
+
+- **Data model:** `faces` → **`persons`** (name, linked user) + **`face_embeddings`** (many per person,
+  with `source`). Recognition now matches against the **best of all** a person's embeddings (more
+  robust to angle/lighting). `/faces/enrolled` returns `{name: [emb, ...]}`; the edge `set_known`
+  accepts the list (back-compatible with the old single form).
+- **Enroll appends** (was replace): run `facecli add` a few times to build multiple embeddings;
+  `--replace` (and `replace:true`) starts a person over. `source` records the enrolling device.
+- **Admin Faces page** (renamed *Enrolled People*): per person — **rename**, link-to-user, **embedding
+  count** that expands to **view/delete individual embeddings**, **last seen** (from `face_seen`
+  events), delete person. New endpoints: `GET /admin/faces/{id}/embeddings`,
+  `DELETE /admin/faces/embeddings/{id}`; `PUT`/`DELETE /admin/faces/{id}` are now person-level
+  (rename guards the UNIQUE name). Tests 58 → 59.
+- *Next (Phase B): enroll-via-device button — the server tells the running camera agent to capture +
+  register, so you can add a face from the web UI without the CLI.*
+
 ## 2026-06-20 — Camera: `set-key` helper (no PowerShell quoting pitfalls)
 
 - New **`set-key.ps1` / `set-key.sh`** write `config/agent.key` (or `config/admin.key` with `-Admin` /

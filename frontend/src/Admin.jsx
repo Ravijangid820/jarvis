@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Fragment } from 'react'
 
 // Admin console, rendered by App when the path is /admin and the user is an admin.
 // Lives in the React app so it inherits the HUD styling, fonts, and active theme.
@@ -23,6 +23,8 @@ export default function Admin({ token, onExit }) {
   const [kDev, setKDev] = useState("")
   const [minted, setMinted] = useState("")
   const [mintedDev, setMintedDev] = useState("")
+  const [expanded, setExpanded] = useState(null)   // person id whose embeddings are shown
+  const [embs, setEmbs] = useState([])
   const [err, setErr] = useState("")
 
   const api = async (path, method = "GET", body) => {
@@ -83,12 +85,30 @@ export default function Admin({ token, onExit }) {
     try { await api("/admin/api_keys/" + id, "DELETE"); load() } catch (e) { setErr(e.message) }
   }
   const delFace = async (id) => {
-    if (!confirm("Delete this enrolled face?")) return
-    try { await api("/admin/faces/" + id, "DELETE"); load() } catch (e) { setErr(e.message) }
+    if (!confirm("Delete this person and all their face embeddings?")) return
+    try { await api("/admin/faces/" + id, "DELETE"); setExpanded(null); load() } catch (e) { setErr(e.message) }
   }
   const linkFace = async (id, userId) => {
     try { await api("/admin/faces/" + id, "PUT", { user_id: userId ? Number(userId) : null }); load() }
     catch (e) { setErr(e.message) }
+  }
+  const renameFace = async (id, current) => {
+    const name = prompt("Rename person:", current)
+    if (!name || name.trim() === current) return
+    try { await api("/admin/faces/" + id, "PUT", { name: name.trim() }); load() } catch (e) { setErr(e.message) }
+  }
+  const viewEmbs = async (id) => {
+    if (expanded === id) { setExpanded(null); return }
+    try { const d = await api(`/admin/faces/${id}/embeddings`); setEmbs(d.embeddings || []); setExpanded(id) }
+    catch (e) { setErr(e.message) }
+  }
+  const delEmb = async (embId, personId) => {
+    if (!confirm("Delete this one embedding?")) return
+    try {
+      await api("/admin/faces/embeddings/" + embId, "DELETE")
+      const d = await api(`/admin/faces/${personId}/embeddings`); setEmbs(d.embeddings || [])
+      load()                                   // refresh the person's count
+    } catch (e) { setErr(e.message) }
   }
 
   const cameras = services.filter(s => s.name.startsWith("Camera"))
@@ -239,29 +259,57 @@ export default function Admin({ token, onExit }) {
           </div>
 
           <div className="adm-panel">
-            <h2>Enrolled Faces</h2>
+            <h2>Enrolled People</h2>
             <p className="adm-hint">
-              Enroll on the device (which has the camera + embedding model + an admin key):
-              <code> .venv\Scripts\python -m jarvis_camera.facecli add --name "Name" </code>.
-              Link a face to a user to gate device actions by who's present.
+              Enroll on the device (camera + models + an admin key):
+              <code> .venv\Scripts\python -m jarvis_camera.facecli add --name "Name" </code> — run it a few
+              times (different angles) to add <strong>multiple embeddings</strong> per person for better
+              accuracy. Link a person to a user to gate device actions by who's present.
             </p>
             <table className="adm-table">
-              <thead><tr><th>Name</th><th>Linked User (authorization)</th><th>Enrolled</th><th>Override</th></tr></thead>
+              <thead><tr><th>Name</th><th>Linked User (authorization)</th><th>Embeddings</th><th>Last seen</th><th>Actions</th></tr></thead>
               <tbody>
                 {faces.map(f => (
-                  <tr key={f.id}>
-                    <td className="adm-em">{f.name}</td>
-                    <td>
-                      <select className="hud-input" value={f.user_id || ""} onChange={e => linkFace(f.id, e.target.value)} style={{ maxWidth: 200 }}>
-                        <option value="">— not linked —</option>
-                        {users.map(u => <option key={u.id} value={u.id}>{u.username}</option>)}
-                      </select>
-                    </td>
-                    <td>{f.created_at}</td>
-                    <td><button className="hud-btn warn" onClick={() => delFace(f.id)}>Delete</button></td>
-                  </tr>
+                  <Fragment key={f.id}>
+                    <tr>
+                      <td className="adm-em">{f.name}</td>
+                      <td>
+                        <select className="hud-input" value={f.user_id || ""} onChange={e => linkFace(f.id, e.target.value)} style={{ maxWidth: 200 }}>
+                          <option value="">— not linked —</option>
+                          {users.map(u => <option key={u.id} value={u.id}>{u.username}</option>)}
+                        </select>
+                      </td>
+                      <td>
+                        <button className="adm-link" onClick={() => viewEmbs(f.id)}>
+                          {f.embedding_count} {f.embedding_count === 1 ? "embedding" : "embeddings"} {expanded === f.id ? "▾" : "▸"}
+                        </button>
+                      </td>
+                      <td>{f.last_seen || <span style={{ opacity: 0.4 }}>never</span>}</td>
+                      <td style={{ display: "flex", gap: 6 }}>
+                        <button className="hud-btn" onClick={() => renameFace(f.id, f.name)}>Rename</button>
+                        <button className="hud-btn warn" onClick={() => delFace(f.id)}>Delete</button>
+                      </td>
+                    </tr>
+                    {expanded === f.id && (
+                      <tr><td colSpan="5" style={{ background: "rgba(103,199,235,0.03)" }}>
+                        {embs.length === 0 ? <span className="adm-empty">No embeddings (re-enroll to add one)</span> : (
+                          <table className="adm-table" style={{ margin: 0 }}>
+                            <thead><tr><th>#</th><th>Source</th><th>Added</th><th></th></tr></thead>
+                            <tbody>
+                              {embs.map(e => (
+                                <tr key={e.id}>
+                                  <td>{e.id}</td><td>{e.source || "—"}</td><td>{e.created_at}</td>
+                                  <td><button className="hud-btn warn" onClick={() => delEmb(e.id, f.id)}>Delete</button></td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        )}
+                      </td></tr>
+                    )}
+                  </Fragment>
                 ))}
-                {faces.length === 0 && <tr><td colSpan="4" className="adm-empty">No faces enrolled — use the enroll command above.</td></tr>}
+                {faces.length === 0 && <tr><td colSpan="5" className="adm-empty">No one enrolled yet — use the enroll command above.</td></tr>}
               </tbody>
             </table>
           </div>

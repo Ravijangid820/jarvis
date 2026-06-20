@@ -414,20 +414,39 @@ def test_face_enroll_requires_admin(client):
     assert r.status_code == 403
 
 
-def test_face_enroll_list_link_rename_delete(client):
+def test_face_person_multi_embedding_link_rename_delete(client):
     admin = _tok(client, "tony", "pw-admin")
     h = {"Authorization": "Bearer " + admin}
+    # two enrollments for the same name → one person with TWO embeddings
     assert client.post("/faces/enroll", headers=h, json={"name": "Ravi", "embedding": [0.1] * 16}).status_code == 200
-    # edge fetch sees the embedding
+    assert client.post("/faces/enroll", headers=h, json={"name": "Ravi", "embedding": [0.2] * 16, "source": "laptop-cam"}).status_code == 200
     enrolled = client.get("/faces/enrolled", headers=h).json()["enrolled"]
-    assert "Ravi" in enrolled and len(enrolled["Ravi"]) == 16
-    fid = next(f["id"] for f in client.get("/admin/faces", headers=h).json()["faces"] if f["name"] == "Ravi")
-    # link to a user (look up pepper's id)
-    c = sqlite3.connect(_DB); pid = c.execute("SELECT id FROM users WHERE username='pepper'").fetchone()[0]; c.close()
-    assert client.put(f"/admin/faces/{fid}", headers=h, json={"user_id": pid}).status_code == 200
-    # rename must NOT clobber the link
-    assert client.put(f"/admin/faces/{fid}", headers=h, json={"name": "Ravi J"}).status_code == 200
-    row = next(f for f in client.get("/admin/faces", headers=h).json()["faces"] if f["id"] == fid)
-    assert row["name"] == "Ravi J" and row["user_id"] == pid and row["username"] == "pepper"
-    assert client.delete(f"/admin/faces/{fid}", headers=h).status_code == 200
-    assert all(f["id"] != fid for f in client.get("/admin/faces", headers=h).json()["faces"])
+    assert "Ravi" in enrolled and len(enrolled["Ravi"]) == 2 and len(enrolled["Ravi"][0]) == 16   # list-per-person
+    person = next(f for f in client.get("/admin/faces", headers=h).json()["faces"] if f["name"] == "Ravi")
+    pid_face, _ = person["id"], None
+    assert person["embedding_count"] == 2
+    # list the individual embeddings, delete one → count drops to 1
+    embs = client.get(f"/admin/faces/{pid_face}/embeddings", headers=h).json()["embeddings"]
+    assert len(embs) == 2
+    assert client.delete(f"/admin/faces/embeddings/{embs[0]['id']}", headers=h).status_code == 200
+    assert next(f for f in client.get("/admin/faces", headers=h).json()["faces"] if f["id"] == pid_face)["embedding_count"] == 1
+    # link to a user, then rename must NOT clobber the link
+    c = sqlite3.connect(_DB); uid = c.execute("SELECT id FROM users WHERE username='pepper'").fetchone()[0]; c.close()
+    assert client.put(f"/admin/faces/{pid_face}", headers=h, json={"user_id": uid}).status_code == 200
+    assert client.put(f"/admin/faces/{pid_face}", headers=h, json={"name": "Ravi J"}).status_code == 200
+    row = next(f for f in client.get("/admin/faces", headers=h).json()["faces"] if f["id"] == pid_face)
+    assert row["name"] == "Ravi J" and row["user_id"] == uid and row["username"] == "pepper"
+    # delete the person → gone, and its embeddings gone from the edge feed
+    assert client.delete(f"/admin/faces/{pid_face}", headers=h).status_code == 200
+    assert "Ravi J" not in client.get("/faces/enrolled", headers=h).json()["enrolled"]
+
+
+def test_face_enroll_replace(client):
+    admin = _tok(client, "tony", "pw-admin")
+    h = {"Authorization": "Bearer " + admin}
+    client.post("/faces/enroll", headers=h, json={"name": "Repl", "embedding": [0.1] * 16})
+    client.post("/faces/enroll", headers=h, json={"name": "Repl", "embedding": [0.2] * 16})
+    client.post("/faces/enroll", headers=h, json={"name": "Repl", "embedding": [0.3] * 16, "replace": True})
+    assert len(client.get("/faces/enrolled", headers=h).json()["enrolled"]["Repl"]) == 1   # replaced
+    pid = next(f["id"] for f in client.get("/admin/faces", headers=h).json()["faces"] if f["name"] == "Repl")
+    client.delete(f"/admin/faces/{pid}", headers=h)

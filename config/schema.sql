@@ -92,17 +92,26 @@ CREATE TABLE IF NOT EXISTS device_commands (
 );
 CREATE INDEX IF NOT EXISTS idx_device_commands_pending ON device_commands(device_id, status, id);
 
--- Enrolled faces for recognition. `embedding` is a JSON array of floats (L2-normalized) produced
--- by the edge's face-embedding model; `user_id` optionally links a face to an account so identity
--- can drive per-user authorization. Runtime recognition runs on the edge; only vectors are stored.
-CREATE TABLE IF NOT EXISTS faces (
+-- A recognizable person: a display name, optionally linked to a user account so identity can drive
+-- per-user authorization. Each person can have MANY face embeddings (different angles/lighting),
+-- which recognition matches against (best of all) for robustness. Only vectors are stored, never
+-- imagery; runtime recognition runs on the edge.
+CREATE TABLE IF NOT EXISTS persons (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
+    name TEXT NOT NULL UNIQUE,
     user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-    embedding TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX IF NOT EXISTS idx_faces_name ON faces(name);
+-- One L2-normalized embedding (JSON array of floats) belonging to a person. `source` records where
+-- it came from (a device_id, or "cli"). Deleting a person cascades its embeddings.
+CREATE TABLE IF NOT EXISTS face_embeddings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+    embedding TEXT NOT NULL,
+    source TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_face_embeddings_person ON face_embeddings(person_id);
 
 -- Liveness for edge devices (camera agents). The agent posts a periodic `heartbeat` event; we keep
 -- only the latest timestamp per device (not in vision_events, to avoid flooding it) so the admin

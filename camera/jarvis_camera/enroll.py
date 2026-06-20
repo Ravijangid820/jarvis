@@ -40,7 +40,7 @@ def _largest(rows):
     return max(rows, key=lambda r: r[2] * r[3]) if rows else None
 
 
-def run(name, frames, config_path):
+def run(name, frames, config_path, replace=False):
     cfg = json.loads(Path(config_path).read_text())
     fd = FaceDetector(cfg.get("detectors", {}).get("faces", {}))
     if not fd.has_identity():
@@ -80,13 +80,15 @@ def run(name, frames, config_path):
         sys.exit("No admin key — put an ADMIN API key in config/admin.key (admin_key_file) to enroll. "
                  "(The device's agent.key can't enroll — enrollment is admin-only by design.)")
     url = cfg["server"]["url"].rstrip("/") + "/faces/enroll"
-    body = json.dumps({"name": name, "embedding": avg}).encode("utf-8")
+    body = json.dumps({"name": name, "embedding": avg, "replace": bool(replace),
+                       "source": cfg.get("device_id")}).encode("utf-8")
     req = urllib.request.Request(url, data=body, method="POST",
                                  headers={"Content-Type": "application/json", "Authorization": "Bearer " + key})
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             json.loads(r.read().decode())
-        log.info("✓ enrolled '%s' (averaged %d frames). Manage / link to a user in the admin Faces page.", name, len(vecs))
+        verb = "replaced — now 1 embedding for" if replace else "added an embedding for"
+        log.info("✓ %s '%s' (averaged %d frames). Manage in the admin Faces page.", verb, name, len(vecs))
     except urllib.error.HTTPError as e:
         sys.exit(f"server HTTP {e.code} — /faces/enroll is admin-only; is the key an admin key?")
     except Exception as e:
@@ -97,9 +99,10 @@ def main():
     ap = argparse.ArgumentParser(description="Enroll a face for Jarvis recognition")
     ap.add_argument("--name", required=True, help="person's name (display label)")
     ap.add_argument("--frames", type=int, default=7, help="good frames to average (default 7)")
+    ap.add_argument("--replace", action="store_true", help="replace this person's embeddings instead of adding")
     ap.add_argument("--config", default=str(CAMERA_ROOT / "config" / "config.json"))
     args = ap.parse_args()
-    run(args.name, args.frames, args.config)
+    run(args.name, args.frames, args.config, replace=args.replace)
 
 
 if __name__ == "__main__":
