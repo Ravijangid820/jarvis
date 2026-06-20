@@ -18,6 +18,7 @@ from .detectors.faces import FaceDetector
 from .detectors.gestures import GestureDetector
 from .detectors.motion import MotionDetector
 from .detectors.pose import PoseDetector
+from .enroll import capture_average
 from .events import EventClient
 from .keyfile import load_key
 from .paths import base_dir
@@ -49,6 +50,49 @@ def _fetch_enrolled(server, key):
     except Exception as e:
         log.warning("could not fetch enrolled faces: %s", e)
         return {}
+
+
+def _poll_enroll(server, key):
+    """Check for a pending enroll request for THIS device (server binds it to our key)."""
+    req = urllib.request.Request(server.rstrip("/") + "/faces/enroll-request",
+                                 headers={"Authorization": "Bearer " + key})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return json.loads(r.read(_MAX_ENROLLED_BYTES + 1).decode()).get("request")
+
+
+def _submit_enroll(server, key, request_id, embedding=None, error=None):
+    body = json.dumps({"request_id": request_id, "embedding": embedding, "error": error}).encode("utf-8")
+    req = urllib.request.Request(server.rstrip("/") + "/faces/enroll-result", data=body, method="POST",
+                                 headers={"Content-Type": "application/json", "Authorization": "Bearer " + key})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        r.read(4096)
+
+
+def _maybe_enroll(server, key, cam, fdet, frames=7):
+    """If an admin queued an enroll request for this device, capture on-camera + submit the embedding."""
+    try:
+        reqd = _poll_enroll(server, key)
+    except Exception as e:
+        log.debug("enroll poll failed: %s", e)
+        return
+    if not reqd:
+        return
+    rid, name = reqd.get("id"), reqd.get("name")
+    log.info("enroll request #%s: capturing '%s' — look at the camera", rid, name)
+    try:
+        vec = capture_average(cam, fdet, frames, log_progress=False)
+    except Exception as e:
+        vec = None
+        log.warning("enroll capture failed: %s", e)
+    try:
+        if vec:
+            _submit_enroll(server, key, rid, embedding=vec)
+            log.info("✓ enrolled '%s' from this camera", name)
+        else:
+            _submit_enroll(server, key, rid, error="no clear face captured")
+            log.warning("enroll '%s' failed: no clear face", name)
+    except Exception as e:
+        log.warning("enroll submit failed: %s", e)
 
 
 def _build_heavy(det_cfg):
@@ -94,6 +138,9 @@ def run(config_path, dry_run=False):
     rr = 0
     last_hb = 0.0
     HB_INTERVAL = 30.0    # liveness ping so the server shows this device active even in a quiet room
+    last_enroll = 0.0
+    ENROLL_INTERVAL = 4.0  # how often to check for an admin-queued "enroll this face" request
+    can_enroll = bool(key) and fdet is not None and fdet.has_identity() and not dry_run
 
     state = {"go": True}
     # Register stop signals defensively — not every signal is settable on every platform
@@ -113,6 +160,9 @@ def run(config_path, dry_run=False):
             if t0 - last_hb >= HB_INTERVAL:        # prove liveness regardless of motion
                 client.send("heartbeat")
                 last_hb = t0
+            if can_enroll and t0 - last_enroll >= ENROLL_INTERVAL:   # admin-queued enroll-from-UI
+                last_enroll = t0
+                _maybe_enroll(cfg["server"]["url"], key, cam, fdet)
             frame = cam.read()
             if frame is None:
                 time.sleep(0.05)

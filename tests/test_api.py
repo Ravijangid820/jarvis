@@ -450,3 +450,33 @@ def test_face_enroll_replace(client):
     assert len(client.get("/faces/enrolled", headers=h).json()["enrolled"]["Repl"]) == 1   # replaced
     pid = next(f["id"] for f in client.get("/admin/faces", headers=h).json()["faces"] if f["name"] == "Repl")
     client.delete(f"/admin/faces/{pid}", headers=h)
+
+
+def test_enroll_request_flow(client):
+    admin = _tok(client, "tony", "pw-admin")
+    h = {"Authorization": "Bearer " + admin}
+    rid = client.post("/admin/faces/enroll-request", headers=h, json={"name": "Neo", "device_id": "pi-door"}).json()["id"]
+    other = _seed_device_key("pepper", "pi-other")
+    key = _seed_device_key("pepper", "pi-door")
+    # the wrong device sees nothing; the right device sees the request
+    assert client.get("/faces/enroll-request", headers={"Authorization": "Bearer " + other}).json()["request"] is None
+    got = client.get("/faces/enroll-request", headers={"Authorization": "Bearer " + key}).json()["request"]
+    assert got and got["name"] == "Neo"
+    # a device may NOT fulfill another device's request
+    assert client.post("/faces/enroll-result", headers={"Authorization": "Bearer " + other},
+                       json={"request_id": rid, "embedding": [0.1] * 16}).status_code == 403
+    # the right device submits → person created
+    assert client.post("/faces/enroll-result", headers={"Authorization": "Bearer " + key},
+                       json={"request_id": rid, "embedding": [0.1] * 16}).status_code == 200
+    assert "Neo" in client.get("/faces/enrolled", headers=h).json()["enrolled"]
+    # already handled → can't be re-fulfilled
+    assert client.post("/faces/enroll-result", headers={"Authorization": "Bearer " + key},
+                       json={"request_id": rid, "embedding": [0.2] * 16}).status_code == 409
+    pid = next(f["id"] for f in client.get("/admin/faces", headers=h).json()["faces"] if f["name"] == "Neo")
+    client.delete(f"/admin/faces/{pid}", headers=h)
+
+
+def test_enroll_request_create_requires_admin(client):
+    user = _tok(client, "pepper", "pw-user")
+    assert client.post("/admin/faces/enroll-request", headers={"Authorization": "Bearer " + user},
+                       json={"name": "x", "device_id": "d"}).status_code == 403

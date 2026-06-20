@@ -203,11 +203,16 @@ cd camera                                   # Windows: use  .venv\Scripts\python
 | `add`, `delete`  | **admin** key (`config/admin.key`) | enrolling/removing faces changes who's authorized |
 
 Mint the **device** key in the **admin → Keys** tab (set a Device ID like `laptop-cam`). The **admin**
-key is only needed for `add`/`delete` — put it in `config/admin.key`, and **delete that file when
-you're done managing** so the running device never holds a privileged credential. You can also just
-manage faces in the **admin → Faces** web page (link a face → a user account to gate device actions
-by who's present). The running agent pulls the enrolled set from `/faces/enrolled` and recognizes
-locally.
+key is only needed for the *CLI* `add`/`delete` — put it in `config/admin.key`, and **delete that file
+when you're done** so the running device never holds a privileged credential.
+
+**Enroll from the web UI (no CLI / no admin key on the device):** in **admin → Faces → “Enroll a face
+(from a camera)”**, pick the camera + a name and click *Request Enrollment*. The server queues a
+request; the running agent on that device picks it up, captures + embeds on-camera, and registers it —
+so the camera key never gains general enroll rights (it can only fulfill a request an admin created
+for it). Each person can hold **multiple embeddings**; enroll again (any angle) to add more, and
+**view/delete individual embeddings** or **rename**/link people in the same page. The agent pulls the
+enrolled set from `/faces/enrolled` and recognizes locally (best match across a person's embeddings).
 
 ## Security & attack surface
 

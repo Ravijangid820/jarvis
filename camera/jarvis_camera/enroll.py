@@ -40,18 +40,9 @@ def _largest(rows):
     return max(rows, key=lambda r: r[2] * r[3]) if rows else None
 
 
-def run(name, frames, config_path, replace=False):
-    cfg = json.loads(Path(config_path).read_text())
-    fd = FaceDetector(cfg.get("detectors", {}).get("faces", {}))
-    if not fd.has_identity():
-        sys.exit("Enrollment needs the SFace embedding model — run setup to download it, or set "
-                 "detectors.faces.embed_model. (YuNet finds the face; SFace identifies it.)")
-
-    cam_cfg = cfg.get("camera", {})
-    cam = Camera(backend=cam_cfg.get("backend", "auto"), device=cam_cfg.get("device", 0),
-                 width=cam_cfg.get("width", 480), height=cam_cfg.get("height", 360), fps=cam_cfg.get("fps", 8))
-    cam.open()
-    log.info("Look at the camera — capturing %d good frames of '%s'...", frames, name)
+def capture_average(cam, fd, frames, log_progress=True):
+    """Capture `frames` good face embeddings from an OPEN camera and return their L2-normalized
+    average, or None if too few faces were seen. Shared by the CLI and the agent's enroll handler."""
     vecs, tries = [], 0
     while len(vecs) < frames and tries < frames * 15:
         tries += 1
@@ -64,16 +55,33 @@ def run(name, frames, config_path, replace=False):
         v = fd.embed(frame, row)            # SFace aligns via YuNet's landmarks, then embeds
         if v:
             vecs.append(v)
-            log.info("  captured %d/%d", len(vecs), frames)
+            if log_progress:
+                log.info("  captured %d/%d", len(vecs), frames)
         time.sleep(0.25)
-    cam.close()
     if len(vecs) < max(1, frames // 2):
-        sys.exit(f"Only captured {len(vecs)} face(s) — try again with better lighting / framing.")
-
+        return None
     dim = len(vecs[0])
     avg = [sum(v[i] for v in vecs) / len(vecs) for i in range(dim)]
     norm = math.sqrt(sum(a * a for a in avg)) or 1.0
-    avg = [a / norm for a in avg]
+    return [a / norm for a in avg]
+
+
+def run(name, frames, config_path, replace=False):
+    cfg = json.loads(Path(config_path).read_text())
+    fd = FaceDetector(cfg.get("detectors", {}).get("faces", {}))
+    if not fd.has_identity():
+        sys.exit("Enrollment needs the SFace embedding model — run setup to download it, or set "
+                 "detectors.faces.embed_model. (YuNet finds the face; SFace identifies it.)")
+
+    cam_cfg = cfg.get("camera", {})
+    cam = Camera(backend=cam_cfg.get("backend", "auto"), device=cam_cfg.get("device", 0),
+                 width=cam_cfg.get("width", 480), height=cam_cfg.get("height", 360), fps=cam_cfg.get("fps", 8))
+    cam.open()
+    log.info("Look at the camera — capturing %d good frames of '%s'...", frames, name)
+    avg = capture_average(cam, fd, frames)
+    cam.close()
+    if avg is None:
+        sys.exit("Couldn't capture enough clear faces — try again with better lighting / framing.")
 
     key = _load_admin_key(cfg)
     if not key:

@@ -4,6 +4,18 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-20 — Faces: enroll a face from the web UI (Phase B)
+
+- **Admin → Faces → "Enroll a face (from a camera)"**: pick a camera + a name → *Request Enrollment*.
+  The server queues a pending request; the running camera **agent polls, captures + embeds on-device,
+  and submits** the result (appears as a new person/embedding). No browser webcam, no TLS, and **no
+  admin key on the device** — the device key can only *fulfill* a request an admin created for it
+  (it still can't enroll arbitrary faces). Live status (pending/done/failed) shown in the UI.
+- New: `enroll_requests` table; `POST /admin/faces/enroll-request` + `GET /admin/faces/enroll-requests`
+  (admin), `GET /faces/enroll-request` + `POST /faces/enroll-result` (device-key, provenance-bound like
+  `/events`). Agent gained a guarded enroll-poll loop (reuses the CLI's capture; can't disrupt normal
+  operation). Tests 59 → 61. Server flow verified end-to-end; on-camera capture is hardware-verified.
+
 ## 2026-06-20 — Faces: persons → many embeddings + richer admin management (Phase A)
 
 - **Data model:** `faces` → **`persons`** (name, linked user) + **`face_embeddings`** (many per person,

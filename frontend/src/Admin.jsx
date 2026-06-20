@@ -25,6 +25,9 @@ export default function Admin({ token, onExit }) {
   const [mintedDev, setMintedDev] = useState("")
   const [expanded, setExpanded] = useState(null)   // person id whose embeddings are shown
   const [embs, setEmbs] = useState([])
+  const [enrollName, setEnrollName] = useState("")
+  const [enrollDev, setEnrollDev] = useState("")
+  const [enrollReqs, setEnrollReqs] = useState([])
   const [err, setErr] = useState("")
 
   const api = async (path, method = "GET", body) => {
@@ -41,18 +44,22 @@ export default function Admin({ token, onExit }) {
 
   const load = async () => {
     try {
-      const [s, u, k, f, sv] = await Promise.all([
+      const [s, u, k, f, sv, er] = await Promise.all([
         api("/admin/stats"), api("/admin/users"), api("/admin/api_keys"),
-        api("/admin/faces"), api("/admin/services")])
+        api("/admin/faces"), api("/admin/services"), api("/admin/faces/enroll-requests")])
       setStats(s); setUsers(u.users || []); setKeys(k.keys || [])
-      setFaces(f.faces || []); setServices(sv.services || []); setErr("")
+      setFaces(f.faces || []); setServices(sv.services || []); setEnrollReqs(er.requests || []); setErr("")
     } catch (e) { setErr(e.message) }
   }
   useEffect(() => { load() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
-  // Refresh service status periodically so green/red reflects reality without a manual reload.
+  // Refresh status periodically (services, faces, enroll requests) without disrupting form edits.
   useEffect(() => {
     const t = setInterval(async () => {
-      try { const sv = await api("/admin/services"); setServices(sv.services || []) } catch { /* keep last */ }
+      try {
+        const [sv, f, er] = await Promise.all([
+          api("/admin/services"), api("/admin/faces"), api("/admin/faces/enroll-requests")])
+        setServices(sv.services || []); setFaces(f.faces || []); setEnrollReqs(er.requests || [])
+      } catch { /* keep last */ }
     }, 15000)
     return () => clearInterval(t)
   }, [])  // eslint-disable-line react-hooks/exhaustive-deps
@@ -111,7 +118,14 @@ export default function Admin({ token, onExit }) {
     } catch (e) { setErr(e.message) }
   }
 
+  const requestEnroll = async () => {
+    if (!enrollName.trim() || !enrollDev) return setErr("Name and a camera device are required")
+    try { await api("/admin/faces/enroll-request", "POST", { name: enrollName.trim(), device_id: enrollDev }); setEnrollName(""); load() }
+    catch (e) { setErr(e.message) }
+  }
+
   const cameras = services.filter(s => s.name.startsWith("Camera"))
+  const cameraDevices = cameras.map(s => s.name.replace(/^Camera · /, "")).filter(d => d && d !== "agent")
 
   return (
     <div className="adm">
@@ -259,12 +273,41 @@ export default function Admin({ token, onExit }) {
           </div>
 
           <div className="adm-panel">
+            <h2>Enroll a face (from a camera)</h2>
+            <p className="adm-hint">Pick a camera and a name — the request is sent to that device's agent,
+              which captures + registers the face on-device (the person there should look at the camera).
+              Run it again for the same name to add more angles. <strong>CLI alternative:</strong>
+              <code> .venv\Scripts\python -m jarvis_camera.facecli add --name "Name"</code>.</p>
+            <div className="adm-form">
+              <input className="hud-input" placeholder="PERSON'S NAME" value={enrollName} onChange={e => setEnrollName(e.target.value)} />
+              <select className="hud-input" value={enrollDev} onChange={e => setEnrollDev(e.target.value)} style={{ maxWidth: 220 }}>
+                <option value="">— select camera —</option>
+                {cameraDevices.map(d => <option key={d} value={d}>{d}</option>)}
+              </select>
+              <button className="hud-btn" onClick={requestEnroll} disabled={cameraDevices.length === 0}>Request Enrollment</button>
+            </div>
+            {cameraDevices.length === 0 && <p className="adm-hint">No camera agents seen yet — start one (run the agent) so it can receive the request.</p>}
+            {enrollReqs.length > 0 && (
+              <table className="adm-table" style={{ marginTop: 4 }}>
+                <thead><tr><th>Requested</th><th>Name</th><th>Camera</th><th>Status</th></tr></thead>
+                <tbody>
+                  {enrollReqs.slice(0, 6).map(r => (
+                    <tr key={r.id}>
+                      <td>{r.created_at}</td><td className="adm-em">{r.name}</td><td>{r.device_id}</td>
+                      <td><span className={"adm-svc-state " + (r.status === "done" ? "active" : r.status === "failed" ? "inactive" : "")}>
+                        {r.status.toUpperCase()}</span>{r.detail ? ` · ${r.detail}` : ""}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          <div className="adm-panel">
             <h2>Enrolled People</h2>
             <p className="adm-hint">
-              Enroll on the device (camera + models + an admin key):
-              <code> .venv\Scripts\python -m jarvis_camera.facecli add --name "Name" </code> — run it a few
-              times (different angles) to add <strong>multiple embeddings</strong> per person for better
-              accuracy. Link a person to a user to gate device actions by who's present.
+              Link a person to a user to gate device actions by who's present; expand the embedding
+              count to view/remove individual captures. More embeddings (different angles) = better accuracy.
             </p>
             <table className="adm-table">
               <thead><tr><th>Name</th><th>Linked User (authorization)</th><th>Embeddings</th><th>Last seen</th><th>Actions</th></tr></thead>

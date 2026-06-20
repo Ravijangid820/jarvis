@@ -120,3 +120,18 @@ CREATE TABLE IF NOT EXISTS device_heartbeats (
     device_id TEXT PRIMARY KEY,
     last_seen DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Enroll-from-the-UI: an admin creates a pending request for a camera device; that device's agent
+-- polls, captures + embeds on-device, and submits the result. The device never gains general enroll
+-- rights — it can only fulfill a request an admin already created for IT.
+CREATE TABLE IF NOT EXISTS enroll_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',     -- pending | done | failed
+    requested_by INTEGER,
+    detail TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    completed_at DATETIME
+);
+CREATE INDEX IF NOT EXISTS idx_enroll_requests_device ON enroll_requests(device_id, status);

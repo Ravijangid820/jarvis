@@ -272,6 +272,17 @@ class FaceUpdateRequest(BaseModel):
     user_id: Optional[int] = None          # link person → account (null clears the link)
 
 
+class EnrollRequestCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=64)
+    device_id: str = Field(..., min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._:-]+$")
+
+
+class EnrollResult(BaseModel):
+    request_id: int
+    embedding: Optional[List[float]] = Field(default=None, min_length=8, max_length=2048)
+    error: Optional[str] = Field(default=None, max_length=200)
+
+
 # ----------------- Auth endpoints -----------------
 @app.post("/auth/login")
 def login(req: LoginRequest, request: Request):
@@ -531,6 +542,64 @@ def enrolled_faces(request: Request):
         for r in rows:
             out.setdefault(r["name"], []).append(json.loads(r["embedding"]))
         return {"enrolled": out}
+    finally:
+        conn.close()
+
+
+@app.get("/faces/enroll-request")
+def get_enroll_request(request: Request, device: Optional[str] = None):
+    """The camera agent polls this for a pending enroll request for ITS device (provenance bound to
+    the key, like /events). Returns {"request": {id, name}} or {"request": null}."""
+    dev = getattr(request.state, "device_id", None)
+    if dev:
+        device_id = dev                          # device key → only its own requests
+    elif getattr(request.state, "is_admin", False) and device:
+        device_id = device                       # admin may inspect any device (testing)
+    else:
+        raise HTTPException(status_code=403, detail="device-scoped key (or admin + ?device=) required")
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT id, name FROM enroll_requests WHERE device_id = ? AND status = 'pending' "
+            "ORDER BY id LIMIT 1", (device_id,)).fetchone()
+        return {"request": dict(row) if row else None}
+    finally:
+        conn.close()
+
+
+@app.post("/faces/enroll-result")
+def post_enroll_result(req: EnrollResult, request: Request):
+    """The agent submits the captured embedding (or an error) for a pending request. A device key may
+    only fulfill a request for ITS OWN device — it cannot enroll arbitrary faces (an admin must have
+    created the request first)."""
+    dev = getattr(request.state, "device_id", None)
+    is_admin = getattr(request.state, "is_admin", False)
+    if not dev and not is_admin:
+        raise HTTPException(status_code=403, detail="device-scoped key (or admin) required")
+    conn = get_db()
+    try:
+        r = conn.execute("SELECT device_id, name, status FROM enroll_requests WHERE id = ?",
+                         (req.request_id,)).fetchone()
+        if r is None:
+            raise HTTPException(status_code=404, detail="No such request")
+        if not is_admin and r["device_id"] != dev:
+            raise HTTPException(status_code=403, detail="Not your device's request")
+        if r["status"] != "pending":
+            raise HTTPException(status_code=409, detail="Request already handled")
+        if req.error or not req.embedding:
+            conn.execute("UPDATE enroll_requests SET status='failed', detail=?, completed_at=datetime('now') "
+                         "WHERE id=?", ((req.error or "no face captured")[:200], req.request_id))
+            conn.commit()
+            return {"status": "failed"}
+        prow = conn.execute("SELECT id FROM persons WHERE name = ?", (r["name"],)).fetchone()
+        person_id = prow["id"] if prow else conn.execute(
+            "INSERT INTO persons (name) VALUES (?)", (r["name"],)).lastrowid
+        conn.execute("INSERT INTO face_embeddings (person_id, embedding, source) VALUES (?, ?, ?)",
+                     (person_id, json.dumps(req.embedding), r["device_id"]))
+        conn.execute("UPDATE enroll_requests SET status='done', completed_at=datetime('now') WHERE id=?",
+                     (req.request_id,))
+        conn.commit()
+        return {"status": "ok", "person_id": person_id}
     finally:
         conn.close()
 
@@ -1057,6 +1126,37 @@ def admin_delete_embedding(embedding_id: int, request: Request):
         if cur.rowcount == 0:
             raise HTTPException(status_code=404, detail="No such embedding")
         return {"status": "ok"}
+    finally:
+        conn.close()
+
+
+@app.post("/admin/faces/enroll-request")
+def admin_create_enroll_request(req: EnrollRequestCreate, request: Request):
+    """Ask a camera device to enroll a face: queues a pending request its agent will pick up,
+    capture, and fulfill. The capture happens on the device that has the camera."""
+    _require_admin(request)
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            "INSERT INTO enroll_requests (device_id, name, requested_by) VALUES (?, ?, ?)",
+            (req.device_id, req.name.strip(), request.state.user_id))
+        conn.execute("DELETE FROM enroll_requests WHERE created_at < datetime('now', '-7 days')")
+        conn.commit()
+        return {"status": "ok", "id": cur.lastrowid}
+    finally:
+        conn.close()
+
+
+@app.get("/admin/faces/enroll-requests")
+def admin_list_enroll_requests(request: Request):
+    """Recent enroll requests + their status, for the UI to show progress."""
+    _require_admin(request)
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT id, device_id, name, status, detail, created_at, completed_at "
+            "FROM enroll_requests ORDER BY id DESC LIMIT 20").fetchall()
+        return {"requests": [dict(r) for r in rows]}
     finally:
         conn.close()
 
