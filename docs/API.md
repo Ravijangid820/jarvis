@@ -130,7 +130,7 @@ the LLM.
 | `DELETE` | `/admin/api_keys/{id}` | — | `{ "status": "ok" }` |
 | `GET` | `/admin/stats` | — | `{ "users": int, "chats": int, "messages": int }` |
 | `GET` | `/admin/services` | — | `{ "services": [{name, status: active\|inactive, detail}] }` — live subsystem health (orchestrator, LLM, embeddings, TTS, + one row per camera agent from `device_heartbeats`). |
-| `GET` | `/admin/events?limit=N` | — | `{ "events": [{id, device_id, type, data, created_at}], "count": int }` (recent camera events, newest first) |
+| `GET` | `/admin/events?limit=N&type=&since_id=` | — | `{ "events": [{id, device_id, type, data, created_at}], "count": int }` (recent camera events, newest first). `type` filters (e.g. `face_seen` for the recognitions feed / verify); `since_id` returns only events newer than an id. |
 
 ---
 
@@ -169,7 +169,7 @@ submits on-device (the device key can only *fulfill* a request made for it — i
 
 | Method | Path | Body | Returns |
 |---|---|---|---|
-| `POST` | `/admin/faces/enroll-request` | `{ name, device_id }` | **admin** · queue a pending enroll for a device. |
+| `POST` | `/admin/faces/enroll-request` | `{ user_id, device_id }` (or `{ name, device_id }`) | **admin** · queue a pending enroll for a device. With `user_id` the face is enrolled for that account and the person is auto-linked to it; `name` defaults to the username. |
 | `GET` | `/admin/faces/enroll-requests` | — | **admin** · recent requests `[{id, device_id, name, status, detail, …}]`. |
 | `GET` | `/faces/enroll-request` | — | **device key** · the pending request for THIS device (`{request:{id,name}}` or null). |
 | `POST` | `/faces/enroll-result` | `{ request_id, embedding?, error? }` | **device key** (own request) · submit the captured embedding (creates the person/embedding) or report failure. |

@@ -130,6 +130,7 @@ CREATE TABLE IF NOT EXISTS enroll_requests (
     name TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending',     -- pending | done | failed
     requested_by INTEGER,
+    user_id INTEGER REFERENCES users(id),       -- enroll FOR this account → link the person to it
     detail TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     completed_at DATETIME

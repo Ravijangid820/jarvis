@@ -25,9 +25,11 @@ export default function Admin({ token, onExit }) {
   const [mintedDev, setMintedDev] = useState("")
   const [expanded, setExpanded] = useState(null)   // person id whose embeddings are shown
   const [embs, setEmbs] = useState([])
-  const [enrollName, setEnrollName] = useState("")
+  const [enrollUser, setEnrollUser] = useState("")   // user id the face is enrolled for
   const [enrollDev, setEnrollDev] = useState("")
   const [enrollReqs, setEnrollReqs] = useState([])
+  const [recogs, setRecogs] = useState([])           // recent face_seen events (recognitions feed)
+  const [verifying, setVerifying] = useState(null)   // {id, device, status, text, ok} for the verify flow
   const [preview, setPreview] = useState(null)     // {image, captured, total} during an active enroll
   const [err, setErr] = useState("")
 
@@ -45,11 +47,13 @@ export default function Admin({ token, onExit }) {
 
   const load = async () => {
     try {
-      const [s, u, k, f, sv, er] = await Promise.all([
+      const [s, u, k, f, sv, er, rc] = await Promise.all([
         api("/admin/stats"), api("/admin/users"), api("/admin/api_keys"),
-        api("/admin/faces"), api("/admin/services"), api("/admin/faces/enroll-requests")])
+        api("/admin/faces"), api("/admin/services"), api("/admin/faces/enroll-requests"),
+        api("/admin/events?type=face_seen&limit=20")])
       setStats(s); setUsers(u.users || []); setKeys(k.keys || [])
-      setFaces(f.faces || []); setServices(sv.services || []); setEnrollReqs(er.requests || []); setErr("")
+      setFaces(f.faces || []); setServices(sv.services || []); setEnrollReqs(er.requests || [])
+      setRecogs(rc.events || []); setErr("")
     } catch (e) { setErr(e.message) }
   }
   useEffect(() => { load() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
@@ -57,9 +61,11 @@ export default function Admin({ token, onExit }) {
   useEffect(() => {
     const t = setInterval(async () => {
       try {
-        const [sv, f, er] = await Promise.all([
-          api("/admin/services"), api("/admin/faces"), api("/admin/faces/enroll-requests")])
+        const [sv, f, er, rc] = await Promise.all([
+          api("/admin/services"), api("/admin/faces"), api("/admin/faces/enroll-requests"),
+          api("/admin/events?type=face_seen&limit=20")])
         setServices(sv.services || []); setFaces(f.faces || []); setEnrollReqs(er.requests || [])
+        setRecogs(rc.events || [])
       } catch { /* keep last */ }
     }, 15000)
     return () => clearInterval(t)
@@ -169,9 +175,41 @@ export default function Admin({ token, onExit }) {
   }
 
   const requestEnroll = async () => {
-    if (!enrollName.trim() || !enrollDev) return setErr("Name and a camera device are required")
-    try { await api("/admin/faces/enroll-request", "POST", { name: enrollName.trim(), device_id: enrollDev }); setEnrollName(""); load() }
+    if (!enrollUser || !enrollDev) return setErr("Pick a user and a camera")
+    try { await api("/admin/faces/enroll-request", "POST", { user_id: Number(enrollUser), device_id: enrollDev }); setEnrollUser(""); load() }
     catch (e) { setErr(e.message) }
+  }
+
+  // Verify recognition for one enrolled person: ask them to look at the camera, then watch the live
+  // face_seen events for a fresh sighting from that camera and report whether it matched.
+  const verifyFace = async (face) => {
+    const device = cameraDevices.length === 1 ? cameraDevices[0] : (enrollDev || cameraDevices[0])
+    if (!device) return setErr("No camera available to verify on")
+    let startId = 0
+    try { const d0 = await api("/admin/events?type=face_seen&limit=1"); startId = d0.events?.[0]?.id || 0 }
+    catch (e) { return setErr(e.message) }
+    setVerifying({ id: face.id, device, text: `Look at the camera on “${device}”…`, ok: null })
+    const deadline = Date.now() + 20000   // ~20s to step in front of the camera
+    const tick = async () => {
+      if (Date.now() > deadline) {
+        setVerifying(v => v && v.id === face.id ? { ...v, ok: false,
+          text: "No face detected — be in frame, move a little, and make sure the agent is running (not --dry-run)." } : v)
+        return
+      }
+      try {
+        const d = await api(`/admin/events?type=face_seen&since_id=${startId}&limit=10`)
+        const hit = (d.events || []).find(e => e.device_id === device)
+        if (hit) {
+          const nm = hit.data?.name, sc = hit.data?.score
+          if (nm === face.name) setVerifying({ id: face.id, device, ok: true, text: `✓ Recognized as ${nm} (score ${sc})` })
+          else if (nm === "unknown" || nm == null) setVerifying({ id: face.id, device, ok: false, text: `✗ Not recognized (best score ${sc}). Try better lighting / more angles.` })
+          else setVerifying({ id: face.id, device, ok: false, text: `⚠ Recognized as “${nm}” (score ${sc}), not ${face.name}.` })
+          return
+        }
+      } catch { /* keep polling */ }
+      setTimeout(tick, 1500)
+    }
+    tick()
   }
 
   const cameras = services.filter(s => s.name.startsWith("Camera"))
@@ -324,17 +362,21 @@ export default function Admin({ token, onExit }) {
 
           <div className="adm-panel">
             <h2>Enroll a face (from a camera)</h2>
-            <p className="adm-hint">Pick a camera and a name — the request is sent to that device's agent,
-              which captures + registers the face on-device (the person there should look at the camera).
-              Run it again for the same name to add more angles. <strong>CLI alternative:</strong>
+            <p className="adm-hint">Pick the user and a camera — the request goes to that device's agent,
+              which captures + registers the face on-device (the person there should look at the camera) and
+              links it to the chosen account. Run it again for the same user to add more angles.
+              <strong> CLI alternative:</strong>
               <code> .venv\Scripts\python -m jarvis_camera.facecli add --name "Name"</code>.</p>
             <div className="adm-form">
-              <input className="hud-input" placeholder="PERSON'S NAME" value={enrollName} onChange={e => setEnrollName(e.target.value)} />
+              <select className="hud-input" value={enrollUser} onChange={e => setEnrollUser(e.target.value)} style={{ maxWidth: 220 }}>
+                <option value="">— select user —</option>
+                {users.map(u => <option key={u.id} value={u.id}>{u.username}</option>)}
+              </select>
               <select className="hud-input" value={enrollDev} onChange={e => setEnrollDev(e.target.value)} style={{ maxWidth: 220 }}>
                 <option value="">— select camera —</option>
                 {cameraDevices.map(d => <option key={d} value={d}>{d}</option>)}
               </select>
-              <button className="hud-btn" onClick={requestEnroll} disabled={cameraDevices.length === 0}>Request Enrollment</button>
+              <button className="hud-btn" onClick={requestEnroll} disabled={cameraDevices.length === 0 || users.length === 0}>Request Enrollment</button>
             </div>
             {cameraDevices.length === 0 && <p className="adm-hint">No camera agents seen yet — start one (run the agent) so it can receive the request.</p>}
             {activeReqId && (
@@ -392,10 +434,18 @@ export default function Admin({ token, onExit }) {
                       </td>
                       <td>{f.last_seen || <span style={{ opacity: 0.4 }}>never</span>}</td>
                       <td style={{ display: "flex", gap: 6 }}>
+                        <button className="hud-btn" onClick={() => verifyFace(f)}
+                                disabled={cameraDevices.length === 0 || (verifying && verifying.ok === null)}>Verify</button>
                         <button className="hud-btn" onClick={() => renameFace(f.id, f.name)}>Rename</button>
                         <button className="hud-btn warn" onClick={() => delFace(f.id)}>Delete</button>
                       </td>
                     </tr>
+                    {verifying && verifying.id === f.id && (
+                      <tr><td colSpan="5" className={verifying.ok === true ? "adm-em" : ""}
+                              style={{ color: verifying.ok === true ? "var(--holo-cyan)" : verifying.ok === false ? "var(--holo-amber, #f0a)" : undefined }}>
+                        {verifying.ok === null ? "● " : ""}{verifying.text}
+                      </td></tr>
+                    )}
                     {expanded === f.id && (
                       <tr><td colSpan="5" style={{ background: "rgba(103,199,235,0.03)" }}>
                         {embs.length === 0 ? <span className="adm-empty">No embeddings (re-enroll to add one)</span> : (
@@ -416,6 +466,27 @@ export default function Admin({ token, onExit }) {
                   </Fragment>
                 ))}
                 {faces.length === 0 && <tr><td colSpan="5" className="adm-empty">No one enrolled yet — use the enroll command above.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="adm-panel">
+            <h2>Recent recognitions</h2>
+            <p className="adm-hint">Live face sightings reported by the cameras (most recent first, auto-refreshing).
+              A name = matched an enrolled person; <code>unknown</code> = a face below the match threshold.</p>
+            <table className="adm-table">
+              <thead><tr><th>When</th><th>Who</th><th>Score</th><th>Camera</th></tr></thead>
+              <tbody>
+                {recogs.map(e => (
+                  <tr key={e.id}>
+                    <td>{e.created_at}</td>
+                    <td className={e.data?.name && e.data.name !== "unknown" ? "adm-em" : ""}
+                        style={{ opacity: e.data?.name === "unknown" ? 0.6 : 1 }}>{e.data?.name || "—"}</td>
+                    <td>{e.data?.score ?? "—"}</td>
+                    <td>{e.device_id}</td>
+                  </tr>
+                ))}
+                {recogs.length === 0 && <tr><td colSpan="4" className="adm-empty">No sightings yet — run a camera (not --dry-run) and step into frame.</td></tr>}
               </tbody>
             </table>
           </div>

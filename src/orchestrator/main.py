@@ -276,7 +276,10 @@ class FaceUpdateRequest(BaseModel):
 
 
 class EnrollRequestCreate(BaseModel):
-    name: str = Field(..., min_length=1, max_length=64)
+    # Enroll FOR a user account (preferred — links the face → account); name is derived from the
+    # user, or may be given directly (e.g. the CLI / a non-account person).
+    user_id: Optional[int] = None
+    name: Optional[str] = Field(default=None, min_length=1, max_length=64)
     device_id: str = Field(..., min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._:-]+$")
 
 
@@ -588,7 +591,7 @@ def post_enroll_result(req: EnrollResult, request: Request):
         raise HTTPException(status_code=403, detail="device-scoped key (or admin) required")
     conn = get_db()
     try:
-        r = conn.execute("SELECT device_id, name, status FROM enroll_requests WHERE id = ?",
+        r = conn.execute("SELECT device_id, name, status, user_id FROM enroll_requests WHERE id = ?",
                          (req.request_id,)).fetchone()
         if r is None:
             raise HTTPException(status_code=404, detail="No such request")
@@ -601,9 +604,19 @@ def post_enroll_result(req: EnrollResult, request: Request):
                          "WHERE id=?", ((req.error or "no face captured")[:200], req.request_id))
             conn.commit()
             return {"status": "failed"}
-        prow = conn.execute("SELECT id FROM persons WHERE name = ?", (r["name"],)).fetchone()
-        person_id = prow["id"] if prow else conn.execute(
-            "INSERT INTO persons (name) VALUES (?)", (r["name"],)).lastrowid
+        # Resolve the person: prefer the linked account (so the face maps to a user), else by name.
+        prow = None
+        if r["user_id"] is not None:
+            prow = conn.execute("SELECT id FROM persons WHERE user_id = ?", (r["user_id"],)).fetchone()
+        if prow is None:
+            prow = conn.execute("SELECT id FROM persons WHERE name = ?", (r["name"],)).fetchone()
+        if prow is None:
+            person_id = conn.execute("INSERT INTO persons (name, user_id) VALUES (?, ?)",
+                                     (r["name"], r["user_id"])).lastrowid
+        else:
+            person_id = prow["id"]
+            if r["user_id"] is not None:           # make sure an existing person is linked to the account
+                conn.execute("UPDATE persons SET user_id = ? WHERE id = ?", (r["user_id"], person_id))
         conn.execute("INSERT INTO face_embeddings (person_id, embedding, source) VALUES (?, ?, ?)",
                      (person_id, json.dumps(req.embedding), r["device_id"]))
         conn.execute("UPDATE enroll_requests SET status='done', completed_at=datetime('now') WHERE id=?",
@@ -1100,16 +1113,21 @@ def admin_stats(request: Request):
 
 
 @app.get("/admin/events")
-def admin_events(request: Request, limit: int = 50):
-    """Recent edge/vision events (most recent first), for monitoring the camera agent."""
+def admin_events(request: Request, limit: int = 50, type: Optional[str] = None, since_id: int = 0):
+    """Recent edge/vision events (most recent first). `type` filters (e.g. face_seen for the
+    recognitions panel / verify); `since_id` returns only events newer than an id (efficient polling)."""
     _require_admin(request)
     limit = max(1, min(limit, 500))
     conn = get_db()
     try:
-        rows = conn.execute(
-            "SELECT id, device_id, type, data, created_at FROM vision_events ORDER BY id DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
+        q = "SELECT id, device_id, type, data, created_at FROM vision_events WHERE id > ?"
+        params: List[Any] = [since_id]
+        if type:
+            q += " AND type = ?"
+            params.append(type)
+        q += " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+        rows = conn.execute(q, params).fetchall()
         events = []
         for r in rows:
             e = dict(r)
@@ -1221,9 +1239,17 @@ def admin_create_enroll_request(req: EnrollRequestCreate, request: Request):
     _require_admin(request)
     conn = get_db()
     try:
+        name = req.name.strip() if req.name else None
+        if req.user_id is not None:
+            urow = conn.execute("SELECT username FROM users WHERE id = ?", (req.user_id,)).fetchone()
+            if not urow:
+                raise HTTPException(status_code=400, detail="No such user")
+            name = name or urow["username"]        # default the person's name to the account's
+        if not name:
+            raise HTTPException(status_code=400, detail="Pick a user (or pass a name)")
         cur = conn.execute(
-            "INSERT INTO enroll_requests (device_id, name, requested_by) VALUES (?, ?, ?)",
-            (req.device_id, req.name.strip(), request.state.user_id))
+            "INSERT INTO enroll_requests (device_id, name, user_id, requested_by) VALUES (?, ?, ?, ?)",
+            (req.device_id, name, req.user_id, request.state.user_id))
         conn.execute("DELETE FROM enroll_requests WHERE created_at < datetime('now', '-7 days')")
         conn.commit()
         return {"status": "ok", "id": cur.lastrowid}

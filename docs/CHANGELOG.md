@@ -4,6 +4,24 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-21 — Recognition: auto-pickup, recent-recognitions feed, per-person verify, enroll-by-user
+
+- **Newly enrolled faces are picked up automatically** — the agent re-pulls the enrolled set every
+  60 s (was startup-only, so a new enrollment needed an agent restart). A failed refresh keeps the
+  faces already loaded rather than wiping them.
+- **"Recent recognitions" panel** (Admin → Faces) — a live, auto-refreshing feed of `face_seen`
+  sightings (who · score · camera · time). Backed by `GET /admin/events?type=face_seen` (new `type`
+  + `since_id` filters).
+- **Per-person "Verify" button** — asks the person to look at the camera, watches the live sightings,
+  and reports ✓ matched / ✗ unknown / ⚠ recognized-as-someone-else with the score. Pure client-side
+  over the events feed — no extra device round-trip.
+- **Enroll by user, not free text** — the enroll form now picks a **user account** from a dropdown
+  instead of typing a name; the captured face is registered for that user and the person is
+  auto-linked to the account (re-enrolling the same user adds angles to the same person). The
+  `name`-based path still works for the CLI.
+
+---
+
 ## 2026-06-21 — Smooth live video during face enrollment
 
 The enroll preview is now smooth ~10 fps video instead of ~1 fps stills, while keeping the agent

@@ -39,7 +39,9 @@ def _load_key(cfg):
 
 
 def _fetch_enrolled(server, key, ctx=None):
-    """Pull the centrally-managed enrolled faces ({name: embedding}) for local recognition."""
+    """Pull the centrally-managed enrolled faces ({name: [emb,...]}) for local recognition.
+    Returns the dict on success ({} if genuinely none), or None on error — so a transient failure
+    during a periodic refresh doesn't wipe the faces we already know."""
     req = urllib.request.Request(server.rstrip("/") + "/faces/enrolled",
                                  headers={"Authorization": "Bearer " + key})
     try:
@@ -47,11 +49,11 @@ def _fetch_enrolled(server, key, ctx=None):
             data = r.read(_MAX_ENROLLED_BYTES + 1)        # bound the read (don't trust the server's size)
             if len(data) > _MAX_ENROLLED_BYTES:
                 log.warning("enrolled response too large (>%d bytes) — ignoring", _MAX_ENROLLED_BYTES)
-                return {}
+                return None
             return json.loads(data.decode()).get("enrolled", {})
     except Exception as e:
         log.warning("could not fetch enrolled faces: %s", e)
-        return {}
+        return None
 
 
 def _poll_enroll(server, key, ctx=None):
@@ -205,14 +207,16 @@ def run(config_path, dry_run=False):
     fdet = next((d for d in heavy if d.name == "faces"), None)
     if fdet is not None and key:
         enrolled = _fetch_enrolled(url, key, ctx)
-        fdet.set_known(enrolled)
-        log.info("loaded %d enrolled face(s) from server", len(enrolled))
+        fdet.set_known(enrolled or {})
+        log.info("loaded %d enrolled face(s) from server", len(enrolled or {}))
     last_run = {d.name: 0.0 for d in heavy}
     rr = 0
     last_hb = 0.0
     HB_INTERVAL = 30.0    # liveness ping so the server shows this device active even in a quiet room
     last_enroll = 0.0
     ENROLL_INTERVAL = 4.0  # how often to check for an admin-queued "enroll this face" request
+    last_known = time.time()
+    KNOWN_REFRESH = 60.0   # re-pull enrolled faces so new enrollments are recognized without a restart
     can_enroll = bool(key) and fdet is not None and fdet.has_identity() and not dry_run
 
     state = {"go": True}
@@ -236,6 +240,11 @@ def run(config_path, dry_run=False):
             if can_enroll and t0 - last_enroll >= ENROLL_INTERVAL:   # admin-queued enroll-from-UI
                 last_enroll = t0
                 _maybe_enroll(url, key, cam, fdet, ctx=ctx)
+            if fdet is not None and key and t0 - last_known >= KNOWN_REFRESH:   # pick up new enrollments
+                last_known = t0
+                enr = _fetch_enrolled(url, key, ctx)
+                if enr is not None:                  # None = fetch failed → keep what we have
+                    fdet.set_known(enr)
             frame = cam.read()
             if frame is None:
                 time.sleep(0.05)
