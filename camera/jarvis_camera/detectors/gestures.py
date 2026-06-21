@@ -76,6 +76,27 @@ class GestureDetector(Detector):
             return [{"type": "gesture", "data": {"gesture": g}}]
         return []
 
+    def available(self):
+        return self._ok
+
+    def hand_state(self, frame):
+        """For gesture-volume control: (wrist_y, gesture) of the most prominent hand, or (None, None)
+        if no hand / unavailable. wrist_y is normalized 0..1 (0 = top of frame). 'fist' can be used
+        as a stop signal by the caller."""
+        if not self._ok:
+            return (None, None)
+        import cv2
+        res = self._hands.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        if not res.multi_hand_landmarks:
+            return (None, None)
+        lm = res.multi_hand_landmarks[0].landmark
+        handed = "Right"
+        try:
+            handed = res.multi_handedness[0].classification[0].label
+        except Exception:
+            pass
+        return (float(lm[0].y), self._classify(lm, handed))
+
     def close(self):
         if self._hands is not None:
             try:

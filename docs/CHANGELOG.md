@@ -4,6 +4,24 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-21 — Gesture volume control (Phase 2)
+
+Say (or type) **"Jarvis, volume"** to enter a hand-gesture mode, then **raise/lower your hand** to
+change the volume; **make a fist** (or stop moving) to end it.
+
+- **Server**: `is_gesture_volume()` recognizes the trigger; opens a time-boxed, voice-authorized mode
+  for the camera and signals it over the command channel. New `POST /devices/gesture` — the camera
+  reports normalized hand height; the **server** maps movement → relative volume steps for the target
+  (gain/deadzone/clamp, configurable), gated by the active mode (so the camera key needs no
+  device-control permission). Rate-limit-exempt (mode-gated, video-rate).
+- **Camera agent**: polls the command channel; on `gesture_mode` it tracks the wrist via MediaPipe
+  Hands (`GestureDetector.hand_state`) and reports height ~8/sec over one kept-alive connection until
+  a fist / server-end / timeout. Needs `mediapipe` on the device (degrades to a no-op + warning if
+  absent). Targets camera `laptop-cam` → volume device `laptop` by default.
+- Mapping constants (`_GESTURE_GAIN/DEADZONE/STEP_CLAMP/TTL`) likely need a little on-hardware tuning.
+
+---
+
 ## 2026-06-21 — Voice volume control (Phase 1: rule-based)
 
 Spoken volume commands now actually change the volume (previously "Jarvis, set volume to 50%" just

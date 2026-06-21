@@ -48,6 +48,13 @@ replying with a short confirmation. Requirements:
   `can_control_devices`) — the default `mint-key admin voice-listener` qualifies.
 - Commands target the device id **`laptop`** (the volume agent's default `device`).
 
+### Hands-free (gesture) volume
+
+Say **"Jarvis, volume"** to enter gesture mode, then **raise/lower your hand** to adjust the volume;
+**make a fist** (or stop) to end it. This needs the **camera agent running** with `mediapipe`
+installed (see [camera.md](camera.md)); by default it engages camera `laptop-cam`. The camera only
+tracks your hand during this short, voice-authorized window — authorization stays on the server.
+
 ## Notes
 
 - Spoken replies need an audio output device + a player (`paplay`/`aplay`/`ffplay`) on the box —

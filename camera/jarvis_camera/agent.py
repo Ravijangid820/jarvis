@@ -11,7 +11,7 @@ import logging
 import signal
 import time
 import urllib.request
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, quote
 from pathlib import Path
 
 from .capture import Camera
@@ -164,6 +164,77 @@ def _maybe_enroll(server, key, cam, fdet, frames=7, ctx=None):
         log.warning("enroll submit failed: %s", e)
 
 
+def _poll_commands(server, key, device, ctx=None):
+    """Pull pending device commands (wait=0 → immediate) — e.g. an admin/voice 'enter gesture mode'.
+    Returns a list of {action, params}."""
+    url = server.rstrip("/") + "/devices/commands?device=" + quote(str(device), safe="") + "&wait=0"
+    req = urllib.request.Request(url, headers={"Authorization": "Bearer " + key})
+    try:
+        with urllib.request.urlopen(req, timeout=8, context=ctx) as r:
+            return json.loads(r.read(_MAX_ENROLLED_BYTES).decode()).get("commands", [])
+    except Exception as e:
+        log.debug("command poll failed: %s", e)
+        return []
+
+
+def _run_gesture_volume(server, key, cam, gdet, ctx, ttl):
+    """Gesture-volume control: while the server's mode is live, track the hand's height and report it
+    (~8/sec over one kept-alive connection). The SERVER maps movement → volume; we just report. Ends
+    on a fist, when the server says the mode ended, or a local safety timeout."""
+    if gdet is None or not gdet.available():
+        log.warning("gesture volume requested but hand tracking is unavailable (mediapipe missing)")
+        return
+    import http.client
+    u = urlsplit(server)
+    host, port = u.hostname, u.port or (443 if u.scheme == "https" else 80)
+    state = {"conn": None}
+
+    def _post_y(y):
+        body = json.dumps({"y": round(float(y), 4)}).encode("utf-8")
+        headers = {"Content-Type": "application/json", "Authorization": "Bearer " + key}
+        for attempt in (1, 2):
+            try:
+                if state["conn"] is None:
+                    state["conn"] = (http.client.HTTPSConnection(host, port, timeout=4, context=ctx)
+                                     if u.scheme == "https" else http.client.HTTPConnection(host, port, timeout=4))
+                state["conn"].request("POST", "/devices/gesture", body=body, headers=headers)
+                return json.loads(state["conn"].getresponse().read().decode()).get("active", False)
+            except Exception:
+                if state["conn"] is not None:
+                    try: state["conn"].close()
+                    except Exception: pass
+                state["conn"] = None
+                if attempt == 2:
+                    raise
+
+    log.info("gesture volume: ON (~%ss) — raise/lower your hand; make a fist to stop", ttl)
+    deadline = time.time() + ttl + 5            # local safety past the server's TTL
+    last_post = 0.0
+    try:
+        while time.time() < deadline:
+            frame = cam.read()
+            if frame is None:
+                time.sleep(0.03); continue
+            y, gesture = gdet.hand_state(frame)
+            if gesture == "fist":
+                log.info("gesture volume: stop (fist)")
+                break
+            if y is not None and time.time() - last_post >= 0.12:    # ~8 reports/sec
+                last_post = time.time()
+                try:
+                    if not _post_y(y):
+                        log.info("gesture volume: mode ended")
+                        break
+                except Exception as e:
+                    log.debug("gesture post failed: %s", e)
+            time.sleep(0.02)
+    finally:
+        if state["conn"] is not None:
+            try: state["conn"].close()
+            except Exception: pass
+        log.info("gesture volume: OFF")
+
+
 def _build_heavy(det_cfg):
     out = []
     for name, cls in HEAVY.items():
@@ -218,6 +289,10 @@ def run(config_path, dry_run=False):
     last_known = time.time()
     KNOWN_REFRESH = 60.0   # re-pull enrolled faces so new enrollments are recognized without a restart
     can_enroll = bool(key) and fdet is not None and fdet.has_identity() and not dry_run
+    device_id = cfg.get("device_id", "pi")
+    gdet_volume = next((d for d in heavy if d.name == "gestures"), None)   # reuse if enabled
+    last_cmd = 0.0
+    CMD_INTERVAL = 2.0     # how often to check for pull-commands (e.g. "enter gesture volume mode")
 
     state = {"go": True}
     # Register stop signals defensively — not every signal is settable on every platform
@@ -245,6 +320,15 @@ def run(config_path, dry_run=False):
                 enr = _fetch_enrolled(url, key, ctx)
                 if enr is not None:                  # None = fetch failed → keep what we have
                     fdet.set_known(enr)
+            if key and not dry_run and t0 - last_cmd >= CMD_INTERVAL:   # voice-triggered modes
+                last_cmd = t0
+                for cmd in _poll_commands(url, key, device_id, ctx):
+                    if cmd.get("action") == "gesture_mode":
+                        if gdet_volume is None:                        # lazily start hand tracking
+                            gdet_volume = GestureDetector({"model_complexity": 0})
+                        ttl = int((cmd.get("params") or {}).get("ttl", 12))
+                        _run_gesture_volume(url, key, cam, gdet_volume, ctx, ttl)
+                        last_hb = time.time()                          # we were busy; reset cadence
             frame = cam.read()
             if frame is None:
                 time.sleep(0.05)
