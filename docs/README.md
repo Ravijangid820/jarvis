@@ -3,10 +3,11 @@
 Index of the project documentation. Start with the [main README](../README.md) for the elevator
 pitch and quick start; the files here go deep on each area.
 
-## Setup guides (by component)
+## Setup guides
 
-Each runnable piece has its own setup doc under [`setup/`](setup/) — pick the one you're
-deploying. They run on different machines and have independent environments.
+**Start here:** [setup/quickstart.md](setup/quickstart.md) — the whole path end to end (server → device
+→ browser) in one page. The per-component guides below go deeper on each piece (they run on different
+machines with independent environments).
 
 | Component | Runs on | Setup doc | Entry point |
 |---|---|---|---|

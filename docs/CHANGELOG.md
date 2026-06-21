@@ -13,6 +13,8 @@ All notable changes to this project are documented in this file.
   (setup+service wrapper). The CA cert is now **copied by hand** to `camera/config/ca.crt` (grab
   `tls/ca.crt`, or download `/ca.crt`) — fewer scripts, one obvious file. Device scripts are now just
   **setup · run · service · set-key**. Docs (server/camera/tls/DEPLOY) + setup next-steps updated.
+- **New [setup/quickstart.md](setup/quickstart.md)** — the whole server→device→browser path on one
+  page ("start here"), linked from the docs index + root README.
 
 - **New setup guides:** [setup/tls.md](setup/tls.md) (local-CA HTTPS — server, agents, browser,
   Android/iOS) and [setup/voice.md](setup/voice.md) (wake-word listener). Every runnable piece now has

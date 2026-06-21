@@ -39,6 +39,16 @@ text-to-speech — running entirely on a 2011-era laptop in a Proxmox LXC. No cl
 
 ### From a fresh clone (system or container)
 
+**Whole server in one command** (bootstrap + systemd services + local-CA HTTPS) — and the full
+server→device→browser walkthrough is in **[docs/setup/quickstart.md](docs/setup/quickstart.md)**:
+
+```bash
+sudo bash src/scripts/setup-server.sh        # JARVIS_USER=jarvis · SKIP_TLS=1 · ADMIN_USER=… ADMIN_PASS=…
+curl --cacert tls/ca.crt https://127.0.0.1:5000/health
+```
+
+Prefer the pieces? The bootstrap alone:
+
 ```bash
 # One-shot bootstrap: uv env, config, frontend build, DB, native engines, models.
 # Idempotent. Toggles: SKIP_NATIVE=1, SKIP_MODELS=1, ADMIN_USER=… ADMIN_PASS=…
