@@ -4,6 +4,23 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-21 — Voice volume control (Phase 1: rule-based)
+
+Spoken volume commands now actually change the volume (previously "Jarvis, set volume to 50%" just
+went to the LLM as chat). `/inbox` recognizes a closed volume vocabulary and enqueues the command to
+the device agent — instant, offline, deterministic — and only unrecognized input falls through to
+the LLM.
+
+- New `intents.parse_volume()` — matches set ("to 50%", "40", "max/half"), step ("up/down",
+  "louder/quieter", "up by 20"), and mute/unmute; ignores ambiguous/unrelated phrases. Unit-tested.
+- `/inbox` volume fast-path: authorized via `_can_control_devices`, enqueued via the shared
+  `_enqueue_volume()` (also used by `POST /devices/volume`), with a short spoken confirmation. Targets
+  the `laptop` device by default. No voice-listener changes needed.
+- Next: the LLM `set_volume` tool as a fallback for unusual phrasing, then Phase 2 — gesture control
+  ("Jarvis, volume" → raise/lower hand).
+
+---
+
 ## 2026-06-21 — Recognition: auto-pickup, recent-recognitions feed, per-person verify, enroll-by-user
 
 - **Newly enrolled faces are picked up automatically** — the agent re-pulls the enrolled set every

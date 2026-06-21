@@ -34,6 +34,7 @@ from pydantic import BaseModel, Field, field_validator
 import chat
 import memory
 from auth import hash_password, hash_token, verify_password
+from intents import parse_volume
 from budget import is_default_session
 from config import (ADMIN_MAX_INPUT, ALLOWED_ORIGINS, BASE_DIR, COMPLETION_RESERVE_DEFAULT,
                     CONFIG, INDEX_HTML, LLM_URL, PIPER_BIN, PIPER_MODEL, RATE_LIMIT_RPM,
@@ -62,6 +63,10 @@ app.add_middleware(
     allow_methods=["POST", "GET", "PUT", "DELETE"],
     allow_headers=["Authorization", "Content-Type"],
 )
+
+# Default device a spoken volume command targets (the Windows volume agent's device id). Matches
+# VolumeRequest's default; spoken commands don't name a device, so they go here.
+VOICE_DEVICE = "laptop"
 
 # --- Rate limiting (in-process) ---------------------------------------------
 _rate_store: Dict[str, List[float]] = defaultdict(list)
@@ -714,38 +719,57 @@ def _can_control_devices(request: Request) -> bool:
         conn.close()
 
 
+def _enqueue_volume(action: str, value: Optional[int], device: str) -> int:
+    """Validate + enqueue one volume command (the tiny vocabulary set|step|mute|unmute). Shared by
+    the REST endpoint and the voice fast-path. Raises HTTPException on a bad command. NOT an authz
+    check — callers must gate on _can_control_devices first."""
+    action = (action or "").lower()
+    params: Dict[str, Any] = {}
+    if action == "set":
+        if value is None or not (0 <= value <= 100):
+            raise HTTPException(status_code=400, detail="set requires value 0–100")
+        params = {"value": value}
+    elif action == "step":
+        if value is None:
+            raise HTTPException(status_code=400, detail="step requires value (-100…100)")
+        params = {"value": max(-100, min(value, 100))}
+    elif action not in ("mute", "unmute"):
+        raise HTTPException(status_code=400, detail="action must be set|step|mute|unmute")
+    conn = get_db()
+    try:
+        cur = conn.execute("INSERT INTO device_commands (device_id, action, params) VALUES (?, ?, ?)",
+                           (device, action, json.dumps(params)))
+        # Retention: drop delivered commands older than a day so the queue doesn't grow forever.
+        conn.execute("DELETE FROM device_commands WHERE status='delivered' AND delivered_at < datetime('now','-1 day')")
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def _spoken_volume_ack(action: str, value: Optional[int]) -> str:
+    """A short, speakable confirmation for the voice path."""
+    if action == "set":
+        return f"Volume set to {value} percent."
+    if action == "step":
+        return f"Turning it {'up' if (value or 0) >= 0 else 'down'} by {abs(value or 0)} percent."
+    if action == "mute":
+        return "Muted."
+    if action == "unmute":
+        return "Unmuted."
+    return "Done."
+
+
 @app.post("/devices/volume")
 def queue_volume(req: VolumeRequest, request: Request):
     """Enqueue a volume command for a device agent (e.g. the Windows volume agent).
 
     Authorization is enforced here against the caller's identity/permissions; the command is
     a tiny validated vocabulary (no shell, no free text). The device agent pulls + executes it.
-    Later, the LLM `set_volume` tool will call this same enqueue path.
     """
     if not _can_control_devices(request):
         raise HTTPException(status_code=403, detail="Not authorized to control devices")
-    action = req.action.lower()
-    params: Dict[str, Any] = {}
-    if action == "set":
-        if req.value is None or not (0 <= req.value <= 100):
-            raise HTTPException(status_code=400, detail="set requires value 0–100")
-        params = {"value": req.value}
-    elif action == "step":
-        if req.value is None:
-            raise HTTPException(status_code=400, detail="step requires value (-100…100)")
-        params = {"value": req.value}
-    elif action not in ("mute", "unmute"):
-        raise HTTPException(status_code=400, detail="action must be set|step|mute|unmute")
-    conn = get_db()
-    try:
-        cur = conn.execute("INSERT INTO device_commands (device_id, action, params) VALUES (?, ?, ?)",
-                           (req.device, action, json.dumps(params)))
-        # Retention: drop delivered commands older than a day so the queue doesn't grow forever.
-        conn.execute("DELETE FROM device_commands WHERE status='delivered' AND delivered_at < datetime('now','-1 day')")
-        conn.commit()
-        return {"status": "ok", "id": cur.lastrowid}
-    finally:
-        conn.close()
+    return {"status": "ok", "id": _enqueue_volume(req.action, req.value, req.device)}
 
 
 # Cap concurrent long-polls so a flood of GET /devices/commands can't pile up unbounded.
@@ -878,6 +902,21 @@ def _maybe_title(needs_title: bool, session_id: str, user_id: int, user_text: st
 @app.post("/inbox")
 def process_input(request: QueryRequest, raw_request: Request):
     user_id, session_id, user_text = _validate_chat(request, raw_request)
+
+    # Device fast-path: a recognized volume command is handled directly (instant, offline, no LLM).
+    # Anything we don't recognize falls through to the LLM below.
+    vol = parse_volume(user_text)
+    if vol is not None:
+        if not _can_control_devices(raw_request):
+            answer = "Sorry — you're not authorized to control devices."
+        else:
+            _enqueue_volume(vol["action"], vol.get("value"), VOICE_DEVICE)
+            answer = _spoken_volume_ack(vol["action"], vol.get("value"))
+        chat.store_message(session_id, "user", user_text)
+        chat.store_message(session_id, "jarvis", answer)
+        return {"response": answer, "speed": "", "new_title": None,
+                "audio": synthesize_tts(answer) if request.voice_feedback else None}
+
     existing = chat.get_recent_context(session_id)
     needs_title = (len(existing) == 0) and not is_default_session(session_id)
     completion_reserve = request.n_predict if (request.n_predict and request.n_predict > 0) else COMPLETION_RESERVE_DEFAULT

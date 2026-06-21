@@ -53,6 +53,10 @@ Both chat endpoints accept the **QueryRequest** body:
 ### `POST /inbox`  (non-streaming)
 → `{ "response": str, "speed": str, "new_title": str|null, "audio": base64|null }`
 
+A recognized **volume command** ("set volume to 50%", "volume up", "mute", …) is handled directly —
+authorized via `_can_control_devices`, enqueued to the device agent, and acknowledged with a short
+spoken reply — instead of going to the LLM. Anything not recognized falls through to the LLM as usual.
+
 ### `POST /chat/stream`  (Server-Sent Events)
 `Content-Type: text/event-stream`. Each line is `data: <json>`:
 ```

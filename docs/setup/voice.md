@@ -37,6 +37,17 @@ bash src/scripts/run_listener.sh
 | `VOICE_KEY_FILE` | `config/voice_listener.key` | the API key file |
 | `WHISPER_BIN` / `WHISPER_MODEL` | `whisper/build/bin/whisper-stream` · `ggml-base.en.bin` | transcription binary + model |
 
+## Voice volume control
+
+Spoken volume commands work out of the box once the **Windows volume agent** is running (see
+[volume-agent.md](volume-agent.md)) — say e.g. *"Jarvis, set volume to 50%"*, *"Jarvis, volume up"*,
+*"Jarvis, mute"*. The server recognizes these and enqueues the command to the agent (no LLM round-trip),
+replying with a short confirmation. Requirements:
+
+- The listener's key must belong to a user allowed to control devices (admin, or a user with
+  `can_control_devices`) — the default `mint-key admin voice-listener` qualifies.
+- Commands target the device id **`laptop`** (the volume agent's default `device`).
+
 ## Notes
 
 - Spoken replies need an audio output device + a player (`paplay`/`aplay`/`ffplay`) on the box —
