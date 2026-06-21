@@ -15,6 +15,10 @@ All notable changes to this project are documented in this file.
 - **SPECS.md** schema table now lists `vision_events`, `device_heartbeats`, `persons`,
   `face_embeddings`, `enroll_requests`, and `api_keys.device_id`. Index audit line refreshed; all
   intra-doc links verified.
+- **ARCHITECTURE.md** — HTTP→HTTPS, a camera-agent component row, and a security-model refresh
+  (TLS, device-keys-never-admin, outbound-only agents, last-admin guard). **DEPLOY.md** — the "Adding
+  TLS" section rewritten: TLS is now terminated in the app container via the local CA (was described as
+  a future `tailscale serve` task); network diagram shows HTTPS on the router→app hop.
 
 ## 2026-06-20 — TLS: per-deployment CA distribution (not committed) + mobile
 

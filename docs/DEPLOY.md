@@ -57,15 +57,15 @@ The actual topology here is three tiers, and Tailscale does **not** run in the o
 container:
 
 ```
-tailnet device ──WireGuard (encrypted)──► subnet-router LXC ──plain HTTP on 192.168.0.0/24──► app LXC :5000
+tailnet device ──WireGuard (encrypted)──► subnet-router LXC ──HTTPS (local CA) on 192.168.0.0/24──► app LXC :5000
    (phone/laptop)                          (runs tailscaled,                 (192.168.0.101,
-                                            advertises 192.168.0.0/24)        uvicorn :5000)
+                                            advertises 192.168.0.0/24)        uvicorn :5000, TLS)
 ```
 
 - The Proxmox host and a dedicated **subnet-router LXC** run Tailscale; the router advertises
   `192.168.0.0/24` so the other VMs/containers reach the tailnet **without** installing Tailscale.
-- **Remote access is already encrypted** by WireGuard from the device up to the subnet router.
-  The only plaintext segment is the short **router → app** hop on the Proxmox bridge.
+- **Remote access is encrypted** by WireGuard from the device up to the subnet router, and the
+  **router → app hop is now HTTPS** too (local CA, see below) — so there's no plaintext segment.
 
 The orchestrator binds `0.0.0.0:5000`, so without a firewall *any* host on `192.168.0.0/24`
 could hit it in plaintext. Restrict `:5000` to loopback (the local voice listener) + the subnet
@@ -98,27 +98,29 @@ systemctl enable nftables        # load at boot
 
 The LLM server (`llama-fast`) already binds `127.0.0.1` only and is never network-exposed.
 
-## Adding TLS (HTTPS)
+## TLS (HTTPS) — terminated in the app container via a local CA
 
-WireGuard already encrypts the device→router leg. To also encrypt the browser session end-to-end
-(so bearer tokens are never plaintext, even on the Proxmox bridge), terminate TLS **on the
-subnet-router LXC** — it has the `tailscale` CLI and your enabled `*.ts.net` certs — and proxy to
-the app container:
+TLS now runs **directly on the orchestrator** (uvicorn `--ssl-*`), so the entire path — including
+the router→app hop on the Proxmox bridge — is encrypted, and bearer tokens / events / enroll-preview
+frames are never plaintext. Because the app container has no tailnet identity (it's behind the subnet
+router), it can't get a `tailscale cert`, so we use a **per-deployment local CA**:
 
 ```bash
-# run ON the subnet-router LXC (where tailscaled lives)
-tailscale serve --bg --https=443 http://192.168.0.101:5000
-tailscale serve status     # shows https://<router>.<tailnet>.ts.net → 192.168.0.101:5000
+bash src/scripts/setup_tls.sh                  # generate the CA + server cert (prints CA fingerprint)
+sudo mkdir -p /etc/systemd/system/jarvis-orchestrator.service.d
+sudo cp systemd/jarvis-orchestrator.service.d/tls.conf /etc/systemd/system/jarvis-orchestrator.service.d/
+sudo systemctl daemon-reload && sudo systemctl restart jarvis-orchestrator
+curl --cacert tls/ca.crt https://127.0.0.1:5000/health      # verify
 ```
 
-Browse `https://<router>.<tailnet>.ts.net`. The router→app hop stays on the trusted local bridge
-(and the `:5000` firewall above limits it to the router). Removing it: `tailscale serve --https=443 off`.
+The server publishes its public CA at `GET /ca.crt`; devices/browsers trust it (camera agents:
+`camera/get-ca.sh`). Full walkthrough incl. browser + Android/iOS: **[setup/tls.md](setup/tls.md)**.
+Reversible: remove the drop-in → `daemon-reload` → restart (back to HTTP). Keep the `:5000` firewall
+above as defense-in-depth.
 
-Fully encrypting that last hop too would mean terminating TLS *inside* the app container, but it
-has no tailnet identity (it's behind the subnet router), so it can't get a `tailscale cert` —
-you'd need your own cert (internal CA / real domain). Usually not worth it if the bridge is trusted.
-
-**Alternative — Caddy on the subnet router** (real domain): `jarvis.example.com { reverse_proxy 192.168.0.101:5000 }`.
+**Alternatives** (if you ever expose beyond the LAN): terminate TLS on the subnet router with
+`tailscale serve --bg --https=443 http://192.168.0.101:5000` (uses `*.ts.net` certs), or Caddy with a
+real domain — `jarvis.example.com { reverse_proxy 192.168.0.101:5000 }`.
 
 ### Note on the login rate limiter
 

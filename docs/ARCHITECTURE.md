@@ -14,7 +14,7 @@ responsive on this box." See [SPECS.md](SPECS.md) for the full hardware/model de
 ```
             ┌──────────── voice ─────────────┐        ┌──────── web / phone ────────┐
    speech → whisper.cpp (base.en STT)                 React 19 SPA  +  admin panel
-            run_listener.sh ──┐                                 │  (HTTP, Bearer auth)
+            run_listener.sh ──┐                                 │  (HTTPS, Bearer auth)
                               ▼                                  ▼
                   ┌──────────────────────────────────────────────────────┐
                   │            FastAPI Orchestrator  (port 5000)          │
@@ -39,9 +39,12 @@ responsive on this box." See [SPECS.md](SPECS.md) for the full hardware/model de
 | **Vector store** | ChromaDB (cosine) | `memory/chroma_db` | Semantic long-term recall (RAG) |
 | **Embeddings** | `google/embeddinggemma-300m` (sentence-transformers) | in-process | Document/query vectors for RAG + fact dedup |
 | **Frontend** | React 19 + Vite | `frontend/` → `dist/` | Chat UI (served at `/`); admin panel at `/admin` |
+| **Camera agent** | OpenCV YuNet+SFace, opencv-python | the device (`camera/`) | On-device motion/face/pose/gesture → high-level **events** (no imagery); identity feeds per-user authz |
 
 Two long-lived processes run under systemd: `llama-fast.service` (the model server) and
-`jarvis-orchestrator.service` (the FastAPI app). See [DEPLOY.md](DEPLOY.md).
+`jarvis-orchestrator.service` (the FastAPI app, served over **HTTPS** — local CA, see
+[setup/tls.md](setup/tls.md)). The **camera agent** runs on each device, **outbound-only** (it POSTs
+events + pulls its enrolled set; opens no port). See [DEPLOY.md](DEPLOY.md).
 
 ---
 
@@ -91,7 +94,13 @@ Why this shape:
 
 - All inference is **local**; the LLM server binds `127.0.0.1` only (reachable solely via the orchestrator).
 - The orchestrator binds `0.0.0.0` (so loopback + the Tailscale interface both work); a host firewall
-  restricts the LAN. See [DEPLOY.md](DEPLOY.md).
-- Auth = web-login **session tokens** or per-user **API keys**; no static admin secret.
-- Per-user rate limiting, parameterized SQL everywhere, input validation, security headers.
+  restricts the LAN. Served over **HTTPS** (per-deployment local CA — encrypts tokens/keys/events; see
+  [setup/tls.md](setup/tls.md)). Runs **non-root** under a hardened systemd unit.
+- Auth = web-login **session tokens** or per-user **API keys**; no static admin secret. **Device-bound
+  keys never wield admin** (even if minted under an admin account) and can only post events as their
+  own device — bounding a stolen camera key. The **last admin** can't be deleted/demoted.
+- Device agents (camera, volume) are **outbound-only** — no inbound port; they pull commands / their
+  enrolled set and POST events. No imagery leaves the device (except a transient, RAM-only, admin-only
+  enroll preview).
+- Per-user rate limiting, parameterized SQL everywhere, input validation, security headers (CSP).
 - A full self-audit and the fixes are recorded in [AUDIT.md](AUDIT.md).
