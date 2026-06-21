@@ -4,6 +4,22 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-21 — Smooth live video during face enrollment
+
+The enroll preview is now smooth ~10 fps video instead of ~1 fps stills, while keeping the agent
+**outbound-only** and the imagery **enrollment-scoped** (frames flow only while an admin-initiated
+capture is running — no general monitoring feed, no listening port on the device).
+
+- **Agent** — preview now ~10 fps over **one kept-alive connection** (no TLS handshake per frame);
+  capture loop reads at ~12 fps for a smooth preview while still spacing the *kept* embeddings ≥0.25s
+  apart for angle variety.
+- **Server** — new `GET /faces/enroll-preview-stream?request_id=N` (admin) relays each new frame as a
+  line of NDJSON over a single connection; bounded by client disconnect / stale frames / a 90s cap.
+- **Frontend** — the enroll preview consumes that stream (one `fetch`, Bearer-authed — no token in the
+  URL) instead of polling per frame; the cheap 4s status poll still detects completion.
+
+---
+
 ## 2026-06-21 — Fix intermittent "Request failed" popups in the admin UI
 
 The admin Faces tab polled an in-progress enrollment's live preview every **350 ms**. If a request

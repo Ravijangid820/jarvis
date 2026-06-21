@@ -174,7 +174,8 @@ submits on-device (the device key can only *fulfill* a request made for it — i
 | `GET` | `/faces/enroll-request` | — | **device key** · the pending request for THIS device (`{request:{id,name}}` or null). |
 | `POST` | `/faces/enroll-result` | `{ request_id, embedding?, error? }` | **device key** (own request) · submit the captured embedding (creates the person/embedding) or report failure. |
 | `POST` | `/faces/enroll-preview` | `{ request_id, image(b64 jpeg), captured, total }` | **device key** (own request) · relay a live preview frame (RAM-only, ~30s TTL). |
-| `GET` | `/faces/enroll-preview?request_id=N` | — | **admin** · latest preview frame `{preview:{image,captured,total}}` for the live UI. |
+| `GET` | `/faces/enroll-preview?request_id=N` | — | **admin** · latest preview frame `{preview:{image,captured,total}}` (single-shot fallback). |
+| `GET` | `/faces/enroll-preview-stream?request_id=N` | — | **admin** · NDJSON stream pushing each new preview frame `{image,captured,total}` as it arrives (~10 fps smooth live view). One connection; ends on disconnect / stale frames / 90s cap. |
 
 ---
 

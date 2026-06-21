@@ -45,26 +45,27 @@ def capture_average(cam, fd, frames, log_progress=True, on_frame=None):
     """Capture `frames` good face embeddings from an OPEN camera and return their L2-normalized
     average, or None if too few faces were seen. Shared by the CLI and the agent's enroll handler.
     `on_frame(frame, row, captured, total)` is called for every read frame (for the live preview)."""
-    vecs, tries = [], 0
-    while len(vecs) < frames and tries < frames * 15:
+    vecs, tries, last_kept = [], 0, 0.0
+    KEEP_GAP = 0.25                          # min seconds between KEPT embeddings (angle variety)
+    while len(vecs) < frames and tries < frames * 60:
         tries += 1
         frame = cam.read()
         if frame is None:
-            time.sleep(0.05); continue
+            time.sleep(0.03); continue
         row = _largest(fd.detect(frame))
-        if on_frame is not None:
+        if on_frame is not None:             # every frame → smooth preview (decoupled from KEEP_GAP)
             try:
                 on_frame(frame, row, len(vecs), frames)
             except Exception:
                 pass
-        if row is None:
-            continue
-        v = fd.embed(frame, row)            # SFace aligns via YuNet's landmarks, then embeds
-        if v:
-            vecs.append(v)
-            if log_progress:
-                log.info("  captured %d/%d", len(vecs), frames)
-        time.sleep(0.25)
+        now = time.time()
+        if row is not None and now - last_kept >= KEEP_GAP:
+            v = fd.embed(frame, row)         # SFace aligns via YuNet's landmarks, then embeds
+            if v:
+                vecs.append(v); last_kept = now
+                if log_progress:
+                    log.info("  captured %d/%d", len(vecs), frames)
+        time.sleep(0.06)                     # ~12 fps read/preview cap
     if len(vecs) < max(1, frames // 2):
         return None
     dim = len(vecs[0])

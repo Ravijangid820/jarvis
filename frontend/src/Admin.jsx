@@ -72,7 +72,28 @@ export default function Admin({ token, onExit }) {
     if (!activeReqId) { setPreview(null); return }
     let alive = true, waited = 0
     const STOP_AFTER = 120000   // a capture takes seconds; stop polling a stalled request (server expires it too)
-    const pv = async () => { try { const d = await api(`/faces/enroll-preview?request_id=${activeReqId}`); if (alive) setPreview(d.preview || null) } catch { /* ignore */ } }
+    // Smooth live preview: one streaming connection that pushes each frame the agent sends (~10 fps),
+    // instead of polling per frame. The status poll below still detects completion.
+    const ctrl = new AbortController()
+    const stream = async () => {
+      try {
+        const res = await fetch(`/faces/enroll-preview-stream?request_id=${activeReqId}`,
+          { headers: { Authorization: "Bearer " + token }, signal: ctrl.signal })
+        if (!res.ok || !res.body) return
+        const reader = res.body.getReader(), dec = new TextDecoder()
+        let buf = ""
+        while (alive) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buf += dec.decode(value, { stream: true })
+          let nl
+          while ((nl = buf.indexOf("\n")) >= 0) {
+            const line = buf.slice(0, nl); buf = buf.slice(nl + 1)
+            if (line.trim()) { try { if (alive) setPreview(JSON.parse(line)) } catch { /* ignore */ } }
+          }
+        }
+      } catch { /* aborted / network — status poll keeps the UI honest */ }
+    }
     const st = async () => {
       try {
         const d = await api("/admin/faces/enroll-requests")
@@ -84,14 +105,13 @@ export default function Admin({ token, onExit }) {
         }
       } catch { /* ignore */ }
     }
-    pv(); st()
-    const t1 = setInterval(pv, 1000)
+    stream(); st()
     const t2 = setInterval(() => {
       waited += 4000
       st()
-      if (waited >= STOP_AFTER) { clearInterval(t1); clearInterval(t2) }   // give up; server marks it failed
+      if (waited >= STOP_AFTER) { clearInterval(t2); ctrl.abort() }   // give up; server marks it failed
     }, 4000)
-    return () => { alive = false; clearInterval(t1); clearInterval(t2) }
+    return () => { alive = false; clearInterval(t2); ctrl.abort() }
   }, [activeReqId])  // eslint-disable-line react-hooks/exhaustive-deps
 
   const createUser = async () => {

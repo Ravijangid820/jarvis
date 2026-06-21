@@ -11,6 +11,7 @@ import logging
 import signal
 import time
 import urllib.request
+from urllib.parse import urlsplit
 from pathlib import Path
 
 from .capture import Camera
@@ -71,13 +72,23 @@ def _submit_enroll(server, key, request_id, embedding=None, error=None, ctx=None
 
 def _preview_uploader(server, key, request_id, ctx=None):
     """Return an on_frame(frame, row, captured, total) callback that relays annotated JPEG frames to
-    the server (throttled) so the admin UI can show what the camera sees during enrollment."""
+    the server so the admin UI shows a smooth (~10 fps) live view of what the camera sees during
+    enrollment. Frames go over ONE kept-alive connection — at 10 fps a fresh TLS handshake per frame
+    would needlessly load the box. Call .close() when the capture is done to release it."""
     import base64
-    state = {"last": 0.0}
+    import http.client
+    u = urlsplit(server)
+    host, port = u.hostname, u.port or (443 if u.scheme == "https" else 80)
+    state = {"last": 0.0, "conn": None}
+
+    def _connect():
+        if u.scheme == "https":
+            return http.client.HTTPSConnection(host, port, timeout=3, context=ctx)
+        return http.client.HTTPConnection(host, port, timeout=3)
 
     def on_frame(frame, row, captured, total):
         now = time.time()
-        if now - state["last"] < 0.3:           # ~3 fps is plenty for a preview
+        if now - state["last"] < 0.1:           # ~10 fps — smooth without flooding the link
             return
         state["last"] = now
         try:
@@ -87,20 +98,37 @@ def _preview_uploader(server, key, request_id, ctx=None):
                 x, y, w, h = (int(v) for v in row[:4])
                 f = frame.copy()
                 cv2.rectangle(f, (x, y), (x + w, y + h), (0, 255, 0), 2)
-            ok, buf = cv2.imencode(".jpg", f, [cv2.IMWRITE_JPEG_QUALITY, 60])
+            ok, buf = cv2.imencode(".jpg", f, [cv2.IMWRITE_JPEG_QUALITY, 55])
             if not ok:
                 return
             img = base64.b64encode(buf.tobytes()).decode("ascii")
             body = json.dumps({"request_id": request_id, "image": img,
                                "captured": captured, "total": total}).encode("utf-8")
-            req = urllib.request.Request(server.rstrip("/") + "/faces/enroll-preview", data=body,
-                                         method="POST", headers={"Content-Type": "application/json",
-                                                                 "Authorization": "Bearer " + key})
-            with urllib.request.urlopen(req, timeout=3, context=ctx) as r:
-                r.read(256)
+            headers = {"Content-Type": "application/json", "Authorization": "Bearer " + key}
+            for attempt in (1, 2):              # reconnect once if the kept connection went stale
+                try:
+                    if state["conn"] is None:
+                        state["conn"] = _connect()
+                    state["conn"].request("POST", "/faces/enroll-preview", body=body, headers=headers)
+                    state["conn"].getresponse().read()
+                    break
+                except Exception:
+                    if state["conn"] is not None:
+                        try: state["conn"].close()
+                        except Exception: pass
+                    state["conn"] = None
+                    if attempt == 2:
+                        raise
         except Exception as e:
             log.debug("preview upload failed: %s", e)
 
+    def close():
+        if state["conn"] is not None:
+            try: state["conn"].close()
+            except Exception: pass
+            state["conn"] = None
+
+    on_frame.close = close
     return on_frame
 
 
@@ -115,12 +143,14 @@ def _maybe_enroll(server, key, cam, fdet, frames=7, ctx=None):
         return
     rid, name = reqd.get("id"), reqd.get("name")
     log.info("enroll request #%s: capturing '%s' — look at the camera", rid, name)
+    uploader = _preview_uploader(server, key, rid, ctx)
     try:
-        vec = capture_average(cam, fdet, frames, log_progress=False,
-                              on_frame=_preview_uploader(server, key, rid, ctx))
+        vec = capture_average(cam, fdet, frames, log_progress=False, on_frame=uploader)
     except Exception as e:
         vec = None
         log.warning("enroll capture failed: %s", e)
+    finally:
+        uploader.close()
     try:
         if vec:
             _submit_enroll(server, key, rid, embedding=vec, ctx=ctx)

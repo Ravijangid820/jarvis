@@ -657,6 +657,37 @@ def get_enroll_preview(request: Request, request_id: int):
     return {"preview": {"image": p["image"], "captured": p["captured"], "total": p["total"]}}
 
 
+@app.get("/faces/enroll-preview-stream")
+async def stream_enroll_preview(request: Request, request_id: int):
+    """Smooth live preview during enrollment over ONE connection (admin-only). Pushes each NEW frame
+    the agent posts as a line of NDJSON {image, captured, total} — so the UI shows ~10 fps video
+    without polling per frame. Bounded: stops on client disconnect, when frames go stale, or after
+    a hard cap (a capture finishes in seconds)."""
+    _require_admin(request)
+
+    async def gen():
+        last_ts, start = 0.0, time.time()
+        idle = 0
+        while True:
+            if await request.is_disconnected():
+                break
+            now = time.time()
+            p = _ENROLL_PREVIEWS.get(request_id)
+            if p and p["ts"] != last_ts and now - p["ts"] <= _PREVIEW_TTL_S:
+                last_ts, idle = p["ts"], 0
+                yield json.dumps({"image": p["image"], "captured": p["captured"],
+                                  "total": p["total"]}) + "\n"
+            else:
+                idle += 1
+                if idle > 150:            # ~12s with no new frame → capture is over/agent gone
+                    break
+            if now - start > 90:          # hard safety cap
+                break
+            await asyncio.sleep(0.08)
+
+    return StreamingResponse(gen(), media_type="application/x-ndjson")
+
+
 def _can_control_devices(request: Request) -> bool:
     """Authorization for device actions (lights/volume): admins always; others need the
     per-user can_control_devices flag. Enforced HERE, in code — never by the LLM."""
