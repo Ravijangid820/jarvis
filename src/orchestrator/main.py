@@ -181,7 +181,10 @@ async def security_middleware(request: Request, call_next):
 
     # Rate-limit ALL authenticated callers (admins included), keyed on user id.
     if not check_rate_limit(f"user:{request.state.user_id}"):
-        return Response(content=json.dumps({"error": "Rate limit exceeded"}), status_code=429)
+        return Response(
+            content=json.dumps({"error": "Rate limit exceeded",
+                                "detail": "Rate limit exceeded — slow down a moment and retry."}),
+            status_code=429, media_type="application/json", headers={"Retry-After": "5"})
 
     return _apply_security_headers(await call_next(request))
 
@@ -1203,6 +1206,14 @@ def admin_list_enroll_requests(request: Request):
     _require_admin(request)
     conn = get_db()
     try:
+        # Expire requests the agent never completed (offline/crashed mid-capture) so the UI stops
+        # polling a zombie's live preview forever (which would burn the caller's rate budget). A real
+        # capture finishes in seconds; 3 min is generous.
+        conn.execute(
+            "UPDATE enroll_requests SET status='failed', "
+            "detail='timed out — agent did not complete', completed_at=datetime('now') "
+            "WHERE status='pending' AND created_at < datetime('now','-3 minutes')")
+        conn.commit()
         rows = conn.execute(
             "SELECT id, device_id, name, status, detail, created_at, completed_at "
             "FROM enroll_requests ORDER BY id DESC LIMIT 20").fetchall()

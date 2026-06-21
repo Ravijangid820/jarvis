@@ -38,7 +38,7 @@ export default function Admin({ token, onExit }) {
     if (!r.ok) {
       if (r.status === 401 || r.status === 403) { onExit(); return {} }
       const d = await r.json().catch(() => ({}))
-      throw new Error(d.detail || "Request failed")
+      throw new Error(d.detail || d.error || `Request failed (${r.status})`)
     }
     return r.json()
   }
@@ -70,15 +70,27 @@ export default function Admin({ token, onExit }) {
   const activeReqId = enrollReqs.find(r => r.status === "pending")?.id
   useEffect(() => {
     if (!activeReqId) { setPreview(null); return }
-    let alive = true
+    let alive = true, waited = 0
+    const STOP_AFTER = 120000   // a capture takes seconds; stop polling a stalled request (server expires it too)
     const pv = async () => { try { const d = await api(`/faces/enroll-preview?request_id=${activeReqId}`); if (alive) setPreview(d.preview || null) } catch { /* ignore */ } }
     const st = async () => {
-      try { const [d, f] = await Promise.all([api("/admin/faces/enroll-requests"), api("/admin/faces")]); if (alive) { setEnrollReqs(d.requests || []); setFaces(f.faces || []) } }
-      catch { /* ignore */ }
+      try {
+        const d = await api("/admin/faces/enroll-requests")
+        if (!alive) return
+        setEnrollReqs(d.requests || [])
+        // refresh the people list once, when our request leaves 'pending' (don't re-fetch every tick)
+        if (!(d.requests || []).some(r => r.id === activeReqId && r.status === "pending")) {
+          const f = await api("/admin/faces"); if (alive) setFaces(f.faces || [])
+        }
+      } catch { /* ignore */ }
     }
-    pv()
-    const t1 = setInterval(pv, 350)
-    const t2 = setInterval(st, 1500)
+    pv(); st()
+    const t1 = setInterval(pv, 1000)
+    const t2 = setInterval(() => {
+      waited += 4000
+      st()
+      if (waited >= STOP_AFTER) { clearInterval(t1); clearInterval(t2) }   // give up; server marks it failed
+    }, 4000)
     return () => { alive = false; clearInterval(t1); clearInterval(t2) }
   }, [activeReqId])  // eslint-disable-line react-hooks/exhaustive-deps
 

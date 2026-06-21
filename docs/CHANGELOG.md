@@ -4,6 +4,22 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-21 — Fix intermittent "Request failed" popups in the admin UI
+
+The admin Faces tab polled an in-progress enrollment's live preview every **350 ms**. If a request
+got stuck `pending` (agent offline / crashed mid-capture) it polled **forever**, blowing the per-user
+**30 req/min** limit, so unrelated calls got **429** — surfaced as the generic *"Request failed."*
+
+- **Server** — the rate-limit **429 now carries a `detail`** (+ `Retry-After: 5`), and the
+  enroll-requests list **expires stale `pending` requests** (older than 3 min → `failed`) so the UI
+  never polls a zombie.
+- **Limit raised 30 → 120 req/min** — 30 was tuned for chat; a live dashboard + face preview
+  legitimately makes a few calls/second.
+- **Frontend** — preview poll slowed **350 ms → 1 s**, drops the redundant per-tick faces refetch,
+  and **stops after ~2 min**; error toasts now show the server's `detail`/`error`, not a bare fallback.
+
+---
+
 ## 2026-06-20 — Simplify setup: one server script; copy the CA by hand
 
 - **Server is now one command:** `sudo bash src/scripts/setup-server.sh` chains bootstrap → systemd
