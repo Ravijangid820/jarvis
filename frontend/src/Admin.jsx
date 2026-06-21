@@ -180,34 +180,45 @@ export default function Admin({ token, onExit }) {
     catch (e) { setErr(e.message) }
   }
 
-  // Verify recognition for one enrolled person: ask them to look at the camera, then watch the live
-  // face_seen events for a fresh sighting from that camera and report whether it matched.
+  // Verify recognition for one enrolled person. Recognition is motion-gated, so a new face_seen
+  // only fires when the person moves — we therefore accept the latest sighting that's either NEW
+  // since the click (skew-free) OR recent (within FRESH). We resolve INSTANTLY on a correct match,
+  // but tolerate transient "unknown"/wrong reads until a short deadline before reporting failure.
   const verifyFace = async (face) => {
     const device = cameraDevices.length === 1 ? cameraDevices[0] : (enrollDev || cameraDevices[0])
     if (!device) return setErr("No camera available to verify on")
     let startId = 0
     try { const d0 = await api("/admin/events?type=face_seen&limit=1"); startId = d0.events?.[0]?.id || 0 }
     catch (e) { return setErr(e.message) }
-    setVerifying({ id: face.id, device, text: `Look at the camera on “${device}”…`, ok: null })
-    const deadline = Date.now() + 20000   // ~20s to step in front of the camera
+    setVerifying({ id: face.id, device, ok: null, text: `Look at the camera on “${device}” (move a little)…` })
+    const ageMs = (s) => { const t = Date.parse((s || "").replace(" ", "T") + "Z"); return isNaN(t) ? 0 : Date.now() - t }
+    const FRESH = 12000, deadline = Date.now() + 18000
+    let lastSeen = null
     const tick = async () => {
-      if (Date.now() > deadline) {
-        setVerifying(v => v && v.id === face.id ? { ...v, ok: false,
-          text: "No face detected — be in frame, move a little, and make sure the agent is running (not --dry-run)." } : v)
-        return
-      }
       try {
-        const d = await api(`/admin/events?type=face_seen&since_id=${startId}&limit=10`)
-        const hit = (d.events || []).find(e => e.device_id === device)
-        if (hit) {
-          const nm = hit.data?.name, sc = hit.data?.score
-          if (nm === face.name) setVerifying({ id: face.id, device, ok: true, text: `✓ Recognized as ${nm} (score ${sc})` })
-          else if (nm === "unknown" || nm == null) setVerifying({ id: face.id, device, ok: false, text: `✗ Not recognized (best score ${sc}). Try better lighting / more angles.` })
-          else setVerifying({ id: face.id, device, ok: false, text: `⚠ Recognized as “${nm}” (score ${sc}), not ${face.name}.` })
-          return
+        const d = await api("/admin/events?type=face_seen&limit=10")
+        const evs = (d.events || []).filter(e => e.device_id === device)   // newest first
+        const newest = evs[0]
+        const live = newest && (newest.id > startId || ageMs(newest.created_at) <= FRESH) ? newest : null
+        if (live) {
+          lastSeen = live
+          if (live.data?.name === face.name) {                              // correct match → done now
+            setVerifying({ id: face.id, device, ok: true, text: `✓ Recognized as ${live.data.name} (score ${live.data.score})` })
+            return
+          }
         }
       } catch { /* keep polling */ }
-      setTimeout(tick, 1500)
+      if (Date.now() > deadline) {
+        const nm = lastSeen?.data?.name, sc = lastSeen?.data?.score
+        if (lastSeen && nm !== "unknown" && nm != null)
+          setVerifying({ id: face.id, device, ok: false, text: `⚠ Recognized as “${nm}” (score ${sc}), not ${face.name}.` })
+        else if (lastSeen)
+          setVerifying({ id: face.id, device, ok: false, text: `✗ Not recognized (best score ${sc}). Try better lighting / more angles.` })
+        else
+          setVerifying({ id: face.id, device, ok: false, text: `No face seen on “${device}” — be in frame, move a little, and make sure the agent is running (not --dry-run).` })
+        return
+      }
+      setTimeout(tick, 1000)
     }
     tick()
   }

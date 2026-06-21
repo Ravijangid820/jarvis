@@ -14,7 +14,10 @@ All notable changes to this project are documented in this file.
   + `since_id` filters).
 - **Per-person "Verify" button** — asks the person to look at the camera, watches the live sightings,
   and reports ✓ matched / ✗ unknown / ⚠ recognized-as-someone-else with the score. Pure client-side
-  over the events feed — no extra device round-trip.
+  over the events feed — no extra device round-trip. Recognition is motion-gated, so verify accepts
+  the latest sighting that's new-since-click *or* recent (within 12s) and resolves instantly on a
+  correct match (tolerating transient misreads until a short deadline) — so it doesn't time out when
+  you hold still after stepping into frame.
 - **Enroll by user, not free text** — the enroll form now picks a **user account** from a dropdown
   instead of typing a name; the captured face is registered for that user and the person is
   auto-linked to the account (re-enrolling the same user adds angles to the same person). The
