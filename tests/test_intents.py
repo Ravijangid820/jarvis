@@ -3,7 +3,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "orchestrator"))
 
-from intents import parse_volume  # noqa: E402
+from intents import is_gesture_volume, parse_volume  # noqa: E402
 
 
 def test_set_absolute():
@@ -44,6 +44,15 @@ def test_mute():
 def test_clamps():
     assert parse_volume("set volume to 250") == {"action": "set", "value": 100}
     assert parse_volume("volume up by 999") == {"action": "step", "value": 100}
+
+
+def test_gesture_volume_trigger():
+    for text in ["volume", "volume control", "control the volume", "gesture volume",
+                 "control the volume with gestures", "hand volume", "volume mode"]:
+        assert is_gesture_volume(text), text
+    # concrete commands are NOT gesture mode (parse_volume handles them first anyway)
+    for text in ["set volume to 50", "volume up", "mute", "what is the volume", "lower the blinds"]:
+        assert not is_gesture_volume(text), text
 
 
 def test_non_volume_falls_through():

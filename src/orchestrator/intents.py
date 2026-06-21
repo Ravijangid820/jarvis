@@ -21,6 +21,22 @@ _DOWN = re.compile(r"\b(down|quieter|softer|lower|decrease|reduce)\b", re.I)
 _MAX = re.compile(r"\b(max|maximum|full|loudest|all the way)\b", re.I)
 _MIN = re.compile(r"\b(min|minimum|lowest|zero)\b", re.I)
 
+_GESTURE = re.compile(r"\b(gesture|gestures|hand|hands)\b", re.I)
+_BARE_VOLUME = {"volume", "the volume", "volume control", "control volume",
+                "control the volume", "volume please", "volume mode", "control my volume"}
+
+
+def is_gesture_volume(text: str) -> bool:
+    """True if the user wants HAND-GESTURE volume control (as opposed to a concrete set/step/mute,
+    which parse_volume handles and should be checked first). e.g. "volume", "volume control",
+    "control the volume with gestures", "hand volume"."""
+    if not text:
+        return False
+    t = re.sub(r"\s+", " ", re.sub(r"[^a-z ]", "", text.lower())).strip()
+    if t in _BARE_VOLUME:
+        return True
+    return bool(_VOL.search(t) and _GESTURE.search(t))
+
 
 def parse_volume(text: str) -> Optional[Dict[str, Any]]:
     if not text:

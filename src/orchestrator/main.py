@@ -34,7 +34,7 @@ from pydantic import BaseModel, Field, field_validator
 import chat
 import memory
 from auth import hash_password, hash_token, verify_password
-from intents import parse_volume
+from intents import is_gesture_volume, parse_volume
 from budget import is_default_session
 from config import (ADMIN_MAX_INPUT, ALLOWED_ORIGINS, BASE_DIR, COMPLETION_RESERVE_DEFAULT,
                     CONFIG, INDEX_HTML, LLM_URL, PIPER_BIN, PIPER_MODEL, RATE_LIMIT_RPM,
@@ -67,6 +67,16 @@ app.add_middleware(
 # Default device a spoken volume command targets (the Windows volume agent's device id). Matches
 # VolumeRequest's default; spoken commands don't name a device, so they go here.
 VOICE_DEVICE = "laptop"
+VOICE_CAMERA = "laptop-cam"      # camera a spoken "volume" (gesture) request engages
+
+# Gesture-volume mode: a spoken "Jarvis, volume" opens a short, voice-authorized window during which
+# the camera reports hand height and the SERVER maps movement → volume steps (so the camera key needs
+# no device-control permission). State is in-memory; entries expire on their own.
+_GESTURE_MODES: Dict[str, Dict[str, Any]] = {}   # camera_device_id -> {expires, last_y, target}
+_GESTURE_TTL_S = 12.0            # mode lifetime, refreshed on each hand report
+_GESTURE_GAIN = 110              # normalized Δy (0..1) → volume %  (~half-frame swing ≈ 55%)
+_GESTURE_DEADZONE = 0.015        # ignore sub-threshold jitter
+_GESTURE_STEP_CLAMP = 25         # max % change per report (smoothness / anti-jump)
 
 # --- Rate limiting (in-process) ---------------------------------------------
 _rate_store: Dict[str, List[float]] = defaultdict(list)
@@ -184,8 +194,9 @@ async def security_middleware(request: Request, call_next):
     if not is_authenticated:
         return Response(content=json.dumps({"error": "Invalid or expired token"}), status_code=403)
 
-    # Rate-limit ALL authenticated callers (admins included), keyed on user id.
-    if not check_rate_limit(f"user:{request.state.user_id}"):
+    # Rate-limit ALL authenticated callers (admins included), keyed on user id. Exempt the gesture
+    # report — it posts at video rate but is gated by an active, separately-authorized mode.
+    if path != "/devices/gesture" and not check_rate_limit(f"user:{request.state.user_id}"):
         return Response(
             content=json.dumps({"error": "Rate limit exceeded",
                                 "detail": "Rate limit exceeded — slow down a moment and retry."}),
@@ -262,6 +273,10 @@ class VolumeRequest(BaseModel):
     action: str = Field(..., max_length=16)        # set | step | mute | unmute
     value: Optional[int] = Field(default=None, ge=-100, le=100)
     device: str = Field(default="laptop", max_length=64)
+
+
+class GestureReport(BaseModel):
+    y: float = Field(..., ge=0.0, le=1.0)          # normalized hand height (0=top, 1=bottom of frame)
 
 
 class TTSRequest(BaseModel):
@@ -760,16 +775,38 @@ def _spoken_volume_ack(action: str, value: Optional[int]) -> str:
     return "Done."
 
 
+def _open_gesture_mode(camera: str, target: str) -> None:
+    """Authorize a time-boxed gesture→volume window for `camera` and signal it via the command
+    channel (long-poll). The server-side mode entry gates POST /devices/gesture."""
+    now = time.time()
+    _GESTURE_MODES[camera] = {"expires": now + _GESTURE_TTL_S, "last_y": None, "target": target}
+    for k in [k for k, v in _GESTURE_MODES.items() if v["expires"] < now]:   # prune stale
+        _GESTURE_MODES.pop(k, None)
+    conn = get_db()
+    try:
+        conn.execute("INSERT INTO device_commands (device_id, action, params) VALUES (?, ?, ?)",
+                     (camera, "gesture_mode", json.dumps({"mode": "volume", "ttl": int(_GESTURE_TTL_S)})))
+        conn.execute("DELETE FROM device_commands WHERE status='delivered' AND delivered_at < datetime('now','-1 day')")
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _handle_volume_command(user_text: str, raw_request: Request) -> Optional[str]:
-    """If user_text is a recognized volume command, authorize + enqueue it and return a short spoken
+    """If user_text is a recognized volume command, authorize + act on it and return a short spoken
     ack; otherwise None (→ caller falls through to the LLM). Shared by /inbox and /chat/stream."""
     vol = parse_volume(user_text)
-    if vol is None:
-        return None
-    if not _can_control_devices(raw_request):
-        return "Sorry — you're not authorized to control devices."
-    _enqueue_volume(vol["action"], vol.get("value"), VOICE_DEVICE)
-    return _spoken_volume_ack(vol["action"], vol.get("value"))
+    if vol is not None:
+        if not _can_control_devices(raw_request):
+            return "Sorry — you're not authorized to control devices."
+        _enqueue_volume(vol["action"], vol.get("value"), VOICE_DEVICE)
+        return _spoken_volume_ack(vol["action"], vol.get("value"))
+    if is_gesture_volume(user_text):                 # "Jarvis, volume" → hand-gesture control
+        if not _can_control_devices(raw_request):
+            return "Sorry — you're not authorized to control devices."
+        _open_gesture_mode(VOICE_CAMERA, VOICE_DEVICE)
+        return "Gesture volume control on — raise or lower your hand."
+    return None
 
 
 @app.post("/devices/volume")
@@ -782,6 +819,32 @@ def queue_volume(req: VolumeRequest, request: Request):
     if not _can_control_devices(request):
         raise HTTPException(status_code=403, detail="Not authorized to control devices")
     return {"status": "ok", "id": _enqueue_volume(req.action, req.value, req.device)}
+
+
+@app.post("/devices/gesture")
+def report_gesture(req: GestureReport, request: Request):
+    """The camera reports normalized hand height while in gesture mode; the server maps movement to
+    volume steps for the mode's target. Gated by an active, voice-authorized mode for THIS camera, so
+    the camera key needs no device-control permission. Returns {active} so the camera knows when to stop."""
+    dev = getattr(request.state, "device_id", None)
+    if not dev and getattr(request.state, "is_admin", False):
+        dev = request.query_params.get("device")          # admin may drive it for testing
+    if not dev:
+        raise HTTPException(status_code=403, detail="device-scoped key (or admin + ?device=) required")
+    now = time.time()
+    mode = _GESTURE_MODES.get(dev)
+    if not mode or mode["expires"] < now:
+        _GESTURE_MODES.pop(dev, None)
+        return {"active": False}
+    if mode["last_y"] is not None:
+        dy = mode["last_y"] - req.y                        # hand up = smaller y = louder
+        if abs(dy) >= _GESTURE_DEADZONE:
+            step = max(-_GESTURE_STEP_CLAMP, min(int(round(dy * _GESTURE_GAIN)), _GESTURE_STEP_CLAMP))
+            if step != 0:
+                _enqueue_volume("step", step, mode["target"])
+    mode["last_y"] = req.y
+    mode["expires"] = now + _GESTURE_TTL_S                 # refresh while the hand is active
+    return {"active": True, "expires_in": int(mode["expires"] - now)}
 
 
 # Cap concurrent long-polls so a flood of GET /devices/commands can't pile up unbounded.
