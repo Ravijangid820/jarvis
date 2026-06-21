@@ -61,9 +61,9 @@ chown "$SVC_USER:$SVC_USER" "$TLS/server.key" "$TLS/server.crt" 2>/dev/null || t
 chmod 640 "$TLS/server.key"; chmod 644 "$TLS/server.crt" "$TLS/ca.crt"
 chmod 600 "$TLS/ca.key"                      # CA key: signing only, keep locked down
 
-# This CA is unique to THIS deployment — it is NOT committed. Devices fetch the public cert from this
-# server (GET /ca.crt, or camera/get-ca.*). Print its fingerprint so each device can verify what it
-# downloaded matches (defeats a tampered bootstrap fetch).
+# This CA is unique to THIS deployment — it is NOT committed. Copy the public cert to each device
+# (this file, or GET /ca.crt). Print its fingerprint so a device can verify the copy it received
+# matches (defeats a tampered transfer).
 FP="$(sha256sum "$TLS/ca.crt" | awk '{print $1}')"
 
 echo
@@ -72,6 +72,7 @@ echo "CA fingerprint (SHA-256 of ca.crt) — clients compare against this after 
 echo "  $FP"
 echo "Next:"
 echo "  1) Enable HTTPS:  install systemd/jarvis-orchestrator.service.d/tls.conf → daemon-reload + restart"
-echo "  2) The server now serves the public CA at  https://${IP}:5000/ca.crt"
-echo "     • camera agents:  bash camera/get-ca.sh  (or get-ca.ps1) — downloads + verifies into config/"
-echo "     • browser/phone:  open https://${IP}:5000/ca.crt and import it as a trusted CA"
+echo "  2) Trust this CA on each device — copy  $TLS/ca.crt  to it (or download https://${IP}:5000/ca.crt):"
+echo "     • camera agent: put it at  camera/config/ca.crt"
+echo "     • browser/phone: import it as a trusted root CA"
+echo "     (compare the file's SHA-256 to the fingerprint above before trusting.)"

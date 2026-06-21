@@ -54,17 +54,14 @@ publishes its public CA at **`GET https://<server>:5000/ca.crt`** (no auth — i
 
 ## 3. Devices: trust the CA
 
-Each device fetches **that server's** CA and verifies against it. The first fetch is over an
-untrusted connection (you're downloading the thing you'll trust) — so **compare the printed
-fingerprint to the server's** from step 1.
+Each device needs **that server's** `ca.crt`. Get it once — copy `tls/ca.crt` off the box, or open
+`https://<server>:5000/ca.crt` and save it. **Compare its SHA-256 to the fingerprint from step 1**
+before trusting it.
 
 ### Camera agent (laptop / Pi)
-```bash
-bash get-ca.sh            # Windows: powershell -ExecutionPolicy Bypass -File get-ca.ps1
-#   → downloads into config/ca.crt and prints its SHA-256 (verify it!)
-```
-The config defaults to `server.url: https://…` + `ca_cert: config/ca.crt`, so the agent then verifies
-the server. Verification is never disabled — without the CA it fails closed.
+Put the file at **`camera/config/ca.crt`** (copy/paste it there). The config defaults to
+`server.url: https://…` + `ca_cert: config/ca.crt`, so the agent then verifies the server.
+Verification is never disabled — without the CA it fails closed.
 
 ### Desktop browser
 Open `https://<server>:5000/ca.crt`, then import it as a **trusted root**:
@@ -85,7 +82,7 @@ Open `https://<server>:5000/ca.crt`, then import it as a **trusted root**:
 
 - The **server cert** is valid 825 days; re-run `setup_tls.sh` to re-issue it (the CA is **reused**, so
   devices that already trust the CA keep working — just restart the service).
-- If you **regenerate the CA** (delete `tls/` first), every device must re-run `get-ca` / re-import.
+- If you **regenerate the CA** (delete `tls/` first), every device must re-copy `ca.crt` / re-import.
 
 ## Notes / honest caveats
 

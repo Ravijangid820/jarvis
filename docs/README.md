@@ -10,8 +10,8 @@ deploying. They run on different machines and have independent environments.
 
 | Component | Runs on | Setup doc | Entry point |
 |---|---|---|---|
-| **Server** — orchestrator + web UI | the Proxmox LXC | [setup/server.md](setup/server.md) (+ [DEPLOY.md](DEPLOY.md) for re-deploys) | `bash src/scripts/setup.sh` |
-| **TLS / HTTPS** — encrypt the LAN (local CA) | the server + each device | [setup/tls.md](setup/tls.md) | `bash src/scripts/setup_tls.sh` |
+| **Server** — orchestrator + web UI (+ HTTPS + services) | the Proxmox LXC | [setup/server.md](setup/server.md) (+ [DEPLOY.md](DEPLOY.md) for re-deploys) | `sudo bash src/scripts/setup-server.sh` |
+| **TLS / HTTPS** — encrypt the LAN (local CA; included in setup-server) | the server + each device | [setup/tls.md](setup/tls.md) | `bash src/scripts/setup_tls.sh` |
 | **Camera vision agent** — motion/face/pose/gestures (laptop webcam or Pi) | the device | [setup/camera.md](setup/camera.md) | `camera/setup.ps1` (Win) · `bash camera/setup.sh` (Pi) |
 | **Voice listener** — wake word → `/inbox` (whisper) | the server box | [setup/voice.md](setup/voice.md) | `bash src/scripts/run_listener.sh` |
 | **Windows volume agent** — controls the laptop/BT volume | the laptop | [setup/volume-agent.md](setup/volume-agent.md) | `python volume_agent.py` |

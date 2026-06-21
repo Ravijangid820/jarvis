@@ -4,7 +4,15 @@ All notable changes to this project are documented in this file.
 
 ---
 
-## 2026-06-20 — Docs: a setup guide per component + API/schema refresh
+## 2026-06-20 — Simplify setup: one server script; copy the CA by hand
+
+- **Server is now one command:** `sudo bash src/scripts/setup-server.sh` chains bootstrap → systemd
+  services → local-CA HTTPS in the right order (privilege-aware). `setup.sh`/`setup_tls.sh`/
+  `install_services.sh` remain for piecemeal use.
+- **Fewer device scripts:** removed `camera/get-ca.*` (fetch-the-cert) and `camera/install.*`
+  (setup+service wrapper). The CA cert is now **copied by hand** to `camera/config/ca.crt` (grab
+  `tls/ca.crt`, or download `/ca.crt`) — fewer scripts, one obvious file. Device scripts are now just
+  **setup · run · service · set-key**. Docs (server/camera/tls/DEPLOY) + setup next-steps updated.
 
 - **New setup guides:** [setup/tls.md](setup/tls.md) (local-CA HTTPS — server, agents, browser,
   Android/iOS) and [setup/voice.md](setup/voice.md) (wake-word listener). Every runnable piece now has

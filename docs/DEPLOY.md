@@ -113,8 +113,9 @@ sudo systemctl daemon-reload && sudo systemctl restart jarvis-orchestrator
 curl --cacert tls/ca.crt https://127.0.0.1:5000/health      # verify
 ```
 
-The server publishes its public CA at `GET /ca.crt`; devices/browsers trust it (camera agents:
-`camera/get-ca.sh`). Full walkthrough incl. browser + Android/iOS: **[setup/tls.md](setup/tls.md)**.
+The server publishes its public CA at `GET /ca.crt`; copy `tls/ca.crt` to each device/browser to
+trust it (camera agents: put it at `camera/config/ca.crt`). Full walkthrough incl. browser +
+Android/iOS: **[setup/tls.md](setup/tls.md)**.
 Reversible: remove the drop-in → `daemon-reload` → restart (back to HTTP). Keep the `:5000` firewall
 above as defense-in-depth.
 

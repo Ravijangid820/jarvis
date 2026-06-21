@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# ONE-COMMAND server setup for a fresh box: bootstrap + systemd services + HTTPS, in the right order.
+# Run as root (it installs systemd units and may create the service user):
+#
+#   sudo bash src/scripts/setup-server.sh
+#
+# Options (env):
+#   JARVIS_USER=jarvis   service user (default jarvis; use `root` for the simple non-hardened mode)
+#   SKIP_TLS=1           don't generate/enable HTTPS (leave it on plain HTTP)
+#   ADMIN_USER, ADMIN_PASS, LLM_GGUF_URL, HF_TOKEN, SKIP_NATIVE, SKIP_MODELS  → passed to setup.sh
+set -euo pipefail
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$REPO"
+[ "$(id -u)" = 0 ] || { echo "Run as root (installs systemd units):  sudo bash src/scripts/setup-server.sh"; exit 1; }
+SVC_USER="${JARVIS_USER:-jarvis}"
+step() { printf '\n\033[1;36m▸ %s\033[0m\n' "$1"; }
+
+step "1/4  Bootstrap (env, config, frontend, DB, admin, native build, models)"
+bash src/scripts/setup.sh
+
+step "2/4  Install + start systemd services (service user: $SVC_USER)"
+# install_services creates the user, relocates the llama build, chowns the writable data dirs
+# (.venv/.cache/memory/logs/config) to the service user, and enables + starts both units (HTTP).
+JARVIS_USER="$SVC_USER" bash src/scripts/install_services.sh
+# read-only assets the (possibly non-root) service must read:
+chmod -R a+rX "$REPO/models" "$REPO/whisper" "$REPO/piper" 2>/dev/null || true
+
+if [ "${SKIP_TLS:-}" = 1 ]; then
+  step "3/4  TLS skipped (SKIP_TLS=1) — serving plain HTTP on :5000"
+  echo "Done. Health:  curl http://127.0.0.1:5000/health"
+  exit 0
+fi
+
+step "3/4  Generate the local CA + server cert (note the printed fingerprint)"
+TLS_SERVICE_USER="$SVC_USER" bash src/scripts/setup_tls.sh     # user now exists → server.key is readable
+
+step "4/4  Switch the orchestrator to HTTPS"
+install -d /etc/systemd/system/jarvis-orchestrator.service.d
+install -m644 systemd/jarvis-orchestrator.service.d/tls.conf /etc/systemd/system/jarvis-orchestrator.service.d/tls.conf
+systemctl daemon-reload && systemctl restart jarvis-orchestrator
+
+echo
+echo "Done. Verify:   curl --cacert tls/ca.crt https://127.0.0.1:5000/health"
+echo "Next:"
+echo "  • Mint a camera key:  uv run python src/scripts/manage.py mint-key <non-admin-user> laptop-cam laptop-cam"
+echo "  • Trust on devices:   copy  tls/ca.crt  to the device (or download https://<ip>:5000/ca.crt)"

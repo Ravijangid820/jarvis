@@ -154,16 +154,6 @@ Each task is its own script, with a Linux/macOS/Pi `.sh` and a Windows `.ps1`:
   **Scheduled Task at your logon** (runs as you, *not* elevated, no third-party wrapper, no admin
   needed). Neither opens any listening port — the agent stays outbound-only.
 
-### One command (setup + service)
-
-`install.sh` / `install.ps1` chain *setup* then *service* so it's one step:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File install.ps1     # Windows  (Linux/Pi: bash install.sh)
-```
-
-These are tiny readable wrappers (no opaque binary) — open them to see they only call the other two.
-
 ### Or a packaged Windows .exe (built reproducibly in CI)
 
 If you'd rather not run scripts at all, the GitHub Actions workflow **`build-camera-exe`** builds a
@@ -216,10 +206,10 @@ their home makes their own). On the **server**, once: `bash src/scripts/setup_tl
 
 Each device fetches *that* server's CA and verifies against it:
 
-- **Camera agent:** `bash get-ca.sh` (Windows: `get-ca.ps1`) downloads the CA into `config/ca.crt`
-  and prints its SHA-256 — **compare it to the server's `setup_tls.sh` output** before trusting (the
-  bootstrap fetch is over an untrusted connection). Config defaults to `server.url: https://…` +
-  `ca_cert: config/ca.crt`, so the agent then verifies (MITM-safe; fails closed without the CA).
+- **Camera agent:** copy the server's `tls/ca.crt` to **`config/ca.crt`** on the device (grab it off
+  the box, or download `https://<server>:5000/ca.crt`). The config defaults to `server.url: https://…`
+  + `ca_cert: config/ca.crt`, so the agent then verifies the server (MITM-safe; fails closed without
+  the CA). Tip: compare the file's SHA-256 to the server's `setup_tls.sh` fingerprint before trusting.
 - **Browser (desktop):** open `https://<server>:5000/ca.crt`, then import it into **Trusted Root
   Certification Authorities** (Windows) / Keychain (macOS) to get a clean padlock.
 - **Phone (Android):** open `https://<server>:5000/ca.crt` in the browser to download it, then
@@ -229,7 +219,7 @@ Each device fetches *that* server's CA and verifies against it:
   General → About → Certificate Trust Settings** → enable full trust for the Jarvis CA.
 
 (There's no agent on a phone — it only browses the web UI, so it just needs the browser to trust the
-CA.) If you regenerate the CA, every device re-runs `get-ca` / re-imports.
+CA.) If you regenerate the CA, every device re-copies `ca.crt` / re-imports.
 
 **Enroll from the web UI (no CLI / no admin key on the device):** in **admin → Faces → “Enroll a face
 (from a camera)”**, pick the camera + a name and click *Request Enrollment*. A **live preview** (the
@@ -273,9 +263,7 @@ camera/
   setup.sh / setup.ps1      install: auto-detect platform, deps + model download (Linux/Pi · Windows)
   run.sh   / run.ps1        run once in the foreground (testing; no service)
   service.sh / service.ps1  make persistent: systemd user service (Linux) · Scheduled Task (Windows)
-  install.sh / install.ps1  one command: setup + service (thin readable wrappers)
   set-key.sh / set-key.ps1  write config/agent.key (or admin.key) safely — no quoting pitfalls
-  get-ca.sh / get-ca.ps1    download + verify the server's TLS CA into config/ca.crt
   run_exe.py                PyInstaller entry → jarvis-camera.exe (built in CI)
   models/                   YuNet + SFace ONNX (downloaded + sha256-verified by setup; gitignored)
   jarvis_camera/

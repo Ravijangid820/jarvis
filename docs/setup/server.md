@@ -6,7 +6,20 @@ changes and network/TLS, see [DEPLOY.md](../DEPLOY.md).
 
 > Run these in the repo root on the box. Python tooling goes through **`uv`**.
 
-## One-shot bootstrap (fresh clone)
+## One command (fresh box → running over HTTPS)
+
+```bash
+git clone https://github.com/Ravijangid820/jarvis.git /srv/jarvis && cd /srv/jarvis
+sudo bash src/scripts/setup-server.sh
+#   bootstrap + systemd services + local-CA HTTPS, in order.
+#   Options: JARVIS_USER=jarvis (default) · SKIP_TLS=1 · ADMIN_USER=… ADMIN_PASS=… LLM_GGUF_URL=… HF_TOKEN=…
+curl --cacert tls/ca.crt https://127.0.0.1:5000/health        # verify
+```
+
+That's the whole server. The scripts below are what it runs — use them if you want to do a step
+piecemeal.
+
+## Or the bootstrap only (no services / TLS)
 
 ```bash
 bash src/scripts/setup.sh
