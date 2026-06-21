@@ -760,6 +760,18 @@ def _spoken_volume_ack(action: str, value: Optional[int]) -> str:
     return "Done."
 
 
+def _handle_volume_command(user_text: str, raw_request: Request) -> Optional[str]:
+    """If user_text is a recognized volume command, authorize + enqueue it and return a short spoken
+    ack; otherwise None (→ caller falls through to the LLM). Shared by /inbox and /chat/stream."""
+    vol = parse_volume(user_text)
+    if vol is None:
+        return None
+    if not _can_control_devices(raw_request):
+        return "Sorry — you're not authorized to control devices."
+    _enqueue_volume(vol["action"], vol.get("value"), VOICE_DEVICE)
+    return _spoken_volume_ack(vol["action"], vol.get("value"))
+
+
 @app.post("/devices/volume")
 def queue_volume(req: VolumeRequest, request: Request):
     """Enqueue a volume command for a device agent (e.g. the Windows volume agent).
@@ -904,18 +916,12 @@ def process_input(request: QueryRequest, raw_request: Request):
     user_id, session_id, user_text = _validate_chat(request, raw_request)
 
     # Device fast-path: a recognized volume command is handled directly (instant, offline, no LLM).
-    # Anything we don't recognize falls through to the LLM below.
-    vol = parse_volume(user_text)
-    if vol is not None:
-        if not _can_control_devices(raw_request):
-            answer = "Sorry — you're not authorized to control devices."
-        else:
-            _enqueue_volume(vol["action"], vol.get("value"), VOICE_DEVICE)
-            answer = _spoken_volume_ack(vol["action"], vol.get("value"))
+    ack = _handle_volume_command(user_text, raw_request)
+    if ack is not None:
         chat.store_message(session_id, "user", user_text)
-        chat.store_message(session_id, "jarvis", answer)
-        return {"response": answer, "speed": "", "new_title": None,
-                "audio": synthesize_tts(answer) if request.voice_feedback else None}
+        chat.store_message(session_id, "jarvis", ack)
+        return {"response": ack, "speed": "", "new_title": None,
+                "audio": synthesize_tts(ack) if request.voice_feedback else None}
 
     existing = chat.get_recent_context(session_id)
     needs_title = (len(existing) == 0) and not is_default_session(session_id)
@@ -949,6 +955,22 @@ def process_input(request: QueryRequest, raw_request: Request):
 @app.post("/chat/stream")
 def chat_stream(request: QueryRequest, raw_request: Request):
     user_id, session_id, user_text = _validate_chat(request, raw_request)
+
+    # Device fast-path: a recognized volume command short-circuits the LLM and streams back the ack.
+    ack = _handle_volume_command(user_text, raw_request)
+    if ack is not None:
+        def vol_gen():
+            chat.store_message(session_id, "user", user_text)
+            chat.store_message(session_id, "jarvis", ack)
+            yield f"data: {json.dumps({'content': ack})}\n\n"
+            done: Dict[str, Any] = {"done": True}
+            if request.voice_feedback:
+                audio = synthesize_tts(ack)
+                if audio:
+                    done["audio"] = audio
+            yield f"data: {json.dumps(done)}\n\n"
+        return StreamingResponse(vol_gen(), media_type="text/event-stream")
+
     existing = chat.get_recent_context(session_id)
     needs_title = (len(existing) == 0) and not is_default_session(session_id)
     completion_reserve = request.n_predict if (request.n_predict and request.n_predict > 0) else COMPLETION_RESERVE_DEFAULT

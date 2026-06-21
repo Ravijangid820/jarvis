@@ -56,6 +56,8 @@ Both chat endpoints accept the **QueryRequest** body:
 A recognized **volume command** ("set volume to 50%", "volume up", "mute", …) is handled directly —
 authorized via `_can_control_devices`, enqueued to the device agent, and acknowledged with a short
 spoken reply — instead of going to the LLM. Anything not recognized falls through to the LLM as usual.
+This fast-path applies to **both** `/inbox` and `/chat/stream` (so it works by voice or by typing in
+the web chat).
 
 ### `POST /chat/stream`  (Server-Sent Events)
 `Content-Type: text/event-stream`. Each line is `data: <json>`:

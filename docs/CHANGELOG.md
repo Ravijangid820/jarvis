@@ -13,9 +13,10 @@ the LLM.
 
 - New `intents.parse_volume()` — matches set ("to 50%", "40", "max/half"), step ("up/down",
   "louder/quieter", "up by 20"), and mute/unmute; ignores ambiguous/unrelated phrases. Unit-tested.
-- `/inbox` volume fast-path: authorized via `_can_control_devices`, enqueued via the shared
-  `_enqueue_volume()` (also used by `POST /devices/volume`), with a short spoken confirmation. Targets
-  the `laptop` device by default. No voice-listener changes needed.
+- Volume fast-path on **both `/inbox` and `/chat/stream`** (shared `_handle_volume_command()`): so it
+  works by voice *and* by typing in the web chat. Authorized via `_can_control_devices`, enqueued via
+  the shared `_enqueue_volume()` (also used by `POST /devices/volume`), with a short spoken
+  confirmation. Targets the `laptop` device by default. No voice-listener changes needed.
 - Next: the LLM `set_volume` tool as a fallback for unusual phrasing, then Phase 2 — gesture control
   ("Jarvis, volume" → raise/lower hand).
 
