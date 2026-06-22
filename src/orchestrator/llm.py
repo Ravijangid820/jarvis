@@ -1,13 +1,52 @@
 """LLM HTTP client (blocking + streaming) and Piper text-to-speech."""
 import base64
+import hashlib
 import json
+import os
 import subprocess
 import urllib.request
 from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 
-from config import LLM_URL, PIPER_BIN, PIPER_MODEL, REQUEST_TIMEOUT, TEMPERATURE, logger
+from config import BASE_DIR, LLM_URL, PIPER_BIN, PIPER_MODEL, REQUEST_TIMEOUT, TEMPERATURE, logger
+
+# --- TTS cache: synthesized audio is deterministic for (voice model, text), so cache it on disk and
+# replay on a hit instead of re-running Piper. Lossless (identical bytes); survives restarts. -------
+_TTS_CACHE_DIR = BASE_DIR / ".cache" / "tts"
+_TTS_CACHE_MAX = 500                      # keep the newest N phrases; prune the rest
+
+
+def _tts_cache_key(text: str) -> str:
+    h = hashlib.sha256()
+    h.update(str(PIPER_MODEL).encode("utf-8"))   # a voice change invalidates old audio
+    h.update(b"\x00")
+    h.update(text.encode("utf-8"))
+    return h.hexdigest()
+
+
+def _tts_cache_get(key: str) -> Optional[str]:
+    p = _TTS_CACHE_DIR / key
+    try:
+        b64 = p.read_text()
+        os.utime(p, None)                 # mark as recently used (mtime = LRU)
+        return b64
+    except OSError:
+        return None
+
+
+def _tts_cache_put(key: str, b64: str) -> None:
+    try:
+        _TTS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = _TTS_CACHE_DIR / f".{key}.{os.getpid()}.tmp"
+        tmp.write_text(b64)
+        os.replace(tmp, _TTS_CACHE_DIR / key)        # atomic publish
+        files = [f for f in _TTS_CACHE_DIR.iterdir() if not f.name.startswith(".")]
+        if len(files) > _TTS_CACHE_MAX:              # evict oldest beyond the cap
+            for f in sorted(files, key=lambda f: f.stat().st_mtime)[:len(files) - _TTS_CACHE_MAX]:
+                f.unlink(missing_ok=True)
+    except OSError as e:
+        logger.debug("TTS cache write skipped: %s", e)   # caching is best-effort, never fatal
 
 
 def _build_payload(messages, temperature, top_k, top_p, min_p, repeat_penalty,
@@ -86,16 +125,23 @@ def llm_content(resp: Dict[str, Any]) -> str:
 
 
 def synthesize_tts(text: str) -> Optional[str]:
-    """Render text to speech via Piper, returning base64 WAV (or None if unavailable/failed)."""
+    """Render text to speech via Piper, returning base64 WAV (or None if unavailable/failed).
+    Cached on disk per (voice model, text) — a repeated phrase replays without re-running Piper."""
     if not text or not (PIPER_BIN.exists() and PIPER_MODEL.exists()):
         return None
+    key = _tts_cache_key(text)
+    hit = _tts_cache_get(key)
+    if hit is not None:
+        return hit
     try:
         proc = subprocess.run(
             [str(PIPER_BIN), "--model", str(PIPER_MODEL), "--output_file", "-"],
             input=text.encode("utf-8"), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=30,
         )
         if proc.returncode == 0 and proc.stdout:
-            return base64.b64encode(proc.stdout).decode("utf-8")
+            b64 = base64.b64encode(proc.stdout).decode("utf-8")
+            _tts_cache_put(key, b64)
+            return b64
     except Exception as e:
         logger.warning("Piper TTS failed: %s", e)
     return None

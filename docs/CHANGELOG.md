@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-23 — v2 perf: TTS cache (lossless)
+
+Piper synthesis is ~2.4 s/sentence on this CPU. Synthesized audio is deterministic for a given
+(voice model, text), so `synthesize_tts` now caches the base64 WAV on disk (`.cache/tts/`, keyed by
+sha256 of model+text, newest-500 LRU eviction) and replays it on a hit — **~2.4 s → 0 ms** for
+repeated phrases (greetings, fixed acks like "Muted."), identical bytes, survives restarts. Best-effort
+(cache errors never break TTS). Also evaluated and **dropped**: llama `-t 3` (within noise on 2 physical
+cores, would starve voice/embeddings) — kept `-t 2`.
+
 ## 2026-06-23 — v2 perf: KV-cache prefix reuse (the big multi-turn win)
 
 On this CPU, prompt processing measures ~7 tok/s — so re-evaluating the whole context every turn cost
