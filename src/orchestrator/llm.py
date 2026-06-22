@@ -16,6 +16,10 @@ def _build_payload(messages, temperature, top_k, top_p, min_p, repeat_penalty,
         "messages": messages,
         "temperature": temperature if temperature is not None else TEMPERATURE,
         "stream": stream,
+        # Reuse the server's KV cache for the common prefix across turns — only the new tokens get
+        # processed instead of re-evaluating the whole context every turn (huge on a slow CPU).
+        # Effective only because build_messages keeps the leading system message + history stable.
+        "cache_prompt": True,
     }
     if top_k is not None: data["top_k"] = top_k
     if top_p is not None: data["top_p"] = top_p

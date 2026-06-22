@@ -4,6 +4,22 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-23 — v2 perf: KV-cache prefix reuse (the big multi-turn win)
+
+On this CPU, prompt processing measures ~7 tok/s — so re-evaluating the whole context every turn cost
+**30+ s/turn**. Root cause: per-turn RAG memories were merged into the *leading* system message, which
+changed the very first token each turn and invalidated the server's KV cache.
+
+- **`build_messages` keeps the system message stable** (system prompt + user profile only) and attaches
+  the per-turn recalled memories to the **current user turn** instead. Stored history keeps the clean
+  `user_text`, so the prefix `[system][history…]` is identical across turns.
+- **`cache_prompt: true`** on the LLM request → the server reuses the cached prefix and only processes
+  the new tokens.
+- Measured: a shared 259-token prefix went from **35.2 s (cold) → ~1.4–2.3 s** on the next turn (only
+  the 14 new tokens evaluated). Lossless — no quality change.
+- (Confirmed a language rewrite is *not* the lever: generation is 7.4 tok/s in llama.cpp (C++) already;
+  the Python orchestrator is sub-ms glue.)
+
 ## 2026-06-21 — Gesture volume control (Phase 2)
 
 Say (or type) **"Jarvis, volume"** to enter a hand-gesture mode, then **raise/lower your hand** to

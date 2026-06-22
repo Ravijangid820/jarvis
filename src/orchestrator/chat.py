@@ -140,10 +140,12 @@ def build_messages(session_id: str, user_id: int, user_text: str, custom_sys_pro
                    completion_reserve: int = COMPLETION_RESERVE_DEFAULT) -> List[Dict[str, str]]:
     """Assemble the prompt within the model's context window.
 
-    Layout: [single system message] + [recent history…] + [current turn]. The system prompt,
-    the user-profile block, and recalled RAG memories are merged into ONE system message (the
-    Qwen chat template rejects multiple / non-leading system messages). History is added
-    newest-first only while it fits the token budget.
+    Layout: [single system message] + [recent history…] + [current turn]. The system message holds
+    only the STABLE parts (system prompt + user-profile block) so the server's KV cache prefix stays
+    valid across turns; the per-turn RAG memories are attached to the CURRENT user turn instead of the
+    leading system message — otherwise they'd change the very first token every turn and force a full
+    re-eval of the whole context (Qwen also rejects multiple / non-leading system messages). History is
+    added newest-first only while it fits the token budget.
     """
     sys_prompt = custom_sys_prompt if custom_sys_prompt else SYSTEM_PROMPT
     system_parts = [sys_prompt]
@@ -160,16 +162,21 @@ def build_messages(session_id: str, user_id: int, user_text: str, custom_sys_pro
 
     context_ids = _get_recent_message_ids(session_id)
     memories = memory.retrieve_long_term_memory(user_id, session_id, user_text, recent_context_ids=context_ids)
+    # Dynamic recalled memories ride with the current turn (not the system prefix) to keep the KV
+    # cache reusable. Stored history still keeps the clean user_text, so the prefix stays stable.
     if memories:
-        system_parts.append(
+        turn_content = (
             "--- RECALLED MEMORIES ---\n"
             f"{memories}\n"
             "(If the current conversation contradicts these, prioritize the current conversation.)\n"
-            "---"
+            "---\n\n"
+            f"{user_text}"
         )
+    else:
+        turn_content = user_text
 
     front: List[Dict[str, str]] = [{"role": "system", "content": "\n\n".join(system_parts)}]
-    current_turn = {"role": "user", "content": user_text}
+    current_turn = {"role": "user", "content": turn_content}
 
     prompt_budget = MAX_CONTEXT_TOKENS - max(completion_reserve, MIN_COMPLETION_TOKENS) - PROMPT_SAFETY_MARGIN
     prompt_budget = max(prompt_budget, MAX_CONTEXT_TOKENS // 2)
