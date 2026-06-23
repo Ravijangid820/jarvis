@@ -4,6 +4,19 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-23 — data: full purge on delete + safe id reuse
+
+- **Deleting a user now wipes everything tied to that id** via one `_purge_user()` over every
+  user-scoped table (chats, sessions, knowledge, API keys, enroll requests) + ChromaDB vectors; faces
+  and camera events are *unlinked* (user_id→NULL) so household recognition data survives without
+  pointing at the gone account.
+- **Freed ids are reused — but only when proven clean.** New accounts take the lowest free id, and
+  `_id_has_residue()` skips any id that still has rows anywhere (defense-in-depth, so a reused id can
+  never inherit stray data). Operator's choice; made safe.
+- **One-time orphan sweep** removed leftovers from earlier non-cascading test deletes: 22 messages,
+  18 sessions, and 22 ChromaDB vectors purged (only the live users' data remains).
+- Verified: delete wipes seeded data; a freed id (1) is reused with zero inherited rows; 70 tests pass.
+
 ## 2026-06-23 — feat: streaming TTS (speak as it generates)
 
 Spoken replies no longer wait for the whole answer + full synthesis before any sound. The web UI now

@@ -1090,11 +1090,14 @@ def admin_create_user(req: CreateUserRequest, request: Request):
     _require_admin(request)
     conn = get_db()
     try:
-        conn.execute("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
-                     (req.username, hash_password(req.password), req.role))
+        conn.execute("BEGIN IMMEDIATE")               # serialize id selection against concurrent creates
+        new_id = _lowest_free_user_id(conn)           # reuse a freed id, but only a residue-free one
+        conn.execute("INSERT INTO users (id, username, password_hash, role) VALUES (?, ?, ?, ?)",
+                     (new_id, req.username, hash_password(req.password), req.role))
         conn.commit()
-        return {"status": "ok"}
+        return {"status": "ok", "id": new_id}
     except sqlite3.IntegrityError:
+        conn.rollback()
         raise HTTPException(status_code=400, detail="Username exists")
     finally:
         conn.close()
@@ -1119,6 +1122,51 @@ def admin_list_users(request: Request):
         conn.close()
 
 
+# Every table keyed by user_id — kept in one place so a purge can't miss one (and so id-reuse can
+# prove an id is residue-free before handing it to a new account).
+_USER_REF_TABLES = ("chat_sessions", "auth_sessions", "api_keys", "user_knowledge",
+                    "persons", "vision_events", "enroll_requests")
+
+
+def _purge_user(conn, user_id: int) -> List[str]:
+    """Delete EVERYTHING tied to user_id so a freed id carries no residue. Personal data (chats,
+    knowledge, keys, sessions) is removed; faces and camera events are UNLINKED (user_id→NULL) so the
+    household's recognition data survives but no longer points at the account. Returns the message ids
+    to drop from ChromaDB (caller commits, then calls memory.delete_vectors)."""
+    msg_ids = [str(r["id"]) for r in conn.execute(
+        "SELECT id FROM conversation_history WHERE session_id IN "
+        "(SELECT id FROM chat_sessions WHERE user_id = ?)", (user_id,)).fetchall()]
+    conn.execute("DELETE FROM conversation_history WHERE session_id IN "
+                 "(SELECT id FROM chat_sessions WHERE user_id = ?)", (user_id,))
+    conn.execute("DELETE FROM chat_sessions WHERE user_id = ?", (user_id,))
+    conn.execute("DELETE FROM auth_sessions WHERE user_id = ?", (user_id,))
+    conn.execute("DELETE FROM api_keys WHERE user_id = ?", (user_id,))
+    conn.execute("DELETE FROM user_knowledge WHERE user_id = ?", (user_id,))
+    conn.execute("DELETE FROM enroll_requests WHERE user_id = ?", (user_id,))
+    conn.execute("UPDATE persons SET user_id = NULL WHERE user_id = ?", (user_id,))
+    conn.execute("UPDATE vision_events SET user_id = NULL WHERE user_id = ?", (user_id,))
+    conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    return msg_ids
+
+
+def _id_has_residue(conn, uid: int) -> bool:
+    """True if any user-scoped table still holds rows for uid (defense-in-depth before id reuse)."""
+    for t in _USER_REF_TABLES:   # table names are a fixed allowlist, not user input
+        if conn.execute(f"SELECT 1 FROM {t} WHERE user_id = ? LIMIT 1", (uid,)).fetchone():
+            return True
+    return False
+
+
+def _lowest_free_user_id(conn) -> int:
+    """Smallest positive id that's neither in use nor carrying residue — so a reused id is provably
+    clean. (Reuse is the operator's choice; this makes it safe.)"""
+    used = {r["id"] for r in conn.execute("SELECT id FROM users")}
+    nid = 1
+    while nid in used or _id_has_residue(conn, nid):
+        nid += 1
+    return nid
+
+
 @app.delete("/admin/users/{user_id}")
 def admin_delete_user(user_id: int, request: Request):
     _require_admin(request)
@@ -1134,14 +1182,7 @@ def admin_delete_user(user_id: int, request: Request):
         if target["role"] == "admin" and \
            conn.execute("SELECT COUNT(*) AS n FROM users WHERE role='admin'").fetchone()["n"] <= 1:
             raise HTTPException(status_code=400, detail="Cannot delete the last admin")
-        sessions = conn.execute("SELECT id FROM chat_sessions WHERE user_id = ?", (user_id,)).fetchall()
-        all_msg_ids = []
-        for (sid,) in sessions:
-            rows = conn.execute("SELECT id FROM conversation_history WHERE session_id = ?", (sid,)).fetchall()
-            all_msg_ids.extend([str(r["id"]) for r in rows])
-            conn.execute("DELETE FROM conversation_history WHERE session_id = ?", (sid,))
-        conn.execute("DELETE FROM chat_sessions WHERE user_id = ?", (user_id,))
-        conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        all_msg_ids = _purge_user(conn, user_id)
         conn.commit()
     except HTTPException:
         raise
