@@ -150,6 +150,18 @@ def build_messages(session_id: str, user_id: int, user_text: str, custom_sys_pro
     sys_prompt = custom_sys_prompt if custom_sys_prompt else SYSTEM_PROMPT
     system_parts = [sys_prompt]
 
+    # Household/global knowledge — shared by everyone, admin-curated. Stable across turns, so it stays
+    # in the cache-friendly system prefix. (Capped; if it ever outgrows the cap we'd switch to RAG.)
+    global_kb = memory.get_global_knowledge()
+    if global_kb:
+        global_kb = truncate_to_tokens(global_kb, KNOWLEDGE_TOKEN_CAP)
+        system_parts.append(
+            "--- HOUSEHOLD KNOWLEDGE (shared, about this home) ---\n"
+            f"{global_kb}\n"
+            "(Common facts about the home and the people in it. Use naturally.)\n"
+            "---"
+        )
+
     knowledge = memory.get_user_knowledge(user_id)
     if knowledge:
         knowledge = truncate_to_tokens(knowledge, KNOWLEDGE_TOKEN_CAP)

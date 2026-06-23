@@ -68,6 +68,17 @@ CREATE TABLE IF NOT EXISTS user_knowledge (
 CREATE INDEX IF NOT EXISTS idx_knowledge_user ON user_knowledge(user_id);
 CREATE INDEX IF NOT EXISTS idx_knowledge_category ON user_knowledge(user_id, category);
 
+-- Household / GLOBAL knowledge: facts common to everyone in the home (rooms, address, members,
+-- device locations). Admin-curated only; injected into every user's prompt. No user_id — shared.
+CREATE TABLE IF NOT EXISTS global_knowledge (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    category TEXT NOT NULL DEFAULT 'other',
+    content TEXT NOT NULL,
+    source TEXT DEFAULT 'manual',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Vision/edge events posted by edge devices (Raspberry Pi camera agent). `data` is JSON.
 CREATE TABLE IF NOT EXISTS vision_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -1483,6 +1483,48 @@ def remove_knowledge(fact_id: int, request: Request):
     return {"status": "ok"}
 
 
+@app.get("/admin/knowledge/global")
+def list_global_knowledge(request: Request):
+    """Household/global facts (shared by all users). Admin-only — these go into everyone's prompt."""
+    _require_admin(request)
+    facts = memory.get_global_knowledge_list()
+    return {"facts": facts, "count": len(facts)}
+
+
+@app.post("/admin/knowledge/global")
+def add_global_knowledge(req: KnowledgeFactRequest, request: Request):
+    """Add a household fact (admin-only). An external tool (e.g. a loader script) can call this too."""
+    _require_admin(request)
+    content = req.content.strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty content")
+    category = (req.category or "other").lower().strip()
+    if category not in VALID_FACT_CATEGORIES:
+        category = "other"
+    fact_id = memory.store_global_fact(category, content, source="manual")
+    return {"id": fact_id, "status": "ok"}
+
+
+@app.put("/admin/knowledge/global/{fact_id}")
+def edit_global_knowledge(fact_id: int, req: KnowledgeFactRequest, request: Request):
+    _require_admin(request)
+    content = req.content.strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty content")
+    if not memory.update_global_fact(fact_id, content,
+                                     req.category.lower().strip() if req.category else None):
+        raise HTTPException(status_code=404, detail="No such fact")
+    return {"status": "ok"}
+
+
+@app.delete("/admin/knowledge/global/{fact_id}")
+def remove_global_knowledge(fact_id: int, request: Request):
+    _require_admin(request)
+    if not memory.delete_global_fact(fact_id):
+        raise HTTPException(status_code=404, detail="No such fact")
+    return {"status": "ok"}
+
+
 @app.post("/knowledge/extract-now")
 def force_extraction(request: Request):
     _require_admin(request)

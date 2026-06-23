@@ -92,6 +92,10 @@ Ownership is enforced: acting on another user's session returns `403`.
 | `PUT` | `/knowledge/{id}` | `{ content, category? }` | `{ "status": "ok" }` |
 | `DELETE` | `/knowledge/{id}` | — | `{ "status": "ok" }` |
 | `POST` | `/knowledge/extract-now` | — | **admin** · `{ "status": "ok", "processed": int }` |
+| `GET` | `/admin/knowledge/global` | — | **admin** · household facts shared by all users `{ "facts": [...], "count": int }` |
+| `POST` | `/admin/knowledge/global` | `{ content, category? }` | **admin** · add a household fact (a loader/Claude Code can call this). `{ "id": int, "status": "ok" }` |
+| `PUT` | `/admin/knowledge/global/{id}` | `{ content, category? }` | **admin** · `{ "status": "ok" }` |
+| `DELETE` | `/admin/knowledge/global/{id}` | — | **admin** · `{ "status": "ok" }` |
 
 Valid categories: `personal, family, preferences, location, work, education, interests, technical, other`.
 

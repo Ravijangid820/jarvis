@@ -119,6 +119,8 @@ Return ONLY the JSON array, nothing else."""
 VALID_FACT_CATEGORIES = {
     "personal", "family", "preferences", "location", "work",
     "education", "interests", "technical", "other",
+    # household / global-knowledge categories
+    "home", "household", "rooms", "devices", "people",
 }
 
 # --- Voice (Piper TTS) ------------------------------------------------------

@@ -4,6 +4,22 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-23 — feat: global (household) knowledge base — Phase 2a (storage + API + retrieval)
+
+Two knowledge scopes now: **personal** (`user_knowledge`, per-account, written by that user's chats)
+and **global/household** (`global_knowledge`, shared, admin-curated). Household facts (rooms, address,
+who sleeps where, device locations) are injected into *every* user's prompt; personal data stays
+private to its owner. Normal chats can **never** write global (only the admin paths can).
+
+- New `global_knowledge` table + `memory.get/store/update/delete_global_*`.
+- `build_messages` injects a capped "HOUSEHOLD KNOWLEDGE" block into the *stable* system prefix
+  (cache-friendly); if it ever outgrows the cap we'd move to RAG.
+- Admin-only API: `GET/POST/PUT/DELETE /admin/knowledge/global` — so the editor UI *and* an external
+  loader (e.g. Claude Code) can manage household facts. Added home/household/rooms/devices/people
+  categories.
+- Verified e2e: a fact added via the API was used by the model ("our house address" → "42 Baker
+  Street, London"); non-admin writes are 403'd. (Next: 2b editor UI, 2c admin "global chat" mode.)
+
 ## 2026-06-23 — data: full purge on delete + safe id reuse
 
 - **Deleting a user now wipes everything tied to that id** via one `_purge_user()` over every

@@ -202,6 +202,81 @@ def get_user_knowledge_list(user_id: int) -> List[Dict[str, Any]]:
         conn.close()
 
 
+# ---- Global / household knowledge (shared by all users; admin-curated) ----------------------------
+def get_global_knowledge() -> str:
+    """All household/global facts, formatted for system-prompt injection (shared by every user)."""
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT category, content FROM global_knowledge ORDER BY category, updated_at DESC").fetchall()
+        if not rows:
+            return ""
+        by_cat: Dict[str, List[str]] = {}
+        for r in rows:
+            by_cat.setdefault(r["category"].upper(), []).append(r["content"])
+        lines = []
+        for cat, facts in by_cat.items():
+            lines.append(f"[{cat}]")
+            for f in facts:
+                lines.append(f"  - {f}")
+        return "\n".join(lines)
+    finally:
+        conn.close()
+
+
+def get_global_knowledge_list() -> List[Dict[str, Any]]:
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT id, category, content, source, created_at, updated_at FROM global_knowledge "
+            "ORDER BY category, updated_at DESC").fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def store_global_fact(category: str, content: str, source: str = "manual") -> int:
+    """Add a household fact (admin-curated). Exact duplicates within a category are coalesced."""
+    conn = get_db()
+    try:
+        dup = conn.execute("SELECT id FROM global_knowledge WHERE category = ? AND content = ?",
+                           (category, content)).fetchone()
+        if dup:
+            return dup["id"]
+        cur = conn.execute("INSERT INTO global_knowledge (category, content, source) VALUES (?, ?, ?)",
+                           (category, content, source))
+        conn.commit()
+        logger.info("Memory Core: stored GLOBAL fact #%d in [%s]: %s", cur.lastrowid, category, content[:80])
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def update_global_fact(fact_id: int, content: str, category: str = None) -> bool:
+    conn = get_db()
+    try:
+        if category:
+            cur = conn.execute("UPDATE global_knowledge SET content = ?, category = ?, "
+                               "updated_at = CURRENT_TIMESTAMP WHERE id = ?", (content, category, fact_id))
+        else:
+            cur = conn.execute("UPDATE global_knowledge SET content = ?, updated_at = CURRENT_TIMESTAMP "
+                               "WHERE id = ?", (content, fact_id))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def delete_global_fact(fact_id: int) -> bool:
+    conn = get_db()
+    try:
+        cur = conn.execute("DELETE FROM global_knowledge WHERE id = ?", (fact_id,))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
 def _find_duplicate_fact(content: str, existing_rows: List[Any], use_embeddings: bool = True) -> Optional[int]:
     """Return the id of an existing fact that's a restatement of `content`, else None.
 
