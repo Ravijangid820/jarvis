@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-24 — feat: presence awareness (identity)
+
+The assistant now knows who the cameras have recognized recently. `memory.get_present_people()` derives
+the currently-present people from recent `face_seen` events (180s window, deduped, ignores `unknown`);
+`build_messages` injects "Seen by the cameras right now: …" into the *current turn* (cache-safe), so
+the assistant is room-aware and can address people. `GET /presence` (any authed user) + a **Present now**
+panel on the admin Overview. Verified: a fresh recognition shows in `/presence` and the model answered
+"who do you see?" → "Ravi". (Next within identity: proactive greet-on-arrival + opt-in presence-gated
+device control.)
+
 ## 2026-06-24 — feat: backups (DB + vector store)
 
 Snapshot the irreplaceable data — `jarvis.db` (consistent, online via `VACUUM INTO`) + `chroma_db/` —

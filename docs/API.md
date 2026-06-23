@@ -97,6 +97,7 @@ Ownership is enforced: acting on another user's session returns `403`.
 | `PUT` | `/admin/knowledge/global/{id}` | `{ content, category? }` | **admin** · `{ "status": "ok" }` |
 | `DELETE` | `/admin/knowledge/global/{id}` | — | **admin** · `{ "status": "ok" }` |
 | `POST` | `/admin/knowledge/global/chat` | `{ text }` | **admin** · "global chat" — each non-empty line becomes a household fact. `{ "reply", "saved": [...], "count" }` |
+| `GET` | `/presence` | — | any authed user · `{ "present": [name, …] }` — people the cameras recognized in the last ~3 min. |
 | `GET` | `/admin/audit?limit=N` | — | **admin** · recent audit entries `[{id, created_at, user_id, username, action, detail}]` (device + admin actions). |
 | `POST` | `/admin/backup` | — | **admin** · create a backup now. `{ "status", "name", "size" }` |
 | `GET` | `/admin/backups` | — | **admin** · list backups `[{name, size, created_at}]`. |

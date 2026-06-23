@@ -851,6 +851,12 @@ def admin_delete_backup(name: str, request: Request):
     return {"status": "ok"}
 
 
+@app.get("/presence")
+def presence(request: Request):
+    """Who the cameras have recognized recently (household context). Any authenticated user."""
+    return {"present": memory.get_present_people()}
+
+
 def _can_control_devices(request: Request) -> bool:
     """Authorization for device actions (lights/volume): admins always; others need the
     per-user can_control_devices flag. Enforced HERE, in code — never by the LLM."""

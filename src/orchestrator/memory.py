@@ -202,6 +202,30 @@ def get_user_knowledge_list(user_id: int) -> List[Dict[str, Any]]:
         conn.close()
 
 
+# ---- Presence (who the cameras have recognized recently) ------------------------------------------
+def get_present_people(ttl_s: int = 180) -> List[str]:
+    """Recognized people seen by any camera within the last ttl_s seconds (deduped, most-recent first).
+    Derived from face_seen vision events; 'unknown' faces are ignored."""
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT data FROM vision_events WHERE type='face_seen' "
+            "AND created_at > datetime('now', ?) ORDER BY id DESC",
+            (f"-{int(ttl_s)} seconds",)).fetchall()
+        seen, names = set(), []
+        for r in rows:
+            try:
+                nm = (json.loads(r["data"]) or {}).get("name")
+            except (ValueError, TypeError):
+                nm = None
+            if nm and nm != "unknown" and nm not in seen:
+                seen.add(nm)
+                names.append(nm)
+        return names
+    finally:
+        conn.close()
+
+
 # ---- Global / household knowledge (shared by all users; admin-curated) ----------------------------
 def get_global_knowledge() -> str:
     """All household/global facts, formatted for system-prompt injection (shared by every user)."""

@@ -174,18 +174,20 @@ def build_messages(session_id: str, user_id: int, user_text: str, custom_sys_pro
 
     context_ids = _get_recent_message_ids(session_id)
     memories = memory.retrieve_long_term_memory(user_id, session_id, user_text, recent_context_ids=context_ids)
-    # Dynamic recalled memories ride with the current turn (not the system prefix) to keep the KV
-    # cache reusable. Stored history still keeps the clean user_text, so the prefix stays stable.
+    # Dynamic context (presence + recalled memories) rides with the current turn, NOT the system prefix,
+    # so the KV cache stays reusable. Stored history keeps the clean user_text, so the prefix is stable.
+    turn_parts: List[str] = []
+    present = memory.get_present_people()
+    if present:
+        turn_parts.append(f"[Seen by the cameras right now: {', '.join(present)}. "
+                          "Address the person naturally if relevant.]")
     if memories:
-        turn_content = (
+        turn_parts.append(
             "--- RECALLED MEMORIES ---\n"
             f"{memories}\n"
             "(If the current conversation contradicts these, prioritize the current conversation.)\n"
-            "---\n\n"
-            f"{user_text}"
-        )
-    else:
-        turn_content = user_text
+            "---")
+    turn_content = ("\n\n".join(turn_parts) + "\n\n" + user_text) if turn_parts else user_text
 
     front: List[Dict[str, str]] = [{"role": "system", "content": "\n\n".join(system_parts)}]
     current_turn = {"role": "user", "content": turn_content}

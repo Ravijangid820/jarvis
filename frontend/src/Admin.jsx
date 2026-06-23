@@ -33,6 +33,7 @@ export default function Admin({ token, onExit }) {
   const [enrollDev, setEnrollDev] = useState("")
   const [enrollReqs, setEnrollReqs] = useState([])
   const [recogs, setRecogs] = useState([])           // recent face_seen events (recognitions feed)
+  const [present, setPresent] = useState([])         // people the cameras see right now
   const [verifying, setVerifying] = useState(null)   // {id, device, status, text, ok} for the verify flow
   const [preview, setPreview] = useState(null)     // {image, captured, total} during an active enroll
   const [globalFacts, setGlobalFacts] = useState([])   // household/global knowledge
@@ -59,13 +60,13 @@ export default function Admin({ token, onExit }) {
 
   const load = async () => {
     try {
-      const [s, u, k, f, sv, er, rc, gk] = await Promise.all([
+      const [s, u, k, f, sv, er, rc, gk, pr] = await Promise.all([
         api("/admin/stats"), api("/admin/users"), api("/admin/api_keys"),
         api("/admin/faces"), api("/admin/services"), api("/admin/faces/enroll-requests"),
-        api("/admin/events?type=face_seen&limit=20"), api("/admin/knowledge/global")])
+        api("/admin/events?type=face_seen&limit=20"), api("/admin/knowledge/global"), api("/presence")])
       setStats(s); setUsers(u.users || []); setKeys(k.keys || [])
       setFaces(f.faces || []); setServices(sv.services || []); setEnrollReqs(er.requests || [])
-      setRecogs(rc.events || []); setGlobalFacts(gk.facts || []); setErr("")
+      setRecogs(rc.events || []); setGlobalFacts(gk.facts || []); setPresent(pr.present || []); setErr("")
     } catch (e) { setErr(e.message) }
   }
   useEffect(() => { load() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
@@ -74,11 +75,11 @@ export default function Admin({ token, onExit }) {
   useEffect(() => {
     const t = setInterval(async () => {
       try {
-        const [sv, f, er, rc] = await Promise.all([
+        const [sv, f, er, rc, pr] = await Promise.all([
           api("/admin/services"), api("/admin/faces"), api("/admin/faces/enroll-requests"),
-          api("/admin/events?type=face_seen&limit=20")])
+          api("/admin/events?type=face_seen&limit=20"), api("/presence")])
         setServices(sv.services || []); setFaces(f.faces || []); setEnrollReqs(er.requests || [])
-        setRecogs(rc.events || [])
+        setRecogs(rc.events || []); setPresent(pr.present || [])
       } catch { /* keep last */ }
     }, 15000)
     return () => clearInterval(t)
@@ -320,6 +321,17 @@ export default function Admin({ token, onExit }) {
             <div className="adm-stat"><div className="adm-stat-val">{stats.users ?? "—"}</div><div className="adm-stat-lbl">Authorized Users</div></div>
             <div className="adm-stat"><div className="adm-stat-val">{stats.chats ?? "—"}</div><div className="adm-stat-lbl">Active Sessions</div></div>
             <div className="adm-stat"><div className="adm-stat-val">{stats.messages ?? "—"}</div><div className="adm-stat-lbl">Total Exchanges</div></div>
+          </div>
+
+          <div className="adm-panel">
+            <h2>Present now</h2>
+            <p className="adm-hint">People the cameras have recognized in the last few minutes — the
+              assistant is aware of who's around.</p>
+            {present.length > 0
+              ? <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {present.map(n => <span key={n} className="adm-svc-state active" style={{ padding: "4px 12px" }}>● {n}</span>)}
+                </div>
+              : <p className="adm-empty">No one recognized right now.</p>}
           </div>
 
           <div className="adm-panel">
