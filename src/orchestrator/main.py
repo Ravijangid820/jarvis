@@ -254,6 +254,10 @@ class KnowledgeFactRequest(BaseModel):
     category: str = "other"
 
 
+class GlobalChatRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=4000)
+
+
 class EventRequest(BaseModel):
     device_id: str = Field(..., min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._:-]+$")
     type: str = Field(..., min_length=1, max_length=32)
@@ -1523,6 +1527,20 @@ def remove_global_knowledge(fact_id: int, request: Request):
     if not memory.delete_global_fact(fact_id):
         raise HTTPException(status_code=404, detail="No such fact")
     return {"status": "ok"}
+
+
+@app.post("/admin/knowledge/global/chat")
+def global_knowledge_chat(req: GlobalChatRequest, request: Request):
+    """Admin 'global chat': each non-empty line of the message becomes a household fact and is stored
+    immediately. Deterministic (no LLM) so it's instant and never mis-files what you said."""
+    _require_admin(request)
+    lines = [ln.strip() for ln in req.text.splitlines() if ln.strip()]
+    if not lines:
+        raise HTTPException(status_code=400, detail="Nothing to save")
+    saved = [{"id": memory.store_global_fact("household", ln, source="global-chat"), "content": ln}
+             for ln in lines]
+    return {"reply": f"Saved {len(saved)} fact{'s' if len(saved) != 1 else ''} to household knowledge.",
+            "saved": saved, "count": len(memory.get_global_knowledge_list())}
 
 
 @app.post("/knowledge/extract-now")

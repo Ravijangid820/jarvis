@@ -96,6 +96,7 @@ Ownership is enforced: acting on another user's session returns `403`.
 | `POST` | `/admin/knowledge/global` | `{ content, category? }` | **admin** · add a household fact (a loader/Claude Code can call this). `{ "id": int, "status": "ok" }` |
 | `PUT` | `/admin/knowledge/global/{id}` | `{ content, category? }` | **admin** · `{ "status": "ok" }` |
 | `DELETE` | `/admin/knowledge/global/{id}` | — | **admin** · `{ "status": "ok" }` |
+| `POST` | `/admin/knowledge/global/chat` | `{ text }` | **admin** · "global chat" — each non-empty line becomes a household fact. `{ "reply", "saved": [...], "count" }` |
 
 Valid categories: `personal, family, preferences, location, work, education, interests, technical, other`.
 

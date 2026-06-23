@@ -37,6 +37,8 @@ export default function Admin({ token, onExit }) {
   const [globalFacts, setGlobalFacts] = useState([])   // household/global knowledge
   const [gContent, setGContent] = useState("")
   const [gCat, setGCat] = useState("home")
+  const [gChatLog, setGChatLog] = useState([])         // admin "global chat" transcript
+  const [gChatInput, setGChatInput] = useState("")
   const [err, setErr] = useState("")
 
   const api = async (path, method = "GET", body) => {
@@ -204,6 +206,17 @@ export default function Admin({ token, onExit }) {
   const delGlobal = async (id) => {
     if (!confirm("Delete this household fact?")) return
     try { await api("/admin/knowledge/global/" + id, "DELETE"); loadGlobal() } catch (e) { setErr(e.message) }
+  }
+  const sendGlobalChat = async () => {
+    const text = gChatInput.trim()
+    if (!text) return
+    setGChatLog(l => [...l, { role: "you", text }])
+    setGChatInput("")
+    try {
+      const d = await api("/admin/knowledge/global/chat", "POST", { text })
+      setGChatLog(l => [...l, { role: "jarvis", text: d.reply }])
+      loadGlobal()
+    } catch (e) { setGChatLog(l => [...l, { role: "jarvis", text: "⚠ " + e.message }]) }
   }
 
   // Verify recognition for one enrolled person. Recognition is motion-gated, so a new face_seen
@@ -531,6 +544,30 @@ export default function Admin({ token, onExit }) {
       )}
 
       {tab === "household" && (
+        <>
+        <div className="adm-panel">
+          <h2>Teach JARVIS (global chat)</h2>
+          <p className="adm-hint">
+            Just tell JARVIS about the home — <strong>each line you send becomes a household fact</strong>.
+            Admin-only; nothing here is personal. (For precise edits, use the table below.)
+          </p>
+          {gChatLog.length > 0 && (
+            <div className="adm-chatlog" style={{ maxHeight: 200, overflowY: "auto", margin: "8px 0", display: "flex", flexDirection: "column", gap: 4 }}>
+              {gChatLog.map((m, i) => (
+                <div key={i} style={{ opacity: m.role === "jarvis" ? 0.8 : 1 }}>
+                  <span className="adm-em">{m.role === "jarvis" ? "JARVIS" : "You"}:</span> {m.text}
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="adm-form">
+            <input className="hud-input" placeholder="e.g. The WiFi password is hunter2 — or paste several lines"
+                   value={gChatInput} onChange={e => setGChatInput(e.target.value)}
+                   onKeyDown={e => { if (e.key === "Enter") sendGlobalChat() }} style={{ flex: 1 }} />
+            <button className="hud-btn" onClick={sendGlobalChat}>Send</button>
+          </div>
+        </div>
+
         <div className="adm-panel">
           <h2>Household knowledge (shared)</h2>
           <p className="adm-hint">
@@ -566,6 +603,7 @@ export default function Admin({ token, onExit }) {
             </tbody>
           </table>
         </div>
+        </>
       )}
     </div>
   )

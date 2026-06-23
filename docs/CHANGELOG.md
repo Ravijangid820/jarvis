@@ -20,7 +20,10 @@ private to its owner. Normal chats can **never** write global (only the admin pa
 - Verified e2e: a fact added via the API was used by the model ("our house address" → "42 Baker
   Street, London"); non-admin writes are 403'd.
 - **2b — editor UI:** a new **Household** tab in the Admin console (category + fact form, table with
-  edit/delete), so household knowledge is managed without curl. (Next: 2c admin "global chat" mode.)
+  edit/delete), so household knowledge is managed without curl.
+- **2c — global chat:** a "Teach JARVIS" box in the Household tab (admin-only) where each line you
+  send becomes a household fact (`POST /admin/knowledge/global/chat`, deterministic — no LLM, instant).
+  Phase 2 complete: storage + retrieval + API + editor + chat, all three write paths admin-only.
 
 ## 2026-06-23 — data: full purge on delete + safe id reuse
 
