@@ -43,8 +43,8 @@ from intents import is_gesture_volume, parse_reminder, parse_volume
 from budget import is_default_session
 from config import (ADMIN_MAX_INPUT, ALLOWED_ORIGINS, BASE_DIR, CHROMA_DB_PATH,
                     COMPLETION_RESERVE_DEFAULT, CONFIG, INDEX_HTML, LLM_URL, PIPER_BIN, PIPER_MODEL,
-                    RATE_LIMIT_RPM, REACT_DIST_DIR, REGULAR_MAX_INPUT, STATIC_DIR,
-                    VALID_FACT_CATEGORIES, logger)
+                    RATE_LIMIT_RPM, REACT_DIST_DIR, REGULAR_MAX_INPUT, REQUIRE_PRESENCE_FOR_CONTROL,
+                    STATIC_DIR, VALID_FACT_CATEGORIES, logger)
 from db import get_db, init_db
 from llm import llm_content, request_llm, request_llm_stream, synthesize_tts
 
@@ -83,6 +83,10 @@ _GESTURE_TTL_S = 12.0            # mode lifetime, refreshed on each hand report
 _GESTURE_GAIN = 110              # normalized Δy (0..1) → volume %  (~half-frame swing ≈ 55%)
 _GESTURE_DEADZONE = 0.015        # ignore sub-threshold jitter
 _GESTURE_STEP_CLAMP = 25         # max % change per report (smoothness / anti-jump)
+
+# Greet-on-arrival: a recognized person not seen for ARRIVAL_GAP_S counts as a fresh arrival.
+_present_since: Dict[str, float] = {}
+ARRIVAL_GAP_S = 300.0
 
 # --- Rate limiting (in-process) ---------------------------------------------
 _rate_store: Dict[str, List[float]] = defaultdict(list)
@@ -857,6 +861,45 @@ def presence(request: Request):
     return {"present": memory.get_present_people()}
 
 
+@app.get("/arrivals")
+def arrivals(request: Request, since_id: int = 0):
+    """Recent 'someone arrived' events (last 2 min) for the UI to greet. Poll with since_id to get
+    only new ones."""
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT id, data, created_at FROM vision_events WHERE type='presence_arrival' "
+            "AND id > ? AND created_at > datetime('now', '-120 seconds') ORDER BY id", (since_id,)).fetchall()
+        out = []
+        for r in rows:
+            try:
+                nm = (json.loads(r["data"]) or {}).get("name")
+            except (ValueError, TypeError):
+                nm = None
+            if nm:
+                out.append({"id": r["id"], "name": nm, "created_at": r["created_at"]})
+        return {"arrivals": out}
+    finally:
+        conn.close()
+
+
+def _authorized_person_present() -> bool:
+    """True if a currently-present recognized person maps to a user allowed to control devices.
+    Used only when REQUIRE_PRESENCE_FOR_CONTROL is on."""
+    names = memory.get_present_people()
+    if not names:
+        return False
+    conn = get_db()
+    try:
+        ph = ",".join("?" * len(names))
+        row = conn.execute(
+            f"SELECT 1 FROM persons p JOIN users u ON p.user_id = u.id WHERE p.name IN ({ph}) "
+            "AND (u.role = 'admin' OR u.can_control_devices = 1) LIMIT 1", names).fetchone()
+        return row is not None
+    finally:
+        conn.close()
+
+
 @app.get("/reminders")
 def list_reminders(request: Request):
     conn = get_db()
@@ -986,6 +1029,9 @@ def _handle_volume_command(user_text: str, raw_request: Request) -> Optional[str
     """If user_text is a recognized volume command, authorize + act on it and return a short spoken
     ack; otherwise None (→ caller falls through to the LLM). Shared by /inbox and /chat/stream."""
     vol = parse_volume(user_text)
+    is_gesture = vol is None and is_gesture_volume(user_text)
+    if (vol is not None or is_gesture) and REQUIRE_PRESENCE_FOR_CONTROL and not _authorized_person_present():
+        return "I don't see anyone authorized in the room, so I can't change that right now."
     if vol is not None:
         if not _can_control_devices(raw_request):
             return "Sorry — you're not authorized to control devices."
@@ -1145,6 +1191,16 @@ def ingest_event(req: EventRequest, request: Request):
             "INSERT INTO vision_events (device_id, type, data, user_id) VALUES (?, ?, ?, ?)",
             (device_id, req.type, json.dumps(req.data or {}), request.state.user_id),
         )
+        # Arrival detection: a recognized person not seen recently → emit a one-off presence_arrival
+        # the UI announces ("welcome home"). Tracked in-memory so it's cheap on the events hot path.
+        if req.type == "face_seen":
+            nm = (req.data or {}).get("name")
+            if nm and nm != "unknown":
+                now = time.time()
+                if now - _present_since.get(nm, 0.0) > ARRIVAL_GAP_S:
+                    conn.execute("INSERT INTO vision_events (device_id, type, data, user_id) VALUES (?, ?, ?, ?)",
+                                 (device_id, "presence_arrival", json.dumps({"name": nm}), request.state.user_id))
+                _present_since[nm] = now
         # Any real event also proves the device is alive — fold it into liveness too.
         conn.execute(
             "INSERT INTO device_heartbeats (device_id, last_seen) VALUES (?, CURRENT_TIMESTAMP) "

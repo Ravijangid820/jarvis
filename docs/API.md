@@ -98,6 +98,7 @@ Ownership is enforced: acting on another user's session returns `403`.
 | `DELETE` | `/admin/knowledge/global/{id}` | — | **admin** · `{ "status": "ok" }` |
 | `POST` | `/admin/knowledge/global/chat` | `{ text }` | **admin** · "global chat" — each non-empty line becomes a household fact. `{ "reply", "saved": [...], "count" }` |
 | `GET` | `/presence` | — | any authed user · `{ "present": [name, …] }` — people the cameras recognized in the last ~3 min. |
+| `GET` | `/arrivals?since_id=N` | — | any authed user · `{ "arrivals": [{id, name, created_at}] }` — recent "someone arrived" events for the UI to greet. |
 | `GET` | `/reminders` | — | your pending reminders `[{id, text, due_at, status, created_at}]`. (Create them by chatting: "remind me … in 20 min".) |
 | `GET` | `/reminders/due` | — | your pending reminders whose time has arrived `{ "due": [{id, text, due_at}] }`. |
 | `POST` | `/reminders/{id}/ack` | — | mark a fired reminder done. `{ "status": "ok" }` |

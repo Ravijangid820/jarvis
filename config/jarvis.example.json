@@ -10,6 +10,7 @@
         "port": 5000,
         "max_input_length": 500,
         "rate_limit_requests_per_minute": 120,
+        "require_presence_for_device_control": false,
         "allowed_origins": []
     },
     "memory": {

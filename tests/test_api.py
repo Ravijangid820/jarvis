@@ -147,9 +147,9 @@ def test_events_admin_ingest_and_admin_list(client):
     assert r.status_code == 200 and r.json()["status"] == "ok"
     got = client.get("/admin/events", headers={"Authorization": "Bearer " + admin}).json()
     assert got["count"] >= 1
-    latest = got["events"][0]
-    assert latest["device_id"] == "pi-test" and latest["type"] == "face_seen"
-    assert latest["data"] == {"name": "Ravi"}
+    # A recognized face also emits a presence_arrival event, so find the face_seen explicitly.
+    seen = [e for e in got["events"] if e["type"] == "face_seen" and e["device_id"] == "pi-test"]
+    assert seen and seen[0]["data"] == {"name": "Ravi"}
 
 
 def test_events_device_key_provenance(client):

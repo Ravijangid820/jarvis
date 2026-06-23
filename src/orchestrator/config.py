@@ -57,6 +57,9 @@ REQUEST_TIMEOUT: int = CONFIG["llm"]["request_timeout_seconds"]
 TEMPERATURE: float = CONFIG["llm"]["default_temperature"]
 MAX_INPUT_LENGTH: int = CONFIG["orchestrator"]["max_input_length"]
 RATE_LIMIT_RPM: int = CONFIG["orchestrator"]["rate_limit_requests_per_minute"]
+# Opt-in: require a recognized, authorized person physically present (per the cameras) before any
+# device control runs — even for an otherwise-authorized caller. Off by default.
+REQUIRE_PRESENCE_FOR_CONTROL: bool = bool(CONFIG["orchestrator"].get("require_presence_for_device_control", False))
 ALLOWED_ORIGINS: List[str] = CONFIG["orchestrator"].get("allowed_origins", [])
 def _resolve(p: str) -> str:
     """Absolute paths pass through; relative ones resolve against BASE_DIR (so a fresh

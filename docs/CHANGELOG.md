@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-24 — feat: finish identity — greet-on-arrival + presence-gated control
+
+- **Greet-on-arrival:** when a recognized person reappears after >5 min away, the server emits a
+  one-off `presence_arrival` event; the web UI polls `GET /arrivals` and announces "Welcome home, <name>"
+  (banner + TTS when sound is on). Deduped in-memory so it fires once per arrival.
+- **Opt-in presence-gated device control:** new config `require_presence_for_device_control` (default
+  **off**). When on, device commands (volume/gesture) require a *recognized, authorized* person present
+  (a face linked to an admin / `can_control_devices` user) — otherwise refused, even for an authorized
+  caller. Verified: off → control works; on → denied with no one present, allowed once present.
+
 ## 2026-06-24 — feat: reminders / timers
 
 "Remind me to take the cake out in 20 minutes", "set a timer for 10 minutes", "remind me to call mom

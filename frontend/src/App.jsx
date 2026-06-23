@@ -296,7 +296,8 @@ function App() {
   const [uptime, setUptime] = useState(0)
   const [bootPct, setBootPct] = useState(0)
   const [sys, setSys] = useState({})   // live host stats from /system (CPU/RAM/uptime)
-  const [dueReminders, setDueReminders] = useState([])   // reminders that have fired (banner)
+  const [dueReminders, setDueReminders] = useState([])   // reminders/arrivals that have fired (banner)
+  const arrivalSeenRef = useRef(0)   // highest arrival id already announced
 
   // Command palette (⌘K / Ctrl+K).
   const [paletteOpen, setPaletteOpen] = useState(false)
@@ -447,6 +448,26 @@ function App() {
     }
     fire()
     const id = setInterval(fire, 20000)
+    return () => clearInterval(id)
+  }, [token, sound])   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Greet-on-arrival: poll for "someone arrived" events and announce them (banner + TTS when sound on).
+  useEffect(() => {
+    if (!token) return
+    const poll = async () => {
+      try {
+        const res = await fetch(API + "/arrivals?since_id=" + arrivalSeenRef.current, { headers: { Authorization: "Bearer " + token } })
+        if (!res.ok) return
+        const { arrivals } = await res.json()
+        for (const a of (arrivals || [])) {
+          arrivalSeenRef.current = Math.max(arrivalSeenRef.current, a.id)
+          if (sound) speak("Welcome home, " + a.name + ".")
+          setDueReminders(prev => [...prev, { id: "arr-" + a.id, text: "Welcome home, " + a.name + "." }])
+        }
+      } catch { /* ignore */ }
+    }
+    poll()
+    const id = setInterval(poll, 15000)
     return () => clearInterval(id)
   }, [token, sound])   // eslint-disable-line react-hooks/exhaustive-deps
 
