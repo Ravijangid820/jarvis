@@ -4,7 +4,19 @@ All notable changes to this project are documented in this file.
 
 ---
 
-## 2026-06-24 — feat: LLM tool-calling (voice path)
+## 2026-06-24 — feat: PWA + local-only notifications
+
+Jarvis is now an installable PWA with local OS notifications — no external push services (privacy-first).
+
+- **Installable:** `manifest.webmanifest` + a minimal **network-first** service worker (`sw.js`, no
+  stale-cache risk; offline shell fallback) + theme-color/apple meta. Served by the orchestrator
+  (`/manifest.webmanifest`, `/sw.js`, auth-exempt) and registered from `main.jsx`.
+- **Local notifications:** reminders firing and greet-on-arrival now also raise an OS notification via
+  the Notification API (in addition to the banner + TTS) — fires while the app/PWA is alive
+  (foregrounded or backgrounded), nothing routed through Google/Mozilla. Best-effort + permission-gated.
+- Note: service workers + notifications require a **secure context**, so install/notifications activate
+  once the local CA is trusted on the device (already part of setup). Verified: manifest + sw.js served,
+  banner path fires, notify() guards cleanly; 71 tests pass.
 
 The voice path (`/inbox`) now offers the model tools, so commands the rule fast-paths miss still work
 ("turn it down a couple notches" → `set_volume step -5`; "remind me to stretch in 15 minutes" →

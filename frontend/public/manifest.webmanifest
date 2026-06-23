@@ -1,0 +1,14 @@
+{
+  "name": "J.A.R.V.I.S",
+  "short_name": "JARVIS",
+  "description": "Self-hosted AI assistant",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#05080d",
+  "theme_color": "#05080d",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
