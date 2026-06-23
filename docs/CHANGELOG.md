@@ -18,7 +18,9 @@ private to its owner. Normal chats can **never** write global (only the admin pa
   loader (e.g. Claude Code) can manage household facts. Added home/household/rooms/devices/people
   categories.
 - Verified e2e: a fact added via the API was used by the model ("our house address" → "42 Baker
-  Street, London"); non-admin writes are 403'd. (Next: 2b editor UI, 2c admin "global chat" mode.)
+  Street, London"); non-admin writes are 403'd.
+- **2b — editor UI:** a new **Household** tab in the Admin console (category + fact form, table with
+  edit/delete), so household knowledge is managed without curl. (Next: 2c admin "global chat" mode.)
 
 ## 2026-06-23 — data: full purge on delete + safe id reuse
 

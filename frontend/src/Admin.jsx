@@ -7,7 +7,10 @@ const TABS = [
   { id: "users", label: "Users" },
   { id: "keys", label: "Keys" },
   { id: "faces", label: "Faces" },
+  { id: "household", label: "Household" },
 ]
+
+const KNOWLEDGE_CATEGORIES = ["home", "household", "rooms", "devices", "people", "location", "other"]
 
 export default function Admin({ token, onExit }) {
   const [tab, setTab] = useState("overview")
@@ -31,6 +34,9 @@ export default function Admin({ token, onExit }) {
   const [recogs, setRecogs] = useState([])           // recent face_seen events (recognitions feed)
   const [verifying, setVerifying] = useState(null)   // {id, device, status, text, ok} for the verify flow
   const [preview, setPreview] = useState(null)     // {image, captured, total} during an active enroll
+  const [globalFacts, setGlobalFacts] = useState([])   // household/global knowledge
+  const [gContent, setGContent] = useState("")
+  const [gCat, setGCat] = useState("home")
   const [err, setErr] = useState("")
 
   const api = async (path, method = "GET", body) => {
@@ -47,13 +53,13 @@ export default function Admin({ token, onExit }) {
 
   const load = async () => {
     try {
-      const [s, u, k, f, sv, er, rc] = await Promise.all([
+      const [s, u, k, f, sv, er, rc, gk] = await Promise.all([
         api("/admin/stats"), api("/admin/users"), api("/admin/api_keys"),
         api("/admin/faces"), api("/admin/services"), api("/admin/faces/enroll-requests"),
-        api("/admin/events?type=face_seen&limit=20")])
+        api("/admin/events?type=face_seen&limit=20"), api("/admin/knowledge/global")])
       setStats(s); setUsers(u.users || []); setKeys(k.keys || [])
       setFaces(f.faces || []); setServices(sv.services || []); setEnrollReqs(er.requests || [])
-      setRecogs(rc.events || []); setErr("")
+      setRecogs(rc.events || []); setGlobalFacts(gk.facts || []); setErr("")
     } catch (e) { setErr(e.message) }
   }
   useEffect(() => { load() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
@@ -178,6 +184,26 @@ export default function Admin({ token, onExit }) {
     if (!enrollUser || !enrollDev) return setErr("Pick a user and a camera")
     try { await api("/admin/faces/enroll-request", "POST", { user_id: Number(enrollUser), device_id: enrollDev }); setEnrollUser(""); load() }
     catch (e) { setErr(e.message) }
+  }
+
+  const loadGlobal = async () => {
+    try { const d = await api("/admin/knowledge/global"); setGlobalFacts(d.facts || []) } catch (e) { setErr(e.message) }
+  }
+  const addGlobal = async () => {
+    const content = gContent.trim()
+    if (!content) return setErr("Enter a household fact")
+    try { await api("/admin/knowledge/global", "POST", { content, category: gCat }); setGContent(""); loadGlobal() }
+    catch (e) { setErr(e.message) }
+  }
+  const editGlobal = async (f) => {
+    const content = prompt("Edit household fact:", f.content)
+    if (content == null || content.trim() === f.content) return
+    try { await api("/admin/knowledge/global/" + f.id, "PUT", { content: content.trim(), category: f.category }); loadGlobal() }
+    catch (e) { setErr(e.message) }
+  }
+  const delGlobal = async (id) => {
+    if (!confirm("Delete this household fact?")) return
+    try { await api("/admin/knowledge/global/" + id, "DELETE"); loadGlobal() } catch (e) { setErr(e.message) }
   }
 
   // Verify recognition for one enrolled person. Recognition is motion-gated, so a new face_seen
@@ -502,6 +528,44 @@ export default function Admin({ token, onExit }) {
             </table>
           </div>
         </>
+      )}
+
+      {tab === "household" && (
+        <div className="adm-panel">
+          <h2>Household knowledge (shared)</h2>
+          <p className="adm-hint">
+            Facts about <strong>this home</strong> — rooms, address, who sleeps where, device
+            locations. These are added to <em>every</em> user's prompt (personal chats stay private).
+            Admin-curated only. You can also load these programmatically via
+            <code> POST /admin/knowledge/global</code>.
+          </p>
+          <div className="adm-form">
+            <select className="hud-input" value={gCat} onChange={e => setGCat(e.target.value)} style={{ maxWidth: 160 }}>
+              {KNOWLEDGE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <input className="hud-input" placeholder="e.g. The master bedroom is on the top floor"
+                   value={gContent} onChange={e => setGContent(e.target.value)}
+                   onKeyDown={e => { if (e.key === "Enter") addGlobal() }} style={{ flex: 1 }} />
+            <button className="hud-btn" onClick={addGlobal}>Add fact</button>
+          </div>
+          <table className="adm-table" style={{ marginTop: 4 }}>
+            <thead><tr><th>Category</th><th>Fact</th><th>Updated</th><th>Actions</th></tr></thead>
+            <tbody>
+              {globalFacts.map(f => (
+                <tr key={f.id}>
+                  <td className="adm-em">{f.category}</td>
+                  <td>{f.content}</td>
+                  <td>{f.updated_at}</td>
+                  <td style={{ display: "flex", gap: 6 }}>
+                    <button className="hud-btn" onClick={() => editGlobal(f)}>Edit</button>
+                    <button className="hud-btn warn" onClick={() => delGlobal(f.id)}>Delete</button>
+                  </td>
+                </tr>
+              ))}
+              {globalFacts.length === 0 && <tr><td colSpan="4" className="adm-empty">No household facts yet — add the home's shared details above.</td></tr>}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   )
