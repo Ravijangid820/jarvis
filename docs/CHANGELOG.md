@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-24 — feat: reminders / timers
+
+"Remind me to take the cake out in 20 minutes", "set a timer for 10 minutes", "remind me to call mom
+at 6pm" — handled by the offline fast-path (no LLM). `intents.parse_reminder` understands relative
+durations and "at H[:MM][am/pm]"; the command is stored in a new `reminders` table with a due time and
+confirmed instantly. The web UI polls `/reminders/due` and, when one fires, shows a banner and speaks
+it (when sound is on), then acks it — so "due" is just a query; no background scheduler. Endpoints:
+`GET /reminders`, `GET /reminders/due`, `POST /reminders/{id}/ack`, `DELETE /reminders/{id}`. Verified:
+parse cases, create-via-chat, due-firing + ack, and the UI banner (Playwright). 71 tests pass.
+
 ## 2026-06-24 — feat: presence awareness (identity)
 
 The assistant now knows who the cameras have recognized recently. `memory.get_present_people()` derives

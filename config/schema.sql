@@ -79,6 +79,17 @@ CREATE TABLE IF NOT EXISTS global_knowledge (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Reminders / timers: due-at is server-local time; fired when a client polls /reminders/due.
+CREATE TABLE IF NOT EXISTS reminders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    text TEXT NOT NULL,
+    due_at DATETIME NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',   -- pending | done | cancelled
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_reminders_user ON reminders(user_id, status, due_at);
+
 -- Audit trail: who did what (device control, admin changes). Append-only; capped in code.
 CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

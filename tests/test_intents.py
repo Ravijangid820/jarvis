@@ -3,7 +3,24 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "orchestrator"))
 
-from intents import is_gesture_volume, parse_volume  # noqa: E402
+from datetime import datetime, timedelta  # noqa: E402
+
+from intents import is_gesture_volume, parse_reminder, parse_volume  # noqa: E402
+
+
+def test_reminders():
+    now = datetime(2026, 1, 1, 10, 0, 0)
+    r = parse_reminder("set a timer for 10 minutes", now)
+    assert r["text"] == "Timer" and r["due_at"] == now + timedelta(minutes=10)
+    r = parse_reminder("remind me to call mom in 30 minutes", now)
+    assert r["text"] == "call mom" and r["due_at"] == now + timedelta(minutes=30)
+    r = parse_reminder("remind me to take the cake out at 6pm", now)
+    assert r["text"] == "take the cake out" and r["due_at"].hour == 18
+    r = parse_reminder("timer for 1 hour 30 minutes", now)
+    assert r["due_at"] == now + timedelta(minutes=90)
+    # not reminders / no usable time → None (falls through to the LLM)
+    assert parse_reminder("what's the weather", now) is None
+    assert parse_reminder("remind me to do the thing", now) is None  # no time given
 
 
 def test_set_absolute():

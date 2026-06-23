@@ -39,7 +39,7 @@ from pydantic import BaseModel, Field, field_validator
 import chat
 import memory
 from auth import hash_password, hash_token, verify_password
-from intents import is_gesture_volume, parse_volume
+from intents import is_gesture_volume, parse_reminder, parse_volume
 from budget import is_default_session
 from config import (ADMIN_MAX_INPUT, ALLOWED_ORIGINS, BASE_DIR, CHROMA_DB_PATH,
                     COMPLETION_RESERVE_DEFAULT, CONFIG, INDEX_HTML, LLM_URL, PIPER_BIN, PIPER_MODEL,
@@ -857,6 +857,60 @@ def presence(request: Request):
     return {"present": memory.get_present_people()}
 
 
+@app.get("/reminders")
+def list_reminders(request: Request):
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT id, text, due_at, status, created_at FROM reminders "
+            "WHERE user_id = ? AND status = 'pending' ORDER BY due_at", (request.state.user_id,)).fetchall()
+        return {"reminders": [dict(r) for r in rows]}
+    finally:
+        conn.close()
+
+
+@app.get("/reminders/due")
+def due_reminders(request: Request):
+    """Pending reminders whose time has arrived — the client announces them, then acks. ('due' is just
+    a query: due_at <= local now, so no background scheduler is needed.)"""
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT id, text, due_at FROM reminders WHERE user_id = ? AND status = 'pending' "
+            "AND due_at <= datetime('now', 'localtime') ORDER BY due_at", (request.state.user_id,)).fetchall()
+        return {"due": [dict(r) for r in rows]}
+    finally:
+        conn.close()
+
+
+@app.post("/reminders/{rid}/ack")
+def ack_reminder(rid: int, request: Request):
+    conn = get_db()
+    try:
+        cur = conn.execute("UPDATE reminders SET status = 'done' WHERE id = ? AND user_id = ?",
+                           (rid, request.state.user_id))
+        conn.commit()
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="No such reminder")
+        return {"status": "ok"}
+    finally:
+        conn.close()
+
+
+@app.delete("/reminders/{rid}")
+def cancel_reminder(rid: int, request: Request):
+    conn = get_db()
+    try:
+        cur = conn.execute("UPDATE reminders SET status = 'cancelled' WHERE id = ? AND user_id = ? "
+                           "AND status = 'pending'", (rid, request.state.user_id))
+        conn.commit()
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="No such reminder")
+        return {"status": "ok"}
+    finally:
+        conn.close()
+
+
 def _can_control_devices(request: Request) -> bool:
     """Authorization for device actions (lights/volume): admins always; others need the
     per-user can_control_devices flag. Enforced HERE, in code — never by the LLM."""
@@ -945,6 +999,27 @@ def _handle_volume_command(user_text: str, raw_request: Request) -> Optional[str
         _audit(raw_request, "device.gesture_mode", VOICE_CAMERA)
         return "Gesture volume control on — raise or lower your hand."
     return None
+
+
+def _handle_reminder(user_text: str, raw_request: Request) -> Optional[str]:
+    """If user_text is a reminder/timer, store it for the caller and return a confirmation; else None."""
+    now = datetime.now()
+    r = parse_reminder(user_text, now)
+    if r is None:
+        return None
+    due = r["due_at"]
+    conn = get_db()
+    try:
+        conn.execute("INSERT INTO reminders (user_id, text, due_at) VALUES (?, ?, ?)",
+                     (raw_request.state.user_id, r["text"], due.strftime("%Y-%m-%d %H:%M:%S")))
+        conn.commit()
+    finally:
+        conn.close()
+    _audit(raw_request, "reminder.create", f"{r['text']} @ {due.strftime('%Y-%m-%d %H:%M')}")
+    when = due.strftime("%H:%M")
+    if r["text"] in ("Timer", "Reminder"):
+        return f"{r['text']} set for {when}."
+    return f"Okay — I'll remind you to {r['text']} at {when}."
 
 
 @app.post("/devices/volume")
@@ -1118,8 +1193,8 @@ def _maybe_title(needs_title: bool, session_id: str, user_id: int, user_text: st
 def process_input(request: QueryRequest, raw_request: Request):
     user_id, session_id, user_text = _validate_chat(request, raw_request)
 
-    # Device fast-path: a recognized volume command is handled directly (instant, offline, no LLM).
-    ack = _handle_volume_command(user_text, raw_request)
+    # Fast-paths handled directly (instant, offline, no LLM): volume/gesture, then reminders.
+    ack = _handle_volume_command(user_text, raw_request) or _handle_reminder(user_text, raw_request)
     if ack is not None:
         chat.store_message(session_id, "user", user_text)
         chat.store_message(session_id, "jarvis", ack)
@@ -1159,8 +1234,8 @@ def process_input(request: QueryRequest, raw_request: Request):
 def chat_stream(request: QueryRequest, raw_request: Request):
     user_id, session_id, user_text = _validate_chat(request, raw_request)
 
-    # Device fast-path: a recognized volume command short-circuits the LLM and streams back the ack.
-    ack = _handle_volume_command(user_text, raw_request)
+    # Fast-paths (volume/gesture, reminders) short-circuit the LLM and stream back the ack.
+    ack = _handle_volume_command(user_text, raw_request) or _handle_reminder(user_text, raw_request)
     if ack is not None:
         def vol_gen():
             chat.store_message(session_id, "user", user_text)

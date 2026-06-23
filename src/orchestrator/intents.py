@@ -10,6 +10,7 @@ the LLM for anything we don't recognize. Pure functions, no I/O, easy to unit-te
   - mute / unmute : no value
 """
 import re
+from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
 DEFAULT_STEP = 10                       # % change for a bare "volume up/down"
@@ -24,6 +25,54 @@ _MIN = re.compile(r"\b(min|minimum|lowest|zero)\b", re.I)
 _GESTURE = re.compile(r"\b(gesture|gestures|hand|hands)\b", re.I)
 _BARE_VOLUME = {"volume", "the volume", "volume control", "control volume",
                 "control the volume", "volume please", "volume mode", "control my volume"}
+
+
+_REMINDER_KW = re.compile(r"\b(remind|reminder|timer|alarm|wake me)\b", re.I)
+_DUR = re.compile(r"(\d+)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?|\bh\b|\bm\b|\bs\b)", re.I)
+_AT = re.compile(r"\bat\s+(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)?", re.I)
+
+
+def parse_reminder(text: str, now: datetime) -> Optional[Dict[str, Any]]:
+    """Parse a reminder/timer request → {'due_at': datetime, 'text': str} or None.
+    Handles 'remind me [to X] in N min', 'timer for N', 'remind me to X at 6pm', 'wake me at 7:30'."""
+    if not text or not _REMINDER_KW.search(text):
+        return None
+    t = text.lower()
+
+    total = 0
+    for m in _DUR.finditer(t):
+        n, u = int(m.group(1)), m.group(2)
+        if u.startswith(("h", "hr")):
+            total += n * 3600
+        elif u.startswith(("m", "min")):
+            total += n * 60
+        else:
+            total += n
+    due = None
+    if total > 0 and re.search(r"\b(in|for)\b", t):
+        due = now + timedelta(seconds=total)
+    else:
+        m = _AT.search(t)
+        if m:
+            hh, mm = int(m.group(1)), int(m.group(2) or 0)
+            ap = (m.group(3) or "").replace(".", "")
+            if ap == "pm" and hh < 12:
+                hh += 12
+            if ap == "am" and hh == 12:
+                hh = 0
+            if 0 <= hh <= 23 and 0 <= mm <= 59:
+                due = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+                if due <= now:
+                    due += timedelta(days=1)
+    if due is None or due <= now:
+        return None
+
+    body = None
+    m = re.search(r"\b(?:to|that)\s+(.+)", text, re.I)   # original case for the body
+    if m:
+        body = re.sub(r"\s*\b(in|at|for)\b\s+[\w:.\s]*$", "", m.group(1), flags=re.I).strip()
+    body = (body or ("Timer" if "timer" in t else "Reminder")).rstrip(".!?") or "Reminder"
+    return {"due_at": due, "text": body[:200]}
 
 
 def is_gesture_volume(text: str) -> bool:

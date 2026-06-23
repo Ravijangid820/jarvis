@@ -296,6 +296,7 @@ function App() {
   const [uptime, setUptime] = useState(0)
   const [bootPct, setBootPct] = useState(0)
   const [sys, setSys] = useState({})   // live host stats from /system (CPU/RAM/uptime)
+  const [dueReminders, setDueReminders] = useState([])   // reminders that have fired (banner)
 
   // Command palette (⌘K / Ctrl+K).
   const [paletteOpen, setPaletteOpen] = useState(false)
@@ -427,6 +428,27 @@ function App() {
     const id = setInterval(() => setUptime(Math.floor((Date.now() - sessionStartRef.current) / 1000)), 1000)
     return () => clearInterval(id)
   }, [])
+
+  // Reminders: poll for any that have come due, announce them (banner + TTS when sound is on), then
+  // ack so they fire once. 'Due' is a server-side query, so this just surfaces them.
+  useEffect(() => {
+    if (!token) return
+    const fire = async () => {
+      try {
+        const res = await fetch(API + "/reminders/due", { headers: { Authorization: "Bearer " + token } })
+        if (!res.ok) return
+        const { due } = await res.json()
+        for (const r of (due || [])) {
+          setDueReminders(prev => prev.some(x => x.id === r.id) ? prev : [...prev, r])
+          if (sound) speak(r.text === "Timer" ? "Your timer is up." : "Reminder: " + r.text)
+          fetch(API + "/reminders/" + r.id + "/ack", { method: "POST", headers: { Authorization: "Bearer " + token } }).catch(() => {})
+        }
+      } catch { /* ignore */ }
+    }
+    fire()
+    const id = setInterval(fire, 20000)
+    return () => clearInterval(id)
+  }, [token, sound])   // eslint-disable-line react-hooks/exhaustive-deps
 
   // Boot progress counter, synced to the ~2.1s boot bar.
   useEffect(() => {
@@ -936,6 +958,17 @@ function App() {
         <span className="hud-corner tl" /><span className="hud-corner tr" />
         <span className="hud-corner bl" /><span className="hud-corner br" />
       </div>
+      {dueReminders.length > 0 && (
+        <div style={{ position: "fixed", top: 12, right: 12, zIndex: 1000, display: "flex", flexDirection: "column", gap: 8, maxWidth: 360 }}>
+          {dueReminders.map(r => (
+            <div key={r.id} style={{ background: "rgba(10,20,30,0.95)", border: "1px solid var(--holo-cyan, #67c7eb)", borderRadius: 6, padding: "10px 12px", display: "flex", alignItems: "center", gap: 10, boxShadow: "0 4px 20px rgba(0,0,0,0.5)" }}>
+              <span aria-hidden="true">⏰</span>
+              <span style={{ flex: 1 }}>{r.text === "Timer" ? "Timer's up." : r.text}</span>
+              <button className="hud-btn" onClick={() => setDueReminders(prev => prev.filter(x => x.id !== r.id))}>Dismiss</button>
+            </div>
+          ))}
+        </div>
+      )}
       {/* Ambient parallax particle field — three drifting layers for depth. */}
       <div className="ambient-particles" aria-hidden="true">
         <span className="pfield p1" /><span className="pfield p2" /><span className="pfield p3" />
