@@ -94,22 +94,40 @@ function ArcReactor({ size = 120, className = "" }) {
   )
 }
 
-// JARVIS-style greeting: time-aware, addresses the user by name (or "sir", à la JARVIS),
-// with a rotating tagline. Shown (typed out) on the welcome screen.
+// JARVIS-style greeting: addresses the user as "sir", and varies by the time of day, the day of week,
+// and a bit of "the moment" (late nights, weekends). Re-rolled each session so it never feels canned.
 function jarvisGreeting(_name) {
-  const h = new Date().getHours()
-  const part = h < 12 ? "morning" : h < 18 ? "afternoon" : "evening"
-  const who = "sir"   // JARVIS-style honorific (address as "sir", not the account name)
+  const now = new Date()
+  const h = now.getHours()
+  const weekend = now.getDay() === 0 || now.getDay() === 6
+  const pick = arr => arr[Math.floor(Math.random() * arr.length)]
+
+  // time bucket → fitting openers ("the moment")
+  const part = h < 5 ? "late" : h < 12 ? "morning" : h < 17 ? "afternoon" : h < 21 ? "evening" : "night"
+  const openers = {
+    late:      ["You're up late, sir.", "Burning the midnight oil, sir?", "Still awake at this hour, sir?"],
+    morning:   ["Good morning, sir.", "Morning, sir.", "A fresh start, sir."],
+    afternoon: ["Good afternoon, sir.", "Afternoon, sir.", "Hope the day's going well, sir."],
+    evening:   ["Good evening, sir.", "Evening, sir.", "Winding down, sir?"],
+    night:     ["Good evening, sir.", "Getting late, sir.", "Late shift, sir?"],
+  }
+
+  // taglines: a shared pool plus a few that fit the current moment
   const taglines = [
     "At your service.",
-    "All systems operational — local processing, private server.",
     "How may I help you today?",
-    "A pleasure, as always.",
-    "Welcome home.",
-    "Ready when you are.",
+    "All systems operational — local processing, private server.",
     "Standing by, as ever.",
+    "Ready when you are.",
+    "A pleasure, as always.",
+    "Everything is running smoothly.",
+    "What shall we work on?",
   ]
-  return `Good ${part}, ${who}. ${taglines[Math.floor(Math.random() * taglines.length)]}`
+  if (part === "late" || part === "night") taglines.push("Do get some rest soon, sir.", "I'll keep things quiet.")
+  if (part === "morning") taglines.push("Shall I run through what's pending?", "Let's make a good start.")
+  if (weekend) taglines.push("Enjoying the weekend, sir?", "No rush today, sir.")
+
+  return `${pick(openers[part])} ${pick(taglines)}`
 }
 
 // --- Message rendering (module scope: stable identity so memo() works) ---

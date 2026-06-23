@@ -11,7 +11,9 @@ All notable changes to this project are documented in this file.
   failed `JSON.parse` every time (silently), dropping the audio. The greeting still worked because it
   uses the non-streaming `/tts` endpoint. Fixed by buffering incomplete SSE lines across reads (the
   text content already worked because those lines are small). Server was always sending the audio.
-- **Greeting addresses you as "sir"** (JARVIS-style) instead of the account name.
+- **Greeting addresses you as "sir"** (JARVIS-style) instead of the account name, and is now
+  **time- and moment-aware** — distinct openers for late-night / morning / afternoon / evening / night,
+  plus weekend and context-specific taglines, re-rolled each session so it never feels canned.
 
 ## 2026-06-23 — v2 perf: TTS cache (lossless)
 
