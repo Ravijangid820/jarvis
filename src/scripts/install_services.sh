@@ -79,7 +79,7 @@ else
   ORCH_USER="User=$SVC_USER
 Group=$SVC_USER"
   ORCH_PROTECT="ProtectSystem=strict"
-  ORCH_RW="ReadWritePaths=$REPO/memory $REPO/logs $REPO/.cache $REPO/.venv"
+  ORCH_RW="ReadWritePaths=$REPO/memory $REPO/logs $REPO/.cache $REPO/.venv $REPO/backups"
   ORCH_HOME="Environment=\"HOME=$REPO\"
 Environment=\"HF_HOME=$REPO/.cache/huggingface\""
   ORCH_PH="ProtectHome=true"

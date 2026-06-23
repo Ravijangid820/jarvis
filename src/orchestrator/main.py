@@ -14,10 +14,15 @@ import asyncio
 import json
 import os
 import random
+import re
+import shutil
 import sqlite3
 import secrets
+import tarfile
+import tempfile
 import time
 import urllib.request
+from pathlib import Path
 from urllib.parse import urlsplit
 from collections import defaultdict
 from contextlib import asynccontextmanager
@@ -36,9 +41,10 @@ import memory
 from auth import hash_password, hash_token, verify_password
 from intents import is_gesture_volume, parse_volume
 from budget import is_default_session
-from config import (ADMIN_MAX_INPUT, ALLOWED_ORIGINS, BASE_DIR, COMPLETION_RESERVE_DEFAULT,
-                    CONFIG, INDEX_HTML, LLM_URL, PIPER_BIN, PIPER_MODEL, RATE_LIMIT_RPM,
-                    REACT_DIST_DIR, REGULAR_MAX_INPUT, STATIC_DIR, VALID_FACT_CATEGORIES, logger)
+from config import (ADMIN_MAX_INPUT, ALLOWED_ORIGINS, BASE_DIR, CHROMA_DB_PATH,
+                    COMPLETION_RESERVE_DEFAULT, CONFIG, INDEX_HTML, LLM_URL, PIPER_BIN, PIPER_MODEL,
+                    RATE_LIMIT_RPM, REACT_DIST_DIR, REGULAR_MAX_INPUT, STATIC_DIR,
+                    VALID_FACT_CATEGORIES, logger)
 from db import get_db, init_db
 from llm import llm_content, request_llm, request_llm_stream, synthesize_tts
 
@@ -763,6 +769,86 @@ def admin_audit(request: Request, limit: int = 100):
         return {"entries": [dict(r) for r in rows]}
     finally:
         conn.close()
+
+
+# ----------------- Backups -----------------
+BACKUP_DIR = BASE_DIR / "backups"
+_BACKUP_NAME_RE = re.compile(r"^jarvis-backup-[0-9]{8}-[0-9]{6}\.tar\.gz$")
+
+
+def _create_backup(ts: str) -> Dict[str, Any]:
+    """Snapshot the irreplaceable data into backups/jarvis-backup-<ts>.tar.gz: a CONSISTENT online
+    copy of the SQLite DB (VACUUM INTO) + the ChromaDB dir. Models/config are re-creatable, so excluded
+    (and config holds secrets). `ts` is passed in (scripts can't call Date.now)."""
+    BACKUP_DIR.mkdir(exist_ok=True)
+    name = f"jarvis-backup-{ts}.tar.gz"
+    out = BACKUP_DIR / name
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        conn = get_db()
+        try:
+            conn.execute("VACUUM INTO ?", (str(tmp / "jarvis.db"),))   # consistent, online
+        finally:
+            conn.close()
+        chroma = Path(str(CHROMA_DB_PATH))
+        if chroma.exists():
+            shutil.copytree(chroma, tmp / "chroma_db")
+        with tarfile.open(out, "w:gz") as tar:
+            for p in sorted(tmp.iterdir()):
+                tar.add(p, arcname=p.name)
+    os.chmod(out, 0o600)   # contains password/token hashes + embeddings — keep it owner-only
+    return {"name": name, "size": out.stat().st_size}
+
+
+@app.post("/admin/backup")
+def admin_backup(request: Request):
+    """Create a backup now (admin). Returns the filename + size."""
+    _require_admin(request)
+    try:
+        info = _create_backup(datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S"))
+    except Exception as e:
+        logger.error("backup failed: %s", e)
+        raise HTTPException(status_code=500, detail="Backup failed")
+    _audit(request, "backup.create", f"{info['name']} ({info['size']} bytes)")
+    return {"status": "ok", **info}
+
+
+@app.get("/admin/backups")
+def admin_list_backups(request: Request):
+    _require_admin(request)
+    if not BACKUP_DIR.exists():
+        return {"backups": []}
+    items = []
+    for p in sorted(BACKUP_DIR.glob("jarvis-backup-*.tar.gz"), reverse=True):
+        st = p.stat()
+        items.append({"name": p.name, "size": st.st_size,
+                      "created_at": datetime.fromtimestamp(st.st_mtime, timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")})
+    return {"backups": items}
+
+
+@app.get("/admin/backups/{name}")
+def admin_download_backup(name: str, request: Request):
+    _require_admin(request)
+    if not _BACKUP_NAME_RE.match(name):
+        raise HTTPException(status_code=400, detail="Bad backup name")
+    p = BACKUP_DIR / name
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="No such backup")
+    _audit(request, "backup.download", name)
+    return FileResponse(str(p), media_type="application/gzip", filename=name)
+
+
+@app.delete("/admin/backups/{name}")
+def admin_delete_backup(name: str, request: Request):
+    _require_admin(request)
+    if not _BACKUP_NAME_RE.match(name):
+        raise HTTPException(status_code=400, detail="Bad backup name")
+    p = BACKUP_DIR / name
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="No such backup")
+    p.unlink()
+    _audit(request, "backup.delete", name)
+    return {"status": "ok"}
 
 
 def _can_control_devices(request: Request) -> bool:

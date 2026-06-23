@@ -41,6 +41,8 @@ export default function Admin({ token, onExit }) {
   const [gChatLog, setGChatLog] = useState([])         // admin "global chat" transcript
   const [gChatInput, setGChatInput] = useState("")
   const [audit, setAudit] = useState([])               // audit-log entries
+  const [backups, setBackups] = useState([])
+  const [backingUp, setBackingUp] = useState(false)
   const [err, setErr] = useState("")
 
   const api = async (path, method = "GET", body) => {
@@ -67,7 +69,7 @@ export default function Admin({ token, onExit }) {
     } catch (e) { setErr(e.message) }
   }
   useEffect(() => { load() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (tab === "system") loadAudit() }, [tab])  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (tab === "system") { loadAudit(); loadBackups() } }, [tab])  // eslint-disable-line react-hooks/exhaustive-deps
   // Refresh status periodically (services, faces, enroll requests) without disrupting form edits.
   useEffect(() => {
     const t = setInterval(async () => {
@@ -224,6 +226,27 @@ export default function Admin({ token, onExit }) {
   const loadAudit = async () => {
     try { const d = await api("/admin/audit?limit=200"); setAudit(d.entries || []) } catch (e) { setErr(e.message) }
   }
+  const loadBackups = async () => {
+    try { const d = await api("/admin/backups"); setBackups(d.backups || []) } catch (e) { setErr(e.message) }
+  }
+  const createBackup = async () => {
+    setBackingUp(true)
+    try { await api("/admin/backup", "POST"); await loadBackups() } catch (e) { setErr(e.message) } finally { setBackingUp(false) }
+  }
+  const delBackup = async (name) => {
+    if (!confirm("Delete backup " + name + "?")) return
+    try { await api("/admin/backups/" + encodeURIComponent(name), "DELETE"); loadBackups() } catch (e) { setErr(e.message) }
+  }
+  const downloadBackup = async (name) => {
+    try {
+      const res = await fetch("/admin/backups/" + encodeURIComponent(name), { headers: { Authorization: "Bearer " + token } })
+      if (!res.ok) throw new Error("Download failed")
+      const url = URL.createObjectURL(await res.blob())
+      const a = document.createElement("a"); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove()
+      URL.revokeObjectURL(url)
+    } catch (e) { setErr(e.message) }
+  }
+  const fmtBytes = (n) => n > 1e6 ? (n / 1e6).toFixed(1) + " MB" : (n / 1e3).toFixed(0) + " KB"
 
   // Verify recognition for one enrolled person. Recognition is motion-gated, so a new face_seen
   // only fires when the person moves — we therefore accept the latest sighting that's either NEW
@@ -613,6 +636,34 @@ export default function Admin({ token, onExit }) {
       )}
 
       {tab === "system" && (
+        <>
+        <div className="adm-panel">
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <h2>Backups</h2>
+            <button className="hud-btn" onClick={createBackup} disabled={backingUp}>{backingUp ? "Backing up…" : "Back up now"}</button>
+          </div>
+          <p className="adm-hint">A snapshot of your data — the database (users, knowledge, history) +
+            the vector store. Sensitive (kept owner-only on the server); download to keep a copy off-box.
+            Restore is manual — see <code>docs/setup/backup.md</code>.</p>
+          <table className="adm-table">
+            <thead><tr><th>Backup</th><th>Size</th><th>Created</th><th>Actions</th></tr></thead>
+            <tbody>
+              {backups.map(b => (
+                <tr key={b.name}>
+                  <td className="adm-em">{b.name}</td>
+                  <td>{fmtBytes(b.size)}</td>
+                  <td>{b.created_at}</td>
+                  <td style={{ display: "flex", gap: 6 }}>
+                    <button className="hud-btn" onClick={() => downloadBackup(b.name)}>Download</button>
+                    <button className="hud-btn warn" onClick={() => delBackup(b.name)}>Delete</button>
+                  </td>
+                </tr>
+              ))}
+              {backups.length === 0 && <tr><td colSpan="4" className="adm-empty">No backups yet — click "Back up now".</td></tr>}
+            </tbody>
+          </table>
+        </div>
+
         <div className="adm-panel">
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <h2>Audit log</h2>
@@ -634,6 +685,7 @@ export default function Admin({ token, onExit }) {
             </tbody>
           </table>
         </div>
+        </>
       )}
     </div>
   )

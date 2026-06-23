@@ -4,6 +4,18 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-24 — feat: backups (DB + vector store)
+
+Snapshot the irreplaceable data — `jarvis.db` (consistent, online via `VACUUM INTO`) + `chroma_db/` —
+into `backups/jarvis-backup-<ts>.tar.gz` (chmod 600; holds hashes + embeddings).
+
+- **Admin → System → Backups:** create / list / download (off-box copy) / delete. API:
+  `POST /admin/backup`, `GET /admin/backups`, `GET|DELETE /admin/backups/{name}` (admin-only).
+- **CLI:** `src/scripts/backup.sh` for cron/timer (online, retains newest 14). `docs/setup/backup.md`
+  covers scheduling + manual restore.
+- Sandbox: added `backups/` to the orchestrator's `ReadWritePaths` (installer + live unit).
+- Verified: archive contains DB + vector store, downloads as valid gzip, CLI + API both work.
+
 ## 2026-06-24 — feat: audit log
 
 New `audit_log` table + `_audit()` records who did what — device control (volume, gesture mode) and
