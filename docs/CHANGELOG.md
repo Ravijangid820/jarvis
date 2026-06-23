@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-24 — feat: LLM tool-calling (voice path)
+
+The voice path (`/inbox`) now offers the model tools, so commands the rule fast-paths miss still work
+("turn it down a couple notches" → `set_volume step -5`; "remind me to stretch in 15 minutes" →
+`create_reminder`; "is anybody home?" → `get_presence`). It's a **single** round-trip — the model either
+calls a tool (→ executed with the same authz/audit + a templated confirmation) or just answers — so no
+extra latency vs a normal reply. Rule fast-paths still run first (instant); tools are the fallback and
+where new actions (lights) will plug in. `/chat/stream` (web typing) stays pure streaming + fast-paths.
+Tools execute server-side with full authorization (incl. presence-gating when enabled). Verified live
+for all three tools + normal-chat fall-through; 71 tests pass.
+
 ## 2026-06-24 — feat: finish identity — greet-on-arrival + presence-gated control
 
 - **Greet-on-arrival:** when a recognized person reappears after >5 min away, the server emits a

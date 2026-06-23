@@ -46,7 +46,7 @@ from config import (ADMIN_MAX_INPUT, ALLOWED_ORIGINS, BASE_DIR, CHROMA_DB_PATH,
                     RATE_LIMIT_RPM, REACT_DIST_DIR, REGULAR_MAX_INPUT, REQUIRE_PRESENCE_FOR_CONTROL,
                     STATIC_DIR, VALID_FACT_CATEGORIES, logger)
 from db import get_db, init_db
-from llm import llm_content, request_llm, request_llm_stream, synthesize_tts
+from llm import llm_content, request_llm, request_llm_stream, request_llm_tools, synthesize_tts
 
 
 @asynccontextmanager
@@ -1047,6 +1047,93 @@ def _handle_volume_command(user_text: str, raw_request: Request) -> Optional[str
     return None
 
 
+# ---- LLM tool-calling (voice path). Rule fast-paths still run first; this catches phrasings they
+# miss, and is where new actions (e.g. lights) plug in. Single round-trip + templated confirmation. ----
+TOOLS_SPEC = [
+    {"type": "function", "function": {
+        "name": "set_volume", "description": "Set or change the speaker volume.",
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["set", "step", "mute", "unmute"],
+                       "description": "set=absolute level, step=relative change, mute/unmute"},
+            "value": {"type": "integer", "description": "0-100 for set; positive/negative for step"}},
+            "required": ["action"]}}},
+    {"type": "function", "function": {
+        "name": "create_reminder", "description": "Create a reminder/timer that fires after some minutes.",
+        "parameters": {"type": "object", "properties": {
+            "text": {"type": "string", "description": "what to remind about"},
+            "in_minutes": {"type": "integer", "description": "minutes from now"}},
+            "required": ["in_minutes"]}}},
+    {"type": "function", "function": {
+        "name": "get_presence", "description": "Who the cameras currently recognize as present.",
+        "parameters": {"type": "object", "properties": {}}}},
+]
+
+
+def _tool_set_volume(args, raw_request):
+    if not _can_control_devices(raw_request):
+        return "Sorry — you're not authorized to control devices."
+    if REQUIRE_PRESENCE_FOR_CONTROL and not _authorized_person_present():
+        return "I don't see anyone authorized in the room, so I can't change that right now."
+    action, value = str(args.get("action", "set")).lower(), args.get("value")
+    try:
+        _enqueue_volume(action, value, VOICE_DEVICE)
+    except HTTPException:
+        return "I couldn't make that volume change."
+    _audit(raw_request, "device.volume", f"{action} {value if value is not None else ''} (tool)".strip())
+    return _spoken_volume_ack(action, value)
+
+
+def _tool_create_reminder(args, raw_request):
+    try:
+        mins = int(args.get("in_minutes"))
+    except (TypeError, ValueError):
+        mins = 0
+    if mins <= 0:
+        return "When would you like to be reminded?"
+    text = (str(args.get("text") or "Reminder")).strip()[:200] or "Reminder"
+    due = datetime.now() + timedelta(minutes=mins)
+    conn = get_db()
+    try:
+        conn.execute("INSERT INTO reminders (user_id, text, due_at) VALUES (?, ?, ?)",
+                     (raw_request.state.user_id, text, due.strftime("%Y-%m-%d %H:%M:%S")))
+        conn.commit()
+    finally:
+        conn.close()
+    _audit(raw_request, "reminder.create", f"{text} @ {due.strftime('%Y-%m-%d %H:%M')} (tool)")
+    if text in ("Timer", "Reminder"):
+        return f"{text} set for {due.strftime('%H:%M')}."
+    return f"Okay — I'll remind you to {text} at {due.strftime('%H:%M')}."
+
+
+def _tool_get_presence(args, raw_request):
+    names = memory.get_present_people()
+    return ("I can see " + ", ".join(names) + ".") if names else "I don't see anyone right now."
+
+
+_TOOLS = {"set_volume": _tool_set_volume, "create_reminder": _tool_create_reminder,
+          "get_presence": _tool_get_presence}
+
+
+def _run_tool_calls(message: Dict[str, Any], raw_request: Request) -> Optional[str]:
+    """Execute the first tool call in an assistant message; return a spoken reply, or None if none."""
+    calls = message.get("tool_calls") or []
+    if not calls:
+        return None
+    fn = calls[0].get("function", {})
+    handler = _TOOLS.get(fn.get("name"))
+    if not handler:
+        return None
+    try:
+        args = json.loads(fn.get("arguments") or "{}")
+    except (ValueError, TypeError):
+        args = {}
+    try:
+        return handler(args, raw_request)
+    except Exception as e:
+        logger.warning("tool %s failed: %s", fn.get("name"), e)
+        return None
+
+
 def _handle_reminder(user_text: str, raw_request: Request) -> Optional[str]:
     """If user_text is a reminder/timer, store it for the caller and return a confirmation; else None."""
     now = datetime.now()
@@ -1265,12 +1352,13 @@ def process_input(request: QueryRequest, raw_request: Request):
 
     t0 = time.time()
     with memory.Inflight():
-        llm_resp = request_llm(messages, temperature=request.temperature, top_k=request.top_k, top_p=request.top_p,
-                               min_p=request.min_p, repeat_penalty=request.repeat_penalty, presence_penalty=request.presence_penalty,
-                               frequency_penalty=request.frequency_penalty, n_predict=max_tokens, seed=request.seed)
+        # One call with tools offered: the model either invokes a tool (a command) or just answers.
+        llm_resp = request_llm_tools(messages, TOOLS_SPEC, temperature=request.temperature)
     t1 = time.time()
 
-    answer = llm_content(llm_resp).strip()
+    msg = (llm_resp.get("choices") or [{}])[0].get("message", {})
+    tool_reply = _run_tool_calls(msg, raw_request)
+    answer = tool_reply if tool_reply is not None else (llm_content(llm_resp).strip() or "…")
     comp_tokens = llm_resp.get("usage", {}).get("completion_tokens", 0)
     speed_str = ""
     timings = llm_resp.get("timings", {})

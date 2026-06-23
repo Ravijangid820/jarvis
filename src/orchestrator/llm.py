@@ -86,6 +86,26 @@ def request_llm(messages: List[Dict[str, str]], temperature=None, top_k=None, to
         raise HTTPException(status_code=503, detail="AI backend error")
 
 
+def request_llm_tools(messages: List[Dict[str, Any]], tools: List[Dict[str, Any]],
+                      temperature=None) -> Dict[str, Any]:
+    """One non-streaming call that offers the model `tools`. It either returns tool_calls (a command)
+    or plain content (a normal answer) — a single round-trip, so no extra latency vs a normal reply."""
+    data: Dict[str, Any] = {
+        "messages": messages,
+        "temperature": temperature if temperature is not None else TEMPERATURE,
+        "stream": False, "cache_prompt": True,
+        "tools": tools, "tool_choice": "auto",
+    }
+    req = urllib.request.Request(LLM_URL, data=json.dumps(data).encode("utf-8"),
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except Exception as e:
+        logger.error("LLM tools error: %s", e)
+        raise HTTPException(status_code=503, detail="AI backend error")
+
+
 def request_llm_stream(messages: List[Dict[str, str]], temperature=None, top_k=None, top_p=None, min_p=None,
                        repeat_penalty=None, presence_penalty=None, frequency_penalty=None, n_predict=None,
                        seed=None):
