@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-24 — feat: audit log
+
+New `audit_log` table + `_audit()` records who did what — device control (volume, gesture mode) and
+admin changes (user create/delete/role, key create/delete, household-knowledge add/chat/delete, face
+enroll/delete). `GET /admin/audit` + a new **System** tab in the admin console show it (time · user ·
+action · detail, newest first). Append-only, capped at 5000 rows. Verified: voice/web/admin actions
+are recorded with the acting user.
+
 ## 2026-06-23 — feat: global (household) knowledge base — Phase 2a (storage + API + retrieval)
 
 Two knowledge scopes now: **personal** (`user_knowledge`, per-account, written by that user's chats)

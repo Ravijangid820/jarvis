@@ -8,6 +8,7 @@ const TABS = [
   { id: "keys", label: "Keys" },
   { id: "faces", label: "Faces" },
   { id: "household", label: "Household" },
+  { id: "system", label: "System" },
 ]
 
 const KNOWLEDGE_CATEGORIES = ["home", "household", "rooms", "devices", "people", "location", "other"]
@@ -39,6 +40,7 @@ export default function Admin({ token, onExit }) {
   const [gCat, setGCat] = useState("home")
   const [gChatLog, setGChatLog] = useState([])         // admin "global chat" transcript
   const [gChatInput, setGChatInput] = useState("")
+  const [audit, setAudit] = useState([])               // audit-log entries
   const [err, setErr] = useState("")
 
   const api = async (path, method = "GET", body) => {
@@ -65,6 +67,7 @@ export default function Admin({ token, onExit }) {
     } catch (e) { setErr(e.message) }
   }
   useEffect(() => { load() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (tab === "system") loadAudit() }, [tab])  // eslint-disable-line react-hooks/exhaustive-deps
   // Refresh status periodically (services, faces, enroll requests) without disrupting form edits.
   useEffect(() => {
     const t = setInterval(async () => {
@@ -217,6 +220,9 @@ export default function Admin({ token, onExit }) {
       setGChatLog(l => [...l, { role: "jarvis", text: d.reply }])
       loadGlobal()
     } catch (e) { setGChatLog(l => [...l, { role: "jarvis", text: "⚠ " + e.message }]) }
+  }
+  const loadAudit = async () => {
+    try { const d = await api("/admin/audit?limit=200"); setAudit(d.entries || []) } catch (e) { setErr(e.message) }
   }
 
   // Verify recognition for one enrolled person. Recognition is motion-gated, so a new face_seen
@@ -604,6 +610,30 @@ export default function Admin({ token, onExit }) {
           </table>
         </div>
         </>
+      )}
+
+      {tab === "system" && (
+        <div className="adm-panel">
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <h2>Audit log</h2>
+            <button className="hud-btn" onClick={loadAudit}>Refresh</button>
+          </div>
+          <p className="adm-hint">Who did what — device control and admin changes (most recent first).</p>
+          <table className="adm-table">
+            <thead><tr><th>When</th><th>User</th><th>Action</th><th>Detail</th></tr></thead>
+            <tbody>
+              {audit.map(e => (
+                <tr key={e.id}>
+                  <td>{e.created_at}</td>
+                  <td className="adm-em">{e.username || (e.user_id != null ? "#" + e.user_id : "—")}</td>
+                  <td>{e.action}</td>
+                  <td style={{ opacity: 0.85 }}>{e.detail}</td>
+                </tr>
+              ))}
+              {audit.length === 0 && <tr><td colSpan="4" className="adm-empty">No audit entries yet.</td></tr>}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   )

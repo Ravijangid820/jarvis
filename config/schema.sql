@@ -79,6 +79,17 @@ CREATE TABLE IF NOT EXISTS global_knowledge (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Audit trail: who did what (device control, admin changes). Append-only; capped in code.
+CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    user_id INTEGER,
+    username TEXT,
+    action TEXT NOT NULL,
+    detail TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_audit_id ON audit_log(id DESC);
+
 -- Vision/edge events posted by edge devices (Raspberry Pi camera agent). `data` is JSON.
 CREATE TABLE IF NOT EXISTS vision_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

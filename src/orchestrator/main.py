@@ -725,6 +725,46 @@ async def stream_enroll_preview(request: Request, request_id: int):
     return StreamingResponse(gen(), media_type="application/x-ndjson")
 
 
+_AUDIT_CAP = 5000   # keep the most recent N audit rows
+
+
+def _audit(request: Request, action: str, detail: str = "") -> None:
+    """Append an audit entry (who did what). Best-effort — never breaks the request it's recording."""
+    try:
+        uid = getattr(request.state, "user_id", None)
+        conn = get_db()
+        try:
+            uname = None
+            if uid is not None:
+                row = conn.execute("SELECT username FROM users WHERE id = ?", (uid,)).fetchone()
+                uname = row["username"] if row else None
+            cur = conn.execute(
+                "INSERT INTO audit_log (user_id, username, action, detail) VALUES (?, ?, ?, ?)",
+                (uid, uname, action, (detail or "")[:500]))
+            if cur.lastrowid % 200 == 0:   # prune occasionally, not on every write
+                conn.execute("DELETE FROM audit_log WHERE id <= ?", (cur.lastrowid - _AUDIT_CAP,))
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning("audit log failed (%s): %s", action, e)
+
+
+@app.get("/admin/audit")
+def admin_audit(request: Request, limit: int = 100):
+    """Recent audit entries (most recent first) — device control + admin changes."""
+    _require_admin(request)
+    limit = max(1, min(limit, 1000))
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT id, created_at, user_id, username, action, detail FROM audit_log "
+            "ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        return {"entries": [dict(r) for r in rows]}
+    finally:
+        conn.close()
+
+
 def _can_control_devices(request: Request) -> bool:
     """Authorization for device actions (lights/volume): admins always; others need the
     per-user can_control_devices flag. Enforced HERE, in code — never by the LLM."""
@@ -804,11 +844,13 @@ def _handle_volume_command(user_text: str, raw_request: Request) -> Optional[str
         if not _can_control_devices(raw_request):
             return "Sorry — you're not authorized to control devices."
         _enqueue_volume(vol["action"], vol.get("value"), VOICE_DEVICE)
+        _audit(raw_request, "device.volume", f"{vol['action']} {vol.get('value', '')}".strip())
         return _spoken_volume_ack(vol["action"], vol.get("value"))
     if is_gesture_volume(user_text):                 # "Jarvis, volume" → hand-gesture control
         if not _can_control_devices(raw_request):
             return "Sorry — you're not authorized to control devices."
         _open_gesture_mode(VOICE_CAMERA, VOICE_DEVICE)
+        _audit(raw_request, "device.gesture_mode", VOICE_CAMERA)
         return "Gesture volume control on — raise or lower your hand."
     return None
 
@@ -822,7 +864,9 @@ def queue_volume(req: VolumeRequest, request: Request):
     """
     if not _can_control_devices(request):
         raise HTTPException(status_code=403, detail="Not authorized to control devices")
-    return {"status": "ok", "id": _enqueue_volume(req.action, req.value, req.device)}
+    cmd_id = _enqueue_volume(req.action, req.value, req.device)
+    _audit(request, "device.volume", f"{req.action} {req.value or ''} -> {req.device}".strip())
+    return {"status": "ok", "id": cmd_id}
 
 
 @app.post("/devices/gesture")
@@ -1099,6 +1143,7 @@ def admin_create_user(req: CreateUserRequest, request: Request):
         conn.execute("INSERT INTO users (id, username, password_hash, role) VALUES (?, ?, ?, ?)",
                      (new_id, req.username, hash_password(req.password), req.role))
         conn.commit()
+        _audit(request, "user.create", f"{req.username} role={req.role} id={new_id}")
         return {"status": "ok", "id": new_id}
     except sqlite3.IntegrityError:
         conn.rollback()
@@ -1197,6 +1242,7 @@ def admin_delete_user(user_id: int, request: Request):
     finally:
         conn.close()
     memory.delete_vectors(all_msg_ids)
+    _audit(request, "user.delete", f"id={user_id}")
     return {"status": "ok"}
 
 
@@ -1217,6 +1263,7 @@ def admin_set_role(user_id: int, req: RoleUpdateRequest, request: Request):
         conn.commit()
         if cur.rowcount == 0:
             raise HTTPException(status_code=400, detail="Cannot demote the last admin")
+        _audit(request, "user.role", f"id={user_id} -> {req.role}")
         return {"status": "ok", "role": req.role}
     finally:
         conn.close()
@@ -1236,6 +1283,7 @@ def admin_create_key(req: CreateKeyRequest, request: Request):
                      "VALUES (?, ?, ?, ?, ?)",
                      (hash_token(new_key), new_key[:10], req.user_id, req.description, device_id))
         conn.commit()
+        _audit(request, "key.create", f"user={req.user_id} device={device_id or '-'} ({new_key[:10]}…)")
         return {"key": new_key, "device_id": device_id}
     finally:
         conn.close()
@@ -1262,6 +1310,7 @@ def admin_delete_key(key_id: int, request: Request):
     try:
         conn.execute("DELETE FROM api_keys WHERE rowid = ?", (key_id,))
         conn.commit()
+        _audit(request, "key.delete", f"id={key_id}")
         return {"status": "ok"}
     finally:
         conn.close()
@@ -1381,6 +1430,7 @@ def admin_delete_face(person_id: int, request: Request):
         conn.commit()
         if cur.rowcount == 0:
             raise HTTPException(status_code=404, detail="No such person")
+        _audit(request, "face.delete", f"person_id={person_id}")
         return {"status": "ok"}
     finally:
         conn.close()
@@ -1421,6 +1471,7 @@ def admin_create_enroll_request(req: EnrollRequestCreate, request: Request):
             (req.device_id, name, req.user_id, request.state.user_id))
         conn.execute("DELETE FROM enroll_requests WHERE created_at < datetime('now', '-7 days')")
         conn.commit()
+        _audit(request, "face.enroll_request", f"{name} -> {req.device_id}")
         return {"status": "ok", "id": cur.lastrowid}
     finally:
         conn.close()
@@ -1506,6 +1557,7 @@ def add_global_knowledge(req: KnowledgeFactRequest, request: Request):
     if category not in VALID_FACT_CATEGORIES:
         category = "other"
     fact_id = memory.store_global_fact(category, content, source="manual")
+    _audit(request, "knowledge.global.add", f"[{category}] {content[:120]}")
     return {"id": fact_id, "status": "ok"}
 
 
@@ -1526,6 +1578,7 @@ def remove_global_knowledge(fact_id: int, request: Request):
     _require_admin(request)
     if not memory.delete_global_fact(fact_id):
         raise HTTPException(status_code=404, detail="No such fact")
+    _audit(request, "knowledge.global.delete", f"id={fact_id}")
     return {"status": "ok"}
 
 
@@ -1539,6 +1592,7 @@ def global_knowledge_chat(req: GlobalChatRequest, request: Request):
         raise HTTPException(status_code=400, detail="Nothing to save")
     saved = [{"id": memory.store_global_fact("household", ln, source="global-chat"), "content": ln}
              for ln in lines]
+    _audit(request, "knowledge.global.chat", f"+{len(saved)} fact(s)")
     return {"reply": f"Saved {len(saved)} fact{'s' if len(saved) != 1 else ''} to household knowledge.",
             "saved": saved, "count": len(memory.get_global_knowledge_list())}
 
