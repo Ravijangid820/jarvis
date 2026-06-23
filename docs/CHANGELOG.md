@@ -4,6 +4,19 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-23 — feat: streaming TTS (speak as it generates)
+
+Spoken replies no longer wait for the whole answer + full synthesis before any sound. The web UI now
+detects sentence boundaries in the token stream and synthesizes/plays each sentence as it completes —
+so audio starts after the **first sentence** instead of (full generation + full synth), a big deal at
+~7 tok/s gen + ~2.4 s/sentence synth.
+
+- Client-side: a streaming speaker serializes Piper calls (one at a time — no CPU thrash against the
+  LLM) but prefetches one sentence ahead, so the next renders while the current plays; playback is
+  strictly ordered. Stops cleanly on abort/error.
+- `/chat/stream` no longer synthesizes the whole reply for the web UI (`voice_feedback:false`); the
+  TTS cache still makes repeated sentences instant. The voice listener (`/inbox`) is unchanged.
+
 ## 2026-06-23 — fix: spoken chat replies + greeting says "sir"
 
 - **Chat replies are spoken again.** The web UI's SSE parser split each network chunk independently,

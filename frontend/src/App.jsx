@@ -324,6 +324,45 @@ function App() {
     } catch { /* ignore */ }
   }
 
+  // Streaming TTS: speak sentences as they arrive, in order. Synthesis is serialized (one Piper at a
+  // time on this CPU) but prefetched one ahead — the next sentence renders while the current plays, so
+  // audio starts after the FIRST sentence instead of waiting for the whole reply + full synthesis.
+  const makeSpeaker = (tok = token) => {
+    let active = true
+    let synthChain = Promise.resolve(null)   // serialize Piper calls (no CPU thrash)
+    let playChain = Promise.resolve()        // play strictly in order
+    const ttsOne = async (text) => {
+      try {
+        const res = await fetch(API + "/tts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": "Bearer " + tok },
+          body: JSON.stringify({ text }),
+        })
+        if (!res.ok) return null
+        const { audio } = await res.json()
+        return audio || null
+      } catch { return null }
+    }
+    const playOne = (b64) => new Promise(resolve => {
+      if (!b64 || !active) return resolve()
+      try {
+        const a = new Audio("data:audio/wav;base64," + b64)
+        a.onended = a.onerror = () => resolve()
+        a.play().catch(() => resolve())
+      } catch { resolve() }
+    })
+    return {
+      say(text) {
+        const t = (text || "").trim()
+        if (!t || !active) return
+        const synth = synthChain.then(() => (active ? ttsOne(t) : null))   // starts while prior plays
+        synthChain = synth.catch(() => null)
+        playChain = playChain.then(async () => { if (active) await playOne(await synth) }).catch(() => {})
+      },
+      stop() { active = false },
+    }
+  }
+
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
   const abortRef = useRef(null)   // AbortController for the in-flight /chat/stream request
@@ -645,12 +684,13 @@ function App() {
       // Guard against NaN from a cleared number field (parseInt("") === NaN).
       n_predict: Number.isFinite(nPredict) ? nPredict : undefined,
       seed: Number.isFinite(seed) ? seed : undefined,
-      voice_feedback: sound,   // JARVIS speaks the reply when the voice toggle is on
+      voice_feedback: false,   // the client streams TTS per-sentence (below); no whole-reply synth
       system_prompt: sysPrompt || undefined
     }
 
     const controller = new AbortController()
     abortRef.current = controller
+    let speaker = null   // streaming-TTS handle (scoped here so catch can stop it on abort/error)
 
     try {
       const startTime = performance.now()
@@ -669,7 +709,19 @@ function App() {
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
       let answer = ""
-      let buffer = ""   // an SSE line can span reads (the done event's base64 audio is ~50 KB) — buffer it
+      let buffer = ""   // an SSE line can span reads — buffer it
+      speaker = sound ? makeSpeaker(token) : null   // streaming TTS while sound is on
+      let spokenIdx = 0
+      const flushTTS = (final) => {
+        if (!speaker) return
+        const pending = answer.slice(spokenIdx)
+        if (final) {                                   // speak whatever's left at the end
+          if (pending.trim()) { speaker.say(pending); spokenIdx = answer.length }
+          return
+        }
+        const m = pending.match(/^[\s\S]*[.!?\n](?=\s)/)   // up to the last completed sentence
+        if (m && m[0].trim()) { speaker.say(m[0]); spokenIdx += m[0].length }
+      }
 
       while (true) {
         const { value, done } = await reader.read()
@@ -691,6 +743,7 @@ function App() {
               }
               if (data.content) {
                 answer += data.content
+                flushTTS(false)   // speak each sentence as soon as it completes
                 setMessages(prev => {
                   const newMsgs = [...prev]
                   newMsgs[newMsgs.length - 1] = { role: "jarvis", content: answer, isStreaming: true }
@@ -716,18 +769,14 @@ function App() {
                   setCurrentTitle(data.new_title)
                   loadSessions()
                 }
-                if (data.audio) {
-                  try {
-                    const audio = new Audio("data:audio/wav;base64," + data.audio)
-                    audio.play().catch(() => {})
-                  } catch { /* ignore */ }
-                }
+                flushTTS(true)   // speak the final (partial) sentence
               }
             } catch { /* ignore */ }
           }
         }
       }
     } catch (e) {
+      speaker?.stop()   // halt any queued/playing TTS on abort or error
       if (e.name === "AbortError") {
         // User pressed Stop — keep whatever streamed so far, just end the stream state.
         setMessages(prev => {
