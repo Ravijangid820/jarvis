@@ -96,10 +96,10 @@ function ArcReactor({ size = 120, className = "" }) {
 
 // JARVIS-style greeting: time-aware, addresses the user by name (or "sir", à la JARVIS),
 // with a rotating tagline. Shown (typed out) on the welcome screen.
-function jarvisGreeting(name) {
+function jarvisGreeting(_name) {
   const h = new Date().getHours()
   const part = h < 12 ? "morning" : h < 18 ? "afternoon" : "evening"
-  const who = name ? name.charAt(0).toUpperCase() + name.slice(1) : "sir"
+  const who = "sir"   // JARVIS-style honorific (address as "sir", not the account name)
   const taglines = [
     "At your service.",
     "All systems operational — local processing, private server.",
@@ -651,18 +651,20 @@ function App() {
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
       let answer = ""
+      let buffer = ""   // an SSE line can span reads (the done event's base64 audio is ~50 KB) — buffer it
 
       while (true) {
         const { value, done } = await reader.read()
         if (done) break
-        
-        const chunk = decoder.decode(value, { stream: true })
-        const lines = chunk.split("\n")
-        
-        for (const line of lines) {
+        buffer += decoder.decode(value, { stream: true })
+
+        let nl
+        while ((nl = buffer.indexOf("\n")) >= 0) {
+          const line = buffer.slice(0, nl)
+          buffer = buffer.slice(nl + 1)
           if (line.startsWith("data: ")) {
             const dataStr = line.slice(6)
-            if (dataStr === "[DONE]") break
+            if (dataStr === "[DONE]") continue
             try {
               const data = JSON.parse(dataStr)
               if (data.error && !data.done) {

@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-23 — fix: spoken chat replies + greeting says "sir"
+
+- **Chat replies are spoken again.** The web UI's SSE parser split each network chunk independently,
+  so the `done` event — which carries the ~50 KB base64 TTS audio — was fragmented across reads and
+  failed `JSON.parse` every time (silently), dropping the audio. The greeting still worked because it
+  uses the non-streaming `/tts` endpoint. Fixed by buffering incomplete SSE lines across reads (the
+  text content already worked because those lines are small). Server was always sending the audio.
+- **Greeting addresses you as "sir"** (JARVIS-style) instead of the account name.
+
 ## 2026-06-23 — v2 perf: TTS cache (lossless)
 
 Piper synthesis is ~2.4 s/sentence on this CPU. Synthesized audio is deterministic for a given
