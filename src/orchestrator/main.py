@@ -151,8 +151,7 @@ def _apply_security_headers(response: Response, cache: str = "no-store") -> Resp
 @app.middleware("http")
 async def security_middleware(request: Request, call_next):
     path = request.url.path
-    if (request.method == "OPTIONS" or path in ["/health", "/", "/admin", "/auth/login", "/favicon.svg",
-                                                 "/ca.crt", "/manifest.webmanifest", "/sw.js"]
+    if (request.method == "OPTIONS" or path in ["/health", "/", "/admin", "/auth/login", "/favicon.svg", "/ca.crt"]
             or path.startswith("/static/") or path.startswith("/assets/")):
         resp = await call_next(request)
         # Vite emits content-hashed bundles under /assets — safe to cache forever.
@@ -1944,23 +1943,6 @@ def serve_favicon():
     if not favicon.exists():
         raise HTTPException(status_code=404)
     return FileResponse(favicon, media_type="image/svg+xml")
-
-
-@app.get("/manifest.webmanifest")
-def serve_manifest():
-    p = REACT_DIST_DIR / "manifest.webmanifest"
-    if not p.exists():
-        raise HTTPException(status_code=404)
-    return FileResponse(p, media_type="application/manifest+json")
-
-
-@app.get("/sw.js")
-def serve_sw():
-    p = REACT_DIST_DIR / "sw.js"
-    if not p.exists():
-        raise HTTPException(status_code=404)
-    # SW must be served from the scope root with a JS type; no long cache (so updates land).
-    return FileResponse(p, media_type="text/javascript", headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/ca.crt")

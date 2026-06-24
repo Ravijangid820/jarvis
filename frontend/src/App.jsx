@@ -326,14 +326,6 @@ function App() {
     } catch { /* ignore */ }
   }
 
-  // Local OS notification (no external push — fires only while the app/PWA is alive). Best-effort.
-  const notify = (title, body) => {
-    try {
-      if ("Notification" in window && Notification.permission === "granted")
-        new Notification(title, { body, icon: "/favicon.svg" })
-    } catch { /* ignore */ }
-  }
-
   // Streaming TTS: speak sentences as they arrive, in order. Synthesis is serialized (one Piper at a
   // time on this CPU) but prefetched one ahead — the next sentence renders while the current plays, so
   // audio starts after the FIRST sentence instead of waiting for the whole reply + full synthesis.
@@ -442,7 +434,6 @@ function App() {
   // ack so they fire once. 'Due' is a server-side query, so this just surfaces them.
   useEffect(() => {
     if (!token) return
-    try { if ("Notification" in window && Notification.permission === "default") Notification.requestPermission().catch(() => {}) } catch { /* ignore */ }
     const fire = async () => {
       try {
         const res = await fetch(API + "/reminders/due", { headers: { Authorization: "Bearer " + token } })
@@ -451,7 +442,6 @@ function App() {
         for (const r of (due || [])) {
           setDueReminders(prev => prev.some(x => x.id === r.id) ? prev : [...prev, r])
           if (sound) speak(r.text === "Timer" ? "Your timer is up." : "Reminder: " + r.text)
-          notify(r.text === "Timer" ? "Timer's up" : "Reminder", r.text === "Timer" ? "Your timer is up." : r.text)
           fetch(API + "/reminders/" + r.id + "/ack", { method: "POST", headers: { Authorization: "Bearer " + token } }).catch(() => {})
         }
       } catch { /* ignore */ }
@@ -472,7 +462,6 @@ function App() {
         for (const a of (arrivals || [])) {
           arrivalSeenRef.current = Math.max(arrivalSeenRef.current, a.id)
           if (sound) speak("Welcome home, " + a.name + ".")
-          notify("Welcome home", a.name)
           setDueReminders(prev => [...prev, { id: "arr-" + a.id, text: "Welcome home, " + a.name + "." }])
         }
       } catch { /* ignore */ }
