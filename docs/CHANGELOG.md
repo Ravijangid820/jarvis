@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-26 — packaging: locked, preflighted install
+
+- `setup.sh` now uses **`uv sync --frozen`** — installs the exact committed lockfile, never silently
+  re-resolves — for fully reproducible Python deps.
+- Added **preflight checks** to the Prerequisites step (C toolchain for the native build, free disk,
+  and `HF_TOKEN` for the gated Gemma embedding model) so fresh-box failures surface early with clear
+  guidance instead of cryptic mid-build errors.
+- (Reproducibility was already solid: `uv.lock` + `frontend/package-lock.json` committed, `npm ci`,
+  SHA-pinned model downloads, from-source native builds.)
+
 ## 2026-06-24 — feat: LLM tool-calling (voice path)
 
 The voice path (`/inbox`) now offers the model tools, so commands the rule fast-paths miss still work

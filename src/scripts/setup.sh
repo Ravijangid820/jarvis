@@ -19,9 +19,20 @@ step "Prerequisites"
 command -v uv >/dev/null || { echo "uv is required: https://docs.astral.sh/uv/getting-started/installation/"; exit 1; }
 ok "uv present"
 command -v node >/dev/null && ok "node $(node -v)" || warn "node not found — frontend build will be skipped"
+if [ "${SKIP_NATIVE:-}" != 1 ]; then
+  { command -v cc >/dev/null && command -v cmake >/dev/null; } && ok "C toolchain (cc + cmake)" \
+    || warn "cc/cmake missing — the native whisper/llama build will fail; install build-essential + cmake (or set SKIP_NATIVE=1)"
+fi
+free_gb="$(df -P -BG "$REPO" 2>/dev/null | awk 'NR==2{gsub(/G/,"",$4);print $4}')"
+{ [ -n "$free_gb" ] && [ "$free_gb" -ge 8 ]; } 2>/dev/null && ok "disk: ${free_gb}G free" \
+  || warn "low disk (${free_gb:-?}G free) — models + native builds need several GB"
+if [ "${SKIP_MODELS:-}" != 1 ]; then
+  [ -n "${HF_TOKEN:-}" ] && ok "HF_TOKEN set (for the gated embedding model)" \
+    || warn "HF_TOKEN not set — the Gemma embedding model is gated; export HF_TOKEN or run 'uv run huggingface-cli login' first"
+fi
 
-step "Python environment (uv sync)"
-uv sync && ok ".venv ready (from pyproject + uv.lock)" || { echo "uv sync failed"; exit 1; }
+step "Python environment (uv sync --frozen)"
+uv sync --frozen && ok ".venv ready (locked — exact versions from uv.lock)" || { echo "uv sync --frozen failed"; exit 1; }
 
 step "Config"
 if [ ! -f config/jarvis.json ]; then
