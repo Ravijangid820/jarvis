@@ -8,7 +8,7 @@ import logging
 import os
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import List
+from typing import Any, Dict, List
 
 # Project root. Defaults to the repo location (this file is at <root>/src/orchestrator/
 # config.py) but can be overridden with JARVIS_HOME. Every on-disk path derives from it,
@@ -72,6 +72,18 @@ DB_PATH: str = _resolve(CONFIG["memory"]["db_path"])
 CHROMA_DB_PATH: str = _resolve(CONFIG["memory"].get("chroma_db_path", "memory/chroma_db"))
 MAX_CONTEXT_MESSAGES: int = CONFIG["memory"]["max_context_messages"]
 SYSTEM_PROMPT: str = CONFIG["system_prompt"]
+
+# --- Generation tuning (optional; edit config/jarvis.json, restart — no rebuild) -----------------
+# Default sampling params forwarded to llama.cpp. Anything omitted uses the server's own default, so
+# an empty/absent "sampling" block keeps current behavior. Tune generation without touching code.
+_SAMPLING_KEYS = ("top_k", "top_p", "min_p", "repeat_penalty",
+                  "presence_penalty", "frequency_penalty", "max_tokens", "seed")
+SAMPLING_DEFAULTS: Dict[str, Any] = {
+    k: v for k, v in dict(CONFIG["llm"].get("sampling") or {}).items() if k in _SAMPLING_KEYS
+}
+# Reasoning toggle for Qwen-style models (the "/no_think" control token). True = thinking on,
+# False = off, None (key absent) = leave the system prompt exactly as written.
+REASONING = CONFIG["llm"].get("reasoning", None)
 
 # --- Prompt token budgeting -------------------------------------------------
 # The llama-server is launched with a fixed context window (-c). prompt + generated

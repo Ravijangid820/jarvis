@@ -4,6 +4,35 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-26 — packaging: Docker for the server stack
+
+- Added a **Docker setup** for the server: a multi-stage `Dockerfile` builds **one self-contained image**
+  (Node frontend build → from-source `llama-server` compiled with the project's GGML flags → Python
+  runtime with `uv sync --frozen`, built React UI, baked Piper). `docker-compose.yml` runs that one image
+  as **two services** (`llama` + `orchestrator`) — no dependency on a prebuilt llama image, so the CPU
+  baseline stays under our control (`GGML_AVX2` build-arg) like the native build.
+- First-run `docker/entrypoint.sh` (seeds config, inits the DB, creates the admin from env, ensures the
+  embedding model, prints a status banner), plus `.env.example`, `.dockerignore`, and a Docker-default
+  `config/jarvis.docker.json` (relative paths, `llama` service URL).
+- **Model**: the default (Qwen3.5-2B) is **baked into the image** at build time, so a fresh
+  `docker compose up` runs with **zero model config**. The build uses the GGUF in `./models` if present,
+  otherwise **downloads + SHA-256-verifies** it from `LLM_GGUF_URL` (nothing local needed).
+  `docker/llama-entry.sh` picks the baked default, or your own via `LLM_MODEL` (from the `./models` mount,
+  optionally fetched on first run). The baked copy sits at `/opt` so overrides never hide it.
+- **Inference is tunable, no rebuild**: `config/jarvis.json` gains a `reasoning` on/off toggle (manages
+  the Qwen `/no_think` token) and a `sampling` block (`top_k`/`top_p`/`repeat_penalty`/… forwarded to
+  llama.cpp; omitted keys use its defaults — fully back-compatible). Docker also exposes `LLM_CTX`,
+  `LLAMA_THREADS`, and `LLAMA_EXTRA_ARGS` (any llama-server flag). Applies to native installs too.
+- **API keys**: no build-time secret; minted at runtime with `manage.py mint-key` (or the admin UI) — the
+  banner reprints the `docker compose exec … mint-key` command.
+- **TLS**: opt-in — mount a `tls/` dir with `server.crt`+`server.key` (from `setup_tls.sh`) and the
+  entrypoint serves HTTPS automatically; otherwise HTTP behind your own proxy.
+- Configuration in a container: secrets/bootstrap via **`.env`** (git-ignored), app settings via a
+  mounted **`config/jarvis.json`**, data in **named volumes** (DB + vectors, HF cache, models).
+- Docs: `docs/setup/docker.md`. Camera/volume agents + voice listener stay native (not containerized).
+- Note: **initial / not yet build-tested** — build on a Docker host and iterate (the 2011 box has no
+  Docker and stays on the native `setup-server.sh`).
+
 ## 2026-06-26 — packaging: locked, preflighted install
 
 - `setup.sh` now uses **`uv sync --frozen`** — installs the exact committed lockfile, never silently

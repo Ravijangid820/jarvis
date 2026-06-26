@@ -9,7 +9,8 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 
-from config import BASE_DIR, LLM_URL, PIPER_BIN, PIPER_MODEL, REQUEST_TIMEOUT, TEMPERATURE, logger
+from config import (BASE_DIR, LLM_URL, PIPER_BIN, PIPER_MODEL, REQUEST_TIMEOUT, SAMPLING_DEFAULTS,
+                    TEMPERATURE, logger)
 
 # --- TTS cache: synthesized audio is deterministic for (voice model, text), so cache it on disk and
 # replay on a hit instead of re-running Piper. Lossless (identical bytes); survives restarts. -------
@@ -60,6 +61,18 @@ def _build_payload(messages, temperature, top_k, top_p, min_p, repeat_penalty,
         # Effective only because build_messages keeps the leading system message + history stable.
         "cache_prompt": True,
     }
+    # Where the caller didn't override a param, fall back to the config "sampling" defaults (absent
+    # key -> None -> the value is omitted and llama.cpp uses its own default). Back-compat: an empty
+    # SAMPLING_DEFAULTS leaves the request identical to before.
+    g = SAMPLING_DEFAULTS.get
+    if top_k is None: top_k = g("top_k")
+    if top_p is None: top_p = g("top_p")
+    if min_p is None: min_p = g("min_p")
+    if repeat_penalty is None: repeat_penalty = g("repeat_penalty")
+    if presence_penalty is None: presence_penalty = g("presence_penalty")
+    if frequency_penalty is None: frequency_penalty = g("frequency_penalty")
+    if n_predict is None: n_predict = g("max_tokens")
+    if seed is None: seed = g("seed")
     if top_k is not None: data["top_k"] = top_k
     if top_p is not None: data["top_p"] = top_p
     if min_p is not None: data["min_p"] = min_p

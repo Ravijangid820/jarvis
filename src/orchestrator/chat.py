@@ -8,7 +8,7 @@ import memory
 from budget import clamp_completion, estimate_message_tokens, fit_history, truncate_to_tokens
 from config import (COMPLETION_RESERVE_DEFAULT, KNOWLEDGE_TOKEN_CAP, MAX_CONTEXT_MESSAGES,
                     MAX_CONTEXT_TOKENS, MIN_COMPLETION_TOKENS, PROMPT_SAFETY_MARGIN,
-                    SYSTEM_PROMPT)
+                    REASONING, SYSTEM_PROMPT)
 from db import get_db
 
 
@@ -148,6 +148,12 @@ def build_messages(session_id: str, user_id: int, user_text: str, custom_sys_pro
     added newest-first only while it fits the token budget.
     """
     sys_prompt = custom_sys_prompt if custom_sys_prompt else SYSTEM_PROMPT
+    # Reasoning toggle (Qwen "/no_think"): True strips the token (thinking on), False ensures it
+    # (thinking off), None leaves the prompt untouched. Lets users flip it from config alone.
+    if REASONING is True:
+        sys_prompt = sys_prompt.replace("/no_think", "").strip()
+    elif REASONING is False and "/no_think" not in sys_prompt:
+        sys_prompt = (sys_prompt + " /no_think").strip()
     system_parts = [sys_prompt]
 
     # Household/global knowledge — shared by everyone, admin-curated. Stable across turns, so it stays

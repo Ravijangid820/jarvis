@@ -1,0 +1,3 @@
+# Put your LLM GGUF here (e.g. qwen3.5_2b/Qwen3.5-2B-Q4_K_M.gguf).
+# For Docker, whatever .gguf is here at build time gets baked into the image as the default model.
+# Weights are git-ignored; this .keep just preserves the directory.

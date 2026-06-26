@@ -1,6 +1,6 @@
 {
     "llm": {
-        "fast_brain_url": "http://127.0.0.1:8081/v1/chat/completions",
+        "fast_brain_url": "http://llama:8081/v1/chat/completions",
         "request_timeout_seconds": 120,
         "default_temperature": 0.4,
         "max_context_tokens": 4096,
@@ -8,7 +8,7 @@
         "sampling": {}
     },
     "orchestrator": {
-        "host": "127.0.0.1",
+        "host": "0.0.0.0",
         "port": 5000,
         "max_input_length": 500,
         "rate_limit_requests_per_minute": 120,
@@ -20,5 +20,5 @@
         "chroma_db_path": "memory/chroma_db",
         "max_context_messages": 100
     },
-    "system_prompt": "You are Jarvis, a highly efficient AI assistant. Keep responses brief and precise. You are running on limited hardware so be concise. /no_think"
+    "system_prompt": "You are Jarvis, a highly efficient AI assistant. Keep responses brief and precise. /no_think"
 }
