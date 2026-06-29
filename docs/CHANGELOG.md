@@ -14,6 +14,10 @@ All notable changes to this project are documented in this file.
   image carries every CPU backend (SSE4.2 → AVX-512) and auto-loads the best for the host at runtime — no
   illegal-instruction crashes on AVX-only machines, no per-CPU rebuild, and AVX2/AVX-512 still used when
   present.
+- **CPU-only PyTorch**: pinned torch to the CPU wheel index (`[tool.uv.sources]`), dropping ~5 GB of
+  unused NVIDIA CUDA libraries the default wheel pulls in. Shrinks the image substantially and fixes a
+  build-host disk-exhaustion failure during `uv sync`. (This is a no-GPU deployment; embeddings run on
+  CPU regardless.)
 - First-run `docker/entrypoint.sh` (seeds config, inits the DB, creates the admin from env, ensures the
   embedding model, prints a status banner), plus `.env.example`, `.dockerignore`, and a Docker-default
   `config/jarvis.docker.json` (relative paths, `llama` service URL).

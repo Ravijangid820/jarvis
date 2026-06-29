@@ -9,6 +9,7 @@ dependencies = [
     "chromadb>=1.5.9",
     "fastapi",
     "sentence-transformers>=5.5.1",
+    "torch",          # already pulled in by sentence-transformers; declared here to pin the CPU wheel
     "uvicorn",
 ]
 
@@ -18,6 +19,17 @@ dev = [
     "ruff>=0.6",
     "httpx>=0.27",   # FastAPI TestClient (tests/test_api.py)
 ]
+
+# CPU-only PyTorch. This is a CPU deployment (no GPU), so route torch to the CPU wheel index — it drops
+# ~5 GB of unused NVIDIA CUDA libraries the default wheel pulls in (which bloat the image and can fill
+# the build host's disk). Embeddings run on CPU regardless.
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
