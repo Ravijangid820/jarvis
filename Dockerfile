@@ -111,11 +111,13 @@ COPY --from=native /artifacts/ ./llama.cpp/build/bin/
 # Bake the default model resolved by the `model` stage (from ./models, or auto-downloaded at build).
 # Kept at /opt so a ./models bind-mount override never hides it; the first .gguf found is the default.
 COPY --from=model /out/ /opt/jarvis/models/
-# Bake Piper (binary + voice) so TTS works offline at startup.
-RUN bash src/scripts/piper_setup.sh || echo "WARN: piper_setup failed — TTS will be unavailable until fixed"
+# Normalize CRLF → LF (Windows checkouts) before running shell scripts, or bash fails on the \r
+# ("$'\r': command not found"). Then bake Piper (binary + voice) so TTS works offline at startup.
+RUN sed -i 's/\r$//' src/scripts/*.sh; \
+    bash src/scripts/piper_setup.sh || echo "WARN: piper_setup failed — TTS will be unavailable until fixed"
 # Container entry scripts (orchestrator bootstrap + llama model-ensure wrapper).
 COPY docker/ ./docker/
-RUN chmod +x docker/*.sh
+RUN sed -i 's/\r$//' docker/*.sh && chmod +x docker/*.sh
 # 5000 = orchestrator (HTTP/S), 8081 = llama-server (used when this image runs as the llama service)
 EXPOSE 5000 8081
 ENTRYPOINT ["/app/docker/entrypoint.sh"]
