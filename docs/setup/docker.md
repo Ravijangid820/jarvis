@@ -162,13 +162,12 @@ illegal-instruction crashes, while still using AVX2/AVX-512 when the CPU has the
 (ARM hosts — Apple Silicon, Pi — still need an arm64 build via `buildx`.)
 
 ## Publishing the image
-Set `JARVIS_IMAGE` in `.env` to your registry path, then build and push (both services share the one
-image, so it's pushed once):
+`docker compose build` produces `jarvis-server:local`; tag and push it from the CLI:
 ```bash
-docker login                       # Docker Hub  (or: docker login ghcr.io)
-# in .env:  JARVIS_IMAGE=docker.io/<you>/jarvis-server:0.1
 docker compose build
-docker compose push
+docker login                       # Docker Hub  (or: docker login ghcr.io)
+docker tag jarvis-server:local <you>/jarvis-server:0.1
+docker push <you>/jarvis-server:0.1
 ```
 Notes: the image is large (~5–7 GB — CPU torch + baked model), so the push is slow; **GHCR** handles big
 images better than Docker Hub. Pushing publicly **redistributes the baked model weights** — fine for

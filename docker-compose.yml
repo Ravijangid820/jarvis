@@ -11,7 +11,7 @@
 services:
   # The LLM server — same image, started as llama-server (overrides the orchestrator entrypoint).
   llama:
-    image: ${JARVIS_IMAGE:-jarvis-server:local}
+    image: jarvis-server:local
     build: &jarvis-build
       context: .
       args:
@@ -39,7 +39,7 @@ services:
 
   # The orchestrator — same image, default entrypoint (bootstrap + uvicorn). Serves HTTP on :5000.
   orchestrator:
-    image: ${JARVIS_IMAGE:-jarvis-server:local}
+    image: jarvis-server:local
     build: *jarvis-build
     depends_on:
       - llama
