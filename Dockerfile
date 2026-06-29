@@ -69,10 +69,13 @@ RUN set -eu; mkdir -p /out; \
     fi
 
 # --- Stage 4: Python runtime (orchestrator) + the compiled llama-server ---
-FROM python:3.12-slim AS app
+# Base Python must satisfy pyproject's requires-python (>=3.13); 3.13 matches what we lock + test
+# against. UV_PYTHON_DOWNLOADS=never makes uv use this interpreter instead of fetching its own.
+FROM python:3.13-slim AS app
 ENV JARVIS_HOME=/app \
     JARVIS_CONFIG=/app/config/jarvis.json \
     HF_HOME=/app/.cache/huggingface \
+    UV_PYTHON_DOWNLOADS=never \
     PYTHONUNBUFFERED=1
 # Runtime libs: libgomp1 + libstdc++ for the llama-server binary and torch/onnxruntime;
 # curl/tar for the Piper fetch.
