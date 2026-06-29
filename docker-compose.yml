@@ -20,6 +20,8 @@ services:
         # Baked at build time: if ./models has no .gguf, the model is downloaded from here + verified.
         LLM_GGUF_URL: ${LLM_GGUF_URL:-}
         LLM_GGUF_SHA256: ${LLM_GGUF_SHA256:-}
+        # Which GGUF to bake if ./models holds several (matched by filename; else first found).
+        DEFAULT_MODEL: ${DEFAULT_MODEL:-Qwen3.5-2B-Q4_K_M.gguf}
     # The wrapper ensures the model is present (fetch + verify on first run if missing), then runs
     # llama-server. Model + context come from .env, so swapping models is a one-line change.
     entrypoint: ["/app/docker/llama-entry.sh"]

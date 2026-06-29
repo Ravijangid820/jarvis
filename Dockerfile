@@ -46,9 +46,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && rm -rf /var/lib/apt/lists/*
 ARG LLM_GGUF_URL=
 ARG LLM_GGUF_SHA256=
+# Which GGUF to bake when ./models has several. Prefer this exact filename; fall back to the first
+# one found. Avoids silently baking the wrong model (e.g. a 4B sitting next to the intended 2B).
+ARG DEFAULT_MODEL=Qwen3.5-2B-Q4_K_M.gguf
 COPY models/ /staged/
 RUN set -eu; mkdir -p /out; \
-    existing="$(find /staged -name '*.gguf' -type f | sort | head -n1 || true)"; \
+    existing="$(find /staged -name "$DEFAULT_MODEL" -type f | head -n1 || true)"; \
+    [ -z "$existing" ] && existing="$(find /staged -name '*.gguf' -type f | sort | head -n1 || true)"; \
     if [ -n "$existing" ]; then \
       echo "Baking model from build context: $existing"; cp "$existing" /out/; \
     elif [ -n "$LLM_GGUF_URL" ]; then \

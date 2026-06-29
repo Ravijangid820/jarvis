@@ -69,9 +69,11 @@ image**, so a fresh `docker compose up` runs with zero model configuration — n
 at deploy time.
 
 How baking works at build time: if you've put a `.gguf` in `./models`, it's copied into the image (at
-`/opt/jarvis/models`). **If `./models` is empty, the build downloads the model itself** from
-`LLM_GGUF_URL` and verifies `LLM_GGUF_SHA256` — so you can build with nothing local. Either way the first
-`.gguf` found becomes the default and the image is self-contained and portable afterwards.
+`/opt/jarvis/models`). When several are present it bakes the one named by `DEFAULT_MODEL`
+(`Qwen3.5-2B-Q4_K_M.gguf` by default), else the first found — so a stray larger model sitting next to the
+intended one won't be baked by accident. **If `./models` is empty, the build downloads the model itself**
+from `LLM_GGUF_URL` and verifies `LLM_GGUF_SHA256` — so you can build with nothing local. Either way the
+image is self-contained and portable afterwards.
 
 ### Using your own model
 The baked default sits at a **separate path** from the `./models` mount, so overriding is purely
