@@ -16,6 +16,8 @@ services:
       context: .
       args:
         LLAMA_CPP_REF: ${LLAMA_CPP_REF:-}
+        # llama.cpp compile parallelism — lower if the build OOMs, raise if you have RAM to spare.
+        BUILD_JOBS: ${BUILD_JOBS:-4}
         # Baked at build time: if ./models has no .gguf, the model is downloaded from here + verified.
         LLM_GGUF_URL: ${LLM_GGUF_URL:-}
         LLM_GGUF_SHA256: ${LLM_GGUF_SHA256:-}

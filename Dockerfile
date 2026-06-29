@@ -26,6 +26,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Pin the upstream release for a reproducible, tamper-evident build (recommended). Mirrors
 # build_native.sh: unset = upstream HEAD (not pinned).
 ARG LLAMA_CPP_REF=
+# Compile parallelism. Building all ~14 CPU variants with unlimited -j spikes RAM (AVX-512 units are
+# heavy) and can OOM-kill a memory-limited Docker engine. Cap it; raise if you have RAM, lower if it
+# still OOMs (and give Docker Desktop more memory in Settings → Resources).
+ARG BUILD_JOBS=4
 WORKDIR /src
 # Clone resiliently: force HTTP/1.1 (avoids the "HTTP/2 stream … CANCEL" disconnects seen on flaky
 # links) and retry up to 5×, so a dropped connection recovers instead of failing the whole build.
@@ -46,7 +50,7 @@ RUN set -e; \
     cmake -S . -B build \
       -DGGML_NATIVE=OFF -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON \
       -DLLAMA_CURL=OFF -DLLAMA_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=Release; \
-    cmake --build build -j; \
+    cmake --build build -j "${BUILD_JOBS}"; \
     mkdir -p /artifacts; \
     cp build/bin/llama-server /artifacts/; \
     find build -name '*.so*' -exec cp -av {} /artifacts/ \;
