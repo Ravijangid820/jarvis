@@ -27,20 +27,29 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # build_native.sh: unset = upstream HEAD (not pinned).
 ARG LLAMA_CPP_REF=
 WORKDIR /src
-RUN if [ -n "$LLAMA_CPP_REF" ]; then \
-      git clone --branch "$LLAMA_CPP_REF" --depth 1 https://github.com/ggml-org/llama.cpp . ; \
-    else \
-      echo "WARN: LLAMA_CPP_REF unset — building upstream HEAD (not pinned). Pass --build-arg LLAMA_CPP_REF=<tag> to pin." ; \
-      git clone --depth 1 https://github.com/ggml-org/llama.cpp . ; \
-    fi \
- && echo "llama.cpp at: $(git rev-parse HEAD)" \
- && cmake -S . -B build \
+# Clone resiliently: force HTTP/1.1 (avoids the "HTTP/2 stream … CANCEL" disconnects seen on flaky
+# links) and retry up to 5×, so a dropped connection recovers instead of failing the whole build.
+RUN set -e; \
+    git config --global http.version HTTP/1.1; \
+    git config --global http.postBuffer 1048576000; \
+    [ -n "$LLAMA_CPP_REF" ] || echo "WARN: LLAMA_CPP_REF unset — building upstream HEAD (not pinned). Pass --build-arg LLAMA_CPP_REF=<tag> to pin."; \
+    ok=0; \
+    for i in 1 2 3 4 5; do \
+      echo ">> cloning llama.cpp (attempt $i/5)"; \
+      find . -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true; \
+      if [ -n "$LLAMA_CPP_REF" ]; then git clone --branch "$LLAMA_CPP_REF" --depth 1 https://github.com/ggml-org/llama.cpp .; \
+      else git clone --depth 1 https://github.com/ggml-org/llama.cpp .; fi && { ok=1; break; }; \
+      echo ">> clone failed (slow/flaky network); retrying in 10s…"; sleep 10; \
+    done; \
+    [ "$ok" = 1 ] || { echo "ERROR: llama.cpp clone failed after 5 attempts"; exit 1; }; \
+    echo "llama.cpp at: $(git rev-parse HEAD)"; \
+    cmake -S . -B build \
       -DGGML_NATIVE=OFF -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON \
-      -DLLAMA_CURL=OFF -DLLAMA_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=Release \
- && cmake --build build -j \
- && mkdir -p /artifacts \
- && cp build/bin/llama-server /artifacts/ \
- && find build -name '*.so*' -exec cp -av {} /artifacts/ \;
+      -DLLAMA_CURL=OFF -DLLAMA_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=Release; \
+    cmake --build build -j; \
+    mkdir -p /artifacts; \
+    cp build/bin/llama-server /artifacts/; \
+    find build -name '*.so*' -exec cp -av {} /artifacts/ \;
 
 # --- Stage 3: resolve the default model — use what's in ./models, else download + verify it ---
 FROM debian:12-slim AS model
@@ -61,7 +70,7 @@ RUN set -eu; mkdir -p /out; \
       echo "No model in ./models — downloading from LLM_GGUF_URL"; \
       case "$LLM_GGUF_URL" in https://*) ;; *) echo "WARN: LLM_GGUF_URL is not https:// — could be tampered in transit";; esac; \
       fn="$(basename "$LLM_GGUF_URL")"; case "$fn" in *.gguf) ;; *) fn=model.gguf;; esac; \
-      curl -L --fail -o "/out/$fn" "$LLM_GGUF_URL"; \
+      curl -L --fail --retry 5 --retry-all-errors --retry-delay 5 -C - -o "/out/$fn" "$LLM_GGUF_URL"; \
       if [ -n "$LLM_GGUF_SHA256" ]; then echo "${LLM_GGUF_SHA256}  /out/$fn" | sha256sum -c -; \
       else echo "WARN: LLM_GGUF_SHA256 not set — skipping integrity check (set it to verify the download)"; fi; \
     else \

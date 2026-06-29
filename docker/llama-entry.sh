@@ -19,7 +19,7 @@ if [ -n "${LLM_MODEL:-}" ]; then
       *) log "WARN: LLM_GGUF_URL is not https:// — the download could be tampered with in transit" ;;
     esac
     mkdir -p "$(dirname "$MODEL_FILE")"
-    if ! curl -L --fail -o "$MODEL_FILE" "$LLM_GGUF_URL"; then
+    if ! curl -L --fail --retry 5 --retry-all-errors --retry-delay 5 -C - -o "$MODEL_FILE" "$LLM_GGUF_URL"; then
       log "ERROR: download failed"; rm -f "$MODEL_FILE"; exit 1
     fi
     if [ -n "${LLM_GGUF_SHA256:-}" ]; then
