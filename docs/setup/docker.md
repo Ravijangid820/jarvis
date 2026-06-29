@@ -161,6 +161,20 @@ single `linux/amd64` image runs on AVX-only and AVX2 machines without rebuilding
 illegal-instruction crashes, while still using AVX2/AVX-512 when the CPU has them. No flag to set.
 (ARM hosts — Apple Silicon, Pi — still need an arm64 build via `buildx`.)
 
+## Publishing the image
+Set `JARVIS_IMAGE` in `.env` to your registry path, then build and push (both services share the one
+image, so it's pushed once):
+```bash
+docker login                       # Docker Hub  (or: docker login ghcr.io)
+# in .env:  JARVIS_IMAGE=docker.io/<you>/jarvis-server:0.1
+docker compose build
+docker compose push
+```
+Notes: the image is large (~5–7 GB — CPU torch + baked model), so the push is slow; **GHCR** handles big
+images better than Docker Hub. Pushing publicly **redistributes the baked model weights** — fine for
+Apache-2.0 models, but confirm the license first. The image is `linux/amd64` + runs on any x86-64 CPU
+(see below); ARM needs a separate `buildx` build.
+
 ## Build options
 Both services share one image (a YAML anchor), built once. Build-time arg (set in `.env`):
 - `LLAMA_CPP_REF` — pin the llama.cpp upstream release for a reproducible build (recommended). Unset
