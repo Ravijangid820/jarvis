@@ -106,7 +106,7 @@ all** — detects the platform, installs deps into a uv-managed venv (nothing gl
 git clone <repo> jarvis ; cd jarvis\camera
 # 2. One script: venv + opencv + download/verify the face models  (add -WithPose for pose/gestures):
 powershell -ExecutionPolicy Bypass -File setup.ps1
-# 3. Edit config\config.json: device_id, server.url="http://192.168.0.101:5000".
+# 3. Edit config\config.json: device_id, server.url="http://192.168.1.20:5000".
 # 4. Test with NO key/server first (run via the venv's python — fully sandboxed):
 .venv\Scripts\python -m jarvis_camera.agent --dry-run    # webcam on, events logged, nothing sent
 # 5. Save the device key (helper avoids PowerShell quoting pitfalls), then go live:

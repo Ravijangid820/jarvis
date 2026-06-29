@@ -7,7 +7,7 @@
 # the server a cert for its IP + hostname(s). Re-running reuses the existing CA (so already-trusted
 # clients keep working) and only re-issues the server cert.
 #
-#   bash src/scripts/setup_tls.sh                         # SANs: 127.0.0.1, 192.168.0.101, localhost, jarvis.local
+#   bash src/scripts/setup_tls.sh                         # SANs: 127.0.0.1, 192.168.1.20, localhost, jarvis.local
 #   TLS_IP=192.168.1.50 TLS_HOSTS="localhost jarvis.lan" bash src/scripts/setup_tls.sh
 #
 # After running: enable HTTPS on the service (systemd drop-in below) and install tls/ca.crt as a
@@ -16,7 +16,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TLS="$ROOT/tls"
 SVC_USER="${TLS_SERVICE_USER:-jarvis}"      # the unprivileged user the orchestrator runs as
-IP="${TLS_IP:-192.168.0.101}"
+IP="${TLS_IP:-192.168.1.20}"
 HOSTS="${TLS_HOSTS:-localhost jarvis.local jarvis}"
 DAYS_CA=3650
 DAYS_CERT=825                                # browsers reject leaf certs valid >825 days

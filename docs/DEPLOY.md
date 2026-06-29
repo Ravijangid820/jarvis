@@ -57,17 +57,17 @@ The actual topology here is three tiers, and Tailscale does **not** run in the o
 container:
 
 ```
-tailnet device ──WireGuard (encrypted)──► subnet-router LXC ──HTTPS (local CA) on 192.168.0.0/24──► app LXC :5000
-   (phone/laptop)                          (runs tailscaled,                 (192.168.0.101,
-                                            advertises 192.168.0.0/24)        uvicorn :5000, TLS)
+tailnet device ──WireGuard (encrypted)──► subnet-router LXC ──HTTPS (local CA) on 192.168.1.0/24──► app LXC :5000
+   (phone/laptop)                          (runs tailscaled,                 (192.168.1.20,
+                                            advertises 192.168.1.0/24)        uvicorn :5000, TLS)
 ```
 
 - The Proxmox host and a dedicated **subnet-router LXC** run Tailscale; the router advertises
-  `192.168.0.0/24` so the other VMs/containers reach the tailnet **without** installing Tailscale.
+  `192.168.1.0/24` so the other VMs/containers reach the tailnet **without** installing Tailscale.
 - **Remote access is encrypted** by WireGuard from the device up to the subnet router, and the
   **router → app hop is now HTTPS** too (local CA, see below) — so there's no plaintext segment.
 
-The orchestrator binds `0.0.0.0:5000`, so without a firewall *any* host on `192.168.0.0/24`
+The orchestrator binds `0.0.0.0:5000`, so without a firewall *any* host on `192.168.1.0/24`
 could hit it in plaintext. Restrict `:5000` to loopback (the local voice listener) + the subnet
 router. Persisted in `/etc/nftables.conf` on the **app container** (run as root):
 
@@ -77,9 +77,9 @@ flush ruleset
 table inet filter {
     chain input {
         type filter hook input priority filter;
-        # Jarvis :5000 — only loopback + the Tailscale subnet router (192.168.0.10).
+        # Jarvis :5000 — only loopback + the Tailscale subnet router (192.168.1.2).
         tcp dport 5000 iif lo accept
-        tcp dport 5000 ip saddr 192.168.0.10 accept
+        tcp dport 5000 ip saddr 192.168.1.2 accept
         tcp dport 5000 drop
     }
     chain forward { type filter hook forward priority filter; }
@@ -93,7 +93,7 @@ systemctl enable nftables        # load at boot
 ```
 
 > NOTE: this assumes the subnet router **SNATs** routed traffic to its own LAN IP (the Tailscale
-> default), so packets arrive `from 192.168.0.10`. If you set `--snat-subnet-routes=false` on the
+> default), so packets arrive `from 192.168.1.2`. If you set `--snat-subnet-routes=false` on the
 > router, allow the tailnet CGNAT range instead: `tcp dport 5000 ip saddr 100.64.0.0/10 accept`.
 
 The LLM server (`llama-fast`) already binds `127.0.0.1` only and is never network-exposed.
@@ -120,8 +120,8 @@ Reversible: remove the drop-in → `daemon-reload` → restart (back to HTTP). K
 above as defense-in-depth.
 
 **Alternatives** (if you ever expose beyond the LAN): terminate TLS on the subnet router with
-`tailscale serve --bg --https=443 http://192.168.0.101:5000` (uses `*.ts.net` certs), or Caddy with a
-real domain — `jarvis.example.com { reverse_proxy 192.168.0.101:5000 }`.
+`tailscale serve --bg --https=443 http://192.168.1.20:5000` (uses `*.ts.net` certs), or Caddy with a
+real domain — `jarvis.example.com { reverse_proxy 192.168.1.20:5000 }`.
 
 ### Note on the login rate limiter
 

@@ -1,7 +1,7 @@
 {
   "device_id": "laptop-cam",
   "server": {
-    "url": "https://192.168.0.101:5000",
+    "url": "https://192.168.1.20:5000",
     "events_endpoint": "/events",
     "api_key_file": "config/agent.key",
     "admin_key_file": "config/admin.key",

@@ -196,7 +196,7 @@ _Multi-agent audit (6 reviewers, adversarial verification), 2026-06-15._
 ### 30. [MEDIUM] store_fact word-overlap dedup heuristic is unreliable — both false merges and missed duplicates
 
 - **Location:** `301-318`
-- **Problem:** Dedup uses set(words) Jaccard-style overlap = |A∩B| / max(|A|,|B|) > 0.6 within the same category. Because all extracted facts start with the boilerplate 'The user ...' (per FACT_EXTRACTION_PROMPT), short facts share a large fraction of common words, producing false merges: e.g. 'The user works as a backend developer' vs 'The user works as a frontend manager' have very high word overlap and would overwrite each other despite being different facts (or facts about different jobs over time). Conversely, semantically identical facts phrased differently ('The user lives in Pune' vs 'User currently resides in Pune, Maharashtra') can fall under 0.6 and be stored as duplicates. It is also order/stopword sensitive and ignores negation ('likes' vs 'does not like' overlap heavily). The match is also restricted to identical category, so a fact recategorized by the LLM (work vs personal) never dedups.
+- **Problem:** Dedup uses set(words) Jaccard-style overlap = |A∩B| / max(|A|,|B|) > 0.6 within the same category. Because all extracted facts start with the boilerplate 'The user ...' (per FACT_EXTRACTION_PROMPT), short facts share a large fraction of common words, producing false merges: e.g. 'The user works as a backend developer' vs 'The user works as a frontend manager' have very high word overlap and would overwrite each other despite being different facts (or facts about different jobs over time). Conversely, semantically identical facts phrased differently ('The user lives in Springfield' vs 'User currently resides in Springfield, Illinois') can fall under 0.6 and be stored as duplicates. It is also order/stopword sensitive and ignores negation ('likes' vs 'does not like' overlap heavily). The match is also restricted to identical category, so a fact recategorized by the LLM (work vs personal) never dedups.
 - **Fix:** Given ChromaDB is already in the stack, dedup facts by embedding similarity instead of word overlap, or at minimum strip the common 'The user' prefix and stopwords before computing overlap and raise the threshold. Better: have the extraction LLM step receive the existing facts and emit add/update/delete operations explicitly, rather than reconstructing dedup heuristically.
 
 ### 31. [MEDIUM] Massive overlap: SQLite user_knowledge facts are NOT in ChromaDB, and ChromaDB stores raw transcript not facts — two stores that don't reinforce each other
@@ -319,7 +319,7 @@ _Multi-agent audit (6 reviewers, adversarial verification), 2026-06-15._
 ### 50. [LOW] Naive fact-dedup heuristic and per-fact full-table scan in store_fact
 
 - **Location:** `291-330`
-- **Problem:** store_fact deduplicates with a word-set Jaccard-style overlap > 0.6 (lines 306-310). 'The user lives in Pune' vs 'The user lives in Delhi' share most words and would be treated as the same fact, silently overwriting a correct fact with a different one; conversely small rewordings under threshold create duplicates. It also re-fetches all existing facts in the category and loops in Python on every insert. Given a dedicated ChromaDB vector store already exists for semantic similarity, doing string-overlap dedup in SQL is both inconsistent with the rest of the design and low-quality.
+- **Problem:** store_fact deduplicates with a word-set Jaccard-style overlap > 0.6 (lines 306-310). 'The user lives in Springfield' vs 'The user lives in Shelbyville' share most words and would be treated as the same fact, silently overwriting a correct fact with a different one; conversely small rewordings under threshold create duplicates. It also re-fetches all existing facts in the category and loops in Python on every insert. Given a dedicated ChromaDB vector store already exists for semantic similarity, doing string-overlap dedup in SQL is both inconsistent with the rest of the design and low-quality.
 - **Fix:** Use the vector store (cosine similarity) for semantic dedup, or at minimum normalize/compare on a stable key. Document the heuristic's known failure modes if kept. Avoid the per-insert full-category scan.
 
 ### 51. [LOW] CORS allow_origins=['*'] combined with Bearer-token auth and an admin surface
@@ -592,7 +592,7 @@ _Details of each finding below are unchanged from the original review._
 
 ### F2. [HIGH] Login rate-limit keyed on client IP → global login-lockout DoS behind the subnet router
 - **Location:** `main.py` `check_login_rate` (~80), login (~212).
-- **Problem:** Behind the Tailscale subnet router, all tailnet logins arrive SNAT'd from `192.168.0.10`, so the per-IP 8/min becomes one shared global bucket. (Verified via topology.)
+- **Problem:** Behind the Tailscale subnet router, all tailnet logins arrive SNAT'd from `192.168.1.2`, so the per-IP 8/min becomes one shared global bucket. (Verified via topology.)
 - **Impact:** Any one client can exhaust the bucket and lock out everyone's login; per-attacker throttling is meaningless.
 - **Fix:** Per-username failure throttle + backoff; parse a trusted `X-Forwarded-For` only when behind a real proxy.
 - **Status:** OPEN

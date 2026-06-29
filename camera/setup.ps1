@@ -71,7 +71,7 @@ if (-not (Test-Path "$cam\config\config.json")) {
 
 Write-Host ""
 Write-Host "Setup done. Run everything via the venv's Python (fully sandboxed):" -ForegroundColor Green
-Write-Host "  1. Edit config\config.json: device_id, server.url (e.g. https://192.168.0.101:5000)."
+Write-Host "  1. Edit config\config.json: device_id, server.url (e.g. https://192.168.1.20:5000)."
 Write-Host "  2. Trust the server's HTTPS cert: copy the server's tls\ca.crt to  config\ca.crt"
 Write-Host "  3. On the SERVER: admin -> Keys, mint a DEVICE key (Device ID = this camera; under a"
 Write-Host "     NON-admin user), then save it with the helper (avoids quoting pitfalls):"

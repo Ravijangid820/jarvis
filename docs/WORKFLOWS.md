@@ -65,7 +65,7 @@ and are covered by `tests/test_budget.py`.
 
 Two complementary stores:
 
-- **`user_knowledge`** (SQLite) — curated, full-sentence facts ("The user lives in Pune"), injected
+- **`user_knowledge`** (SQLite) — curated, full-sentence facts ("The user lives in Springfield"), injected
   wholesale into the system prompt (capped). Survives chat deletion.
 - **ChromaDB `jarvis_memory_cos`** — every message embedded as a vector for semantic recall.
 
@@ -111,8 +111,8 @@ the extractor waits for the single LLM slot.
 New facts are merged into an existing one only if they're a true **semantic restatement**:
 the new fact and existing facts in the same category are embedded in one batch, and merged when
 cosine similarity ≥ `FACT_DEDUP_SIM (0.90)`. (If the embedding model is unavailable, a stricter
-word-overlap fallback at `0.85` is used.) This avoids the old bug where "lives in Pune" and
-"lives in Delhi" — which share most words — were wrongly treated as the same fact.
+word-overlap fallback at `0.85` is used.) This avoids the old bug where "lives in Springfield" and
+"lives in Shelbyville" — which share most words — were wrongly treated as the same fact.
 
 ---
 

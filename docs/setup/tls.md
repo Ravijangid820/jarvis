@@ -32,7 +32,7 @@ This writes to `tls/` (gitignored):
 It prints the **CA fingerprint (SHA-256)** — note it; devices verify against it.
 
 **Hostname / SAN:** the cert is valid only for the names/IPs in its *Subject Alternative Name* list
-(default: `127.0.0.1`, `192.168.0.101`, `localhost`, `jarvis.local`). A client must connect using one
+(default: `127.0.0.1`, `192.168.1.20`, `localhost`, `jarvis.local`). A client must connect using one
 of those **and** that name must resolve to the box. The **IP works with no DNS**; a hostname like
 `jarvis.local` needs mDNS, a hosts-file entry, or your router's DNS. Keep the box on a **static IP**
 so the cert/URLs don't break.

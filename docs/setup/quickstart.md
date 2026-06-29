@@ -9,7 +9,7 @@ script + drop in two files (`ca.crt`, `agent.key`) + run.
 
 ---
 
-## Part A — Server (the box, e.g. `192.168.0.101`)
+## Part A — Server (the box, e.g. `192.168.1.20`)
 
 ```bash
 git clone https://github.com/Ravijangid820/jarvis.git /srv/jarvis && cd /srv/jarvis
@@ -69,7 +69,7 @@ powershell -ExecutionPolicy Bypass -File service.ps1 install  # optional: autost
   - Windows: `Import-Certificate -FilePath .\camera\config\ca.crt -CertStoreLocation Cert:\CurrentUser\Root`
     (or double-click → Install → Current User → *Trusted Root Certification Authorities*).
   - Firefox keeps its own store: Settings → Certificates → Authorities → Import.
-- Browse **`https://192.168.0.101:5000`** → log in → **Admin → Faces → "Enroll a face"** (pick the
+- Browse **`https://192.168.1.20:5000`** → log in → **Admin → Faces → "Enroll a face"** (pick the
   camera + a name, watch the live preview).
 - **Phone:** open `https://<server>:5000/ca.crt`, install it (Android: Settings → Security → Install a
   certificate → CA certificate; iOS: install profile → Certificate Trust Settings), then browse the UI.
