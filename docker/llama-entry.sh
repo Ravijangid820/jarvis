@@ -47,6 +47,9 @@ if [ -z "${MODEL_FILE:-}" ] || [ ! -f "$MODEL_FILE" ]; then
 fi
 
 log "model: $MODEL_FILE  [${SRC}]"
+# llama-server is a shared build (so ggml can auto-load the per-CPU backend plugins next to it).
+# Point the loader at that dir — scoped here so it doesn't perturb the orchestrator's torch libs.
+export LD_LIBRARY_PATH="/app/llama.cpp/build/bin:${LD_LIBRARY_PATH:-}"
 # LLAMA_EXTRA_ARGS is intentionally word-split so users can pass any llama-server flags from .env.
 # shellcheck disable=SC2086
 exec /app/llama.cpp/build/bin/llama-server -m "$MODEL_FILE" ${LLAMA_EXTRA_ARGS:-} "$@"

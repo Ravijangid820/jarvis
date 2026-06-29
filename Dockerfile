@@ -14,19 +14,18 @@ RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
-# --- Stage 2: compile llama.cpp (server) from source, with controllable CPU flags ---
+# --- Stage 2: compile llama.cpp from source with ALL CPU variants (runtime auto-detect) ---
+# GGML_CPU_ALL_VARIANTS + GGML_BACKEND_DL build one set of CPU backend plugins (SSE4.2, AVX, AVX2,
+# AVX-512, …). At startup ggml detects the host CPU and loads the best one it supports — so the SAME
+# image runs on AVX-only and AVX2 machines with no illegal-instruction crashes and no per-CPU rebuild,
+# while still using AVX2/AVX-512 when present. (This is how the official llama.cpp images stay portable.)
 FROM debian:12-slim AS native
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      build-essential cmake git ca-certificates \
+      build-essential cmake git ca-certificates libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 # Pin the upstream release for a reproducible, tamper-evident build (recommended). Mirrors
 # build_native.sh: unset = upstream HEAD (not pinned).
 ARG LLAMA_CPP_REF=
-# CPU baseline. Default targets modern hosts (AVX2). For AVX-only / older CPUs set GGML_AVX2=OFF
-# (this is what the native old-box build does). NATIVE=OFF keeps the binary portable, not pinned
-# to the build machine's exact CPU.
-ARG GGML_NATIVE=OFF
-ARG GGML_AVX2=ON
 WORKDIR /src
 RUN if [ -n "$LLAMA_CPP_REF" ]; then \
       git clone --branch "$LLAMA_CPP_REF" --depth 1 https://github.com/ggml-org/llama.cpp . ; \
@@ -36,9 +35,12 @@ RUN if [ -n "$LLAMA_CPP_REF" ]; then \
     fi \
  && echo "llama.cpp at: $(git rev-parse HEAD)" \
  && cmake -S . -B build \
-      -DGGML_NATIVE=${GGML_NATIVE} -DGGML_AVX2=${GGML_AVX2} \
-      -DLLAMA_CURL=OFF -DBUILD_SHARED_LIBS=OFF \
- && cmake --build build -j --target llama-server
+      -DGGML_NATIVE=OFF -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON \
+      -DLLAMA_CURL=OFF -DLLAMA_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=Release \
+ && cmake --build build -j \
+ && mkdir -p /artifacts \
+ && cp build/bin/llama-server /artifacts/ \
+ && find build -name '*.so*' -exec cp -av {} /artifacts/ \;
 
 # --- Stage 3: resolve the default model — use what's in ./models, else download + verify it ---
 FROM debian:12-slim AS model
@@ -87,8 +89,9 @@ RUN uv sync --frozen --no-dev
 COPY src/ ./src/
 COPY config/ ./config/
 COPY --from=web /web/dist ./frontend/dist
-# The from-source llama-server binary (statically linked — single file).
-COPY --from=native /src/build/bin/llama-server ./llama.cpp/build/bin/llama-server
+# llama-server + the ggml backend plugins (one shared lib per CPU variant). ggml dlopens the best
+# match for the host CPU at runtime; llama-entry.sh adds this dir to LD_LIBRARY_PATH.
+COPY --from=native /artifacts/ ./llama.cpp/build/bin/
 # Bake the default model resolved by the `model` stage (from ./models, or auto-downloaded at build).
 # Kept at /opt so a ./models bind-mount override never hides it; the first .gguf found is the default.
 COPY --from=model /out/ /opt/jarvis/models/

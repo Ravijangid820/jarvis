@@ -4,7 +4,7 @@
 # See docs/setup/docker.md.
 #
 # Quick start:
-#   cp .env.example .env        # fill in HF_TOKEN, ADMIN_USER/PASS (optionally LLAMA_CPP_REF, GGML_AVX2)
+#   cp .env.example .env        # fill in HF_TOKEN, ADMIN_USER/PASS (optionally LLAMA_CPP_REF)
 #   # place the GGUF at ./models/qwen3.5_2b/Qwen3.5-2B-Q4_K_M.gguf
 #   docker compose up -d --build
 
@@ -16,7 +16,6 @@ services:
       context: .
       args:
         LLAMA_CPP_REF: ${LLAMA_CPP_REF:-}
-        GGML_AVX2: ${GGML_AVX2:-ON}
         # Baked at build time: if ./models has no .gguf, the model is downloaded from here + verified.
         LLM_GGUF_URL: ${LLM_GGUF_URL:-}
         LLM_GGUF_SHA256: ${LLM_GGUF_SHA256:-}

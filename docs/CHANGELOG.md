@@ -7,10 +7,13 @@ All notable changes to this project are documented in this file.
 ## 2026-06-26 — packaging: Docker for the server stack
 
 - Added a **Docker setup** for the server: a multi-stage `Dockerfile` builds **one self-contained image**
-  (Node frontend build → from-source `llama-server` compiled with the project's GGML flags → Python
-  runtime with `uv sync --frozen`, built React UI, baked Piper). `docker-compose.yml` runs that one image
-  as **two services** (`llama` + `orchestrator`) — no dependency on a prebuilt llama image, so the CPU
-  baseline stays under our control (`GGML_AVX2` build-arg) like the native build.
+  (Node frontend build → from-source `llama-server` → Python runtime with `uv sync --frozen`, built
+  React UI, baked Piper). `docker-compose.yml` runs that one image as **two services** (`llama` +
+  `orchestrator`) — no dependency on a prebuilt llama image.
+- **Runs on any x86-64 CPU**: llama.cpp is built with `GGML_CPU_ALL_VARIANTS` + `GGML_BACKEND_DL`, so one
+  image carries every CPU backend (SSE4.2 → AVX-512) and auto-loads the best for the host at runtime — no
+  illegal-instruction crashes on AVX-only machines, no per-CPU rebuild, and AVX2/AVX-512 still used when
+  present.
 - First-run `docker/entrypoint.sh` (seeds config, inits the DB, creates the admin from env, ensures the
   embedding model, prints a status banner), plus `.env.example`, `.dockerignore`, and a Docker-default
   `config/jarvis.docker.json` (relative paths, `llama` service URL).

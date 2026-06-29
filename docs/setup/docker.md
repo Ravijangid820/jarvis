@@ -24,9 +24,10 @@ that control and gives parity with the native install. The cost is a longer firs
 a powerful build host is for.
 
 ## Prerequisites
-- **Docker + Compose** on the build host. The image's llama.cpp is built per `GGML_AVX2` (default `ON`,
-  i.e. modern hosts); set `GGML_AVX2=OFF` for AVX-only / older CPUs. (The 2011 production box has no
-  Docker and stays on the native `src/scripts/setup-server.sh` build.)
+- **Docker + Compose** on the build host. The image's llama.cpp is built with **all CPU variants** and
+  auto-detects the best one for the host at runtime — so it runs on AVX-only and AVX2 machines alike,
+  no flag to set. (The 2011 production box has no Docker and stays on the native
+  `src/scripts/setup-server.sh` build.)
 - A **model** — nothing to do by default: `.env.example` ships a verified `LLM_GGUF_URL` for
   Qwen3.5-2B, so an empty `./models` auto-downloads + SHA-verifies it at build. To use your own instead,
   drop a `.gguf` in `./models` (it takes precedence) or point `LLM_GGUF_URL` elsewhere. See
@@ -127,8 +128,8 @@ Or mint them from the **admin UI**. The startup banner reprints the `mint-key` c
 Layers — secrets/bootstrap + tunables in env, app settings in a file, data in volumes:
 
 1. **`.env`** (git-ignored, compose reads it) — `HF_TOKEN`, `ADMIN_USER`/`ADMIN_PASS`, `HOST_PORT`,
-   `LLM_MODEL`, `LLM_GGUF_URL`/`LLM_GGUF_SHA256`, `LLM_CTX`, `LLAMA_THREADS`, and build args
-   `LLAMA_CPP_REF`/`GGML_AVX2`.
+   `LLM_MODEL`, `LLM_GGUF_URL`/`LLM_GGUF_SHA256`, `LLM_CTX`, `LLAMA_THREADS`, and the build arg
+   `LLAMA_CPP_REF`.
 2. **`config/jarvis.json`** — app settings. On first run the entrypoint copies it from
    `config/jarvis.docker.json` (relative paths + `fast_brain_url=http://llama:8081`). Edit it on the
    host and restart to change settings. Override the location with `JARVIS_CONFIG` if you prefer.
@@ -153,13 +154,19 @@ Two options:
   (the banner shows `TLS: on` and an `https://` URL). Devices fetch the CA from `GET /ca.crt` and pin its
   fingerprint, exactly as in the native setup. No certs mounted → HTTP (the default).
 
+## CPU portability
+The llama.cpp build uses `GGML_CPU_ALL_VARIANTS` + `GGML_BACKEND_DL`: it compiles one set of CPU backend
+plugins (SSE4.2, AVX, AVX2, AVX-512, …) and **ggml loads the best one for the host CPU at runtime**. So a
+single `linux/amd64` image runs on AVX-only and AVX2 machines without rebuilding and without
+illegal-instruction crashes, while still using AVX2/AVX-512 when the CPU has them. No flag to set.
+(ARM hosts — Apple Silicon, Pi — still need an arm64 build via `buildx`.)
+
 ## Build options
-Both services share one image (a YAML anchor), built once. Build-time args (set in `.env`):
+Both services share one image (a YAML anchor), built once. Build-time arg (set in `.env`):
 - `LLAMA_CPP_REF` — pin the llama.cpp upstream release for a reproducible build (recommended). Unset
   builds upstream HEAD with a warning.
-- `GGML_AVX2` — `ON` (default) targets modern hosts; `OFF` builds for AVX-only / older CPUs.
 
-Rebuild after changing either: `docker compose build --no-cache llama` (or just `up -d --build`).
+Rebuild after changing it: `docker compose build --no-cache` (or just `up -d --build`).
 
 ## Notes / known rough edges (verify on first build)
 - **Image size**: CPU **torch** (embeddings) plus the **baked-in model** make the image large (several GB
