@@ -16,7 +16,8 @@ All notable changes to this project are documented in this file.
   `config/jarvis.docker.json` (relative paths, `llama` service URL).
 - **Model**: the default (Qwen3.5-2B) is **baked into the image** at build time, so a fresh
   `docker compose up` runs with **zero model config**. The build uses the GGUF in `./models` if present,
-  otherwise **downloads + SHA-256-verifies** it from `LLM_GGUF_URL` (nothing local needed).
+  otherwise **downloads + SHA-256-verifies** it from `LLM_GGUF_URL` — which `.env.example` pre-pins to the
+  verified Qwen3.5-2B Q4_K_M GGUF (unsloth), so a fresh clone needs nothing local.
   `docker/llama-entry.sh` picks the baked default, or your own via `LLM_MODEL` (from the `./models` mount,
   optionally fetched on first run). The baked copy sits at `/opt` so overrides never hide it.
 - **Inference is tunable, no rebuild**: `config/jarvis.json` gains a `reasoning` on/off toggle (manages

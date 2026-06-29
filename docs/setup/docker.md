@@ -27,23 +27,22 @@ a powerful build host is for.
 - **Docker + Compose** on the build host. The image's llama.cpp is built per `GGML_AVX2` (default `ON`,
   i.e. modern hosts); set `GGML_AVX2=OFF` for AVX-only / older CPUs. (The 2011 production box has no
   Docker and stays on the native `src/scripts/setup-server.sh` build.)
-- A **model** for build-time baking (see [The model](#the-model)) — either drop a `.gguf` in `./models`,
-  **or** set `LLM_GGUF_URL` (+ `LLM_GGUF_SHA256`) in `.env` and the build downloads it for you. Nothing
-  local required if you use the URL.
+- A **model** — nothing to do by default: `.env.example` ships a verified `LLM_GGUF_URL` for
+  Qwen3.5-2B, so an empty `./models` auto-downloads + SHA-verifies it at build. To use your own instead,
+  drop a `.gguf` in `./models` (it takes precedence) or point `LLM_GGUF_URL` elsewhere. See
+  [The model](#the-model).
 - A **HuggingFace token** for the gated Gemma embedding model — accept its license first
   (<https://huggingface.co/google/embeddinggemma-300m>).
 
 ## Run
 ```bash
-cp .env.example .env          # set HF_TOKEN, ADMIN_USER, ADMIN_PASS
-# put the default model in ./models so the build bakes it in (drop the .gguf there,
-# or run:  LLM_GGUF_URL=<https url> bash src/scripts/download_models.sh)
-docker compose up -d --build  # the model is baked into the image during build
+cp .env.example .env          # set HF_TOKEN, ADMIN_USER, ADMIN_PASS (model URL is already set)
+docker compose up -d --build  # build downloads + bakes the model (~1.3 GB) and compiles llama-server
 docker compose logs -f        # watch the banner + first-run embedding download
 curl http://localhost:5000/health
 ```
-The model is baked into the image, so anyone running the image gets it with **zero config**. First start
-still downloads the embedding model into the `hf-cache` volume (needs `HF_TOKEN`); it's cached after that.
+The model is baked into the image, so anyone running it gets the LLM with **zero config**. First start
+also downloads the embedding model into the `hf-cache` volume (needs `HF_TOKEN`); both are cached after.
 
 ## What you see at startup
 Logs go to `docker compose logs -f` (or stream live if you run `up` without `-d`):
