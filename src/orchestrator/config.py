@@ -115,18 +115,18 @@ Categories: personal, family, preferences, location, work, education, interests,
 
 Rules:
 - Only extract FACTS the user explicitly stated about themselves. Do NOT infer or guess.
-- Each fact must be a full sentence with context (e.g. "The user's name is Ravi" not just "Ravi").
+- Each fact must be a full sentence with context (e.g. "The user's name is Alex" not just "Alex").
 - Include details, nicknames, relationships mentioned.
 - If the user corrects previous info, extract the CORRECTED version.
 - Skip greetings, questions, or generic statements.
 - If no personal facts found, return exactly: []
 
 Examples of good extractions:
-[{"category": "personal", "content": "The user's name is Ravi, also called Ravi bhai by friends"},
- {"category": "location", "content": "The user currently lives in Pune, Maharashtra"},
- {"category": "family", "content": "The user has a younger sister named Priya who is studying medicine"},
+[{"category": "personal", "content": "The user's name is Alex, also called Al by close friends"},
+ {"category": "location", "content": "The user currently lives in Springfield"},
+ {"category": "family", "content": "The user has a younger sibling who is studying medicine"},
  {"category": "preferences", "content": "The user's favourite car is the Tesla Model 3"},
- {"category": "work", "content": "The user works as a backend developer at Infosys"},
+ {"category": "work", "content": "The user works as a backend developer"},
  {"category": "technical", "content": "The user prefers Python and FastAPI for building APIs"}]
 
 Return ONLY the JSON array, nothing else."""

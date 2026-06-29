@@ -57,10 +57,12 @@ node_modules/
 frontend/node_modules/
 frontend/dist/
 
-# ---- Editor / OS ----
+# ---- Editor / OS / tooling ----
 .DS_Store
 *.swp
 .idea/
+# Local Claude Code settings (permissions/MCP allowlist — personal, not source)
+.claude/
 
 # Voice-listener API key (mint with manage.py)
 config/voice_listener.key
