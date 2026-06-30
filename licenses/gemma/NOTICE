@@ -1,0 +1,30 @@
+Gemma is provided under and subject to the Gemma Terms of Use found at ai.google.dev/gemma/terms
+
+--------------------------------------------------------------------------------
+This Jarvis image/distribution includes the embedding model:
+
+    google/embeddinggemma-300m  (EmbeddingGemma, an EmbeddingGemma model by Google)
+
+EmbeddingGemma is governed by the **Gemma Terms of Use**, NOT a standard open-source
+license. By using, reproducing, modifying, or distributing it (including via this image),
+you agree to those Terms.
+
+Authoritative documents (the binding versions live at these URLs):
+  • Gemma Terms of Use ............. https://ai.google.dev/gemma/terms
+  • Gemma Prohibited Use Policy .... https://ai.google.dev/gemma/prohibited_use_policy
+
+Convenience copies are bundled alongside this file (GEMMA_TERMS_OF_USE.md,
+GEMMA_PROHIBITED_USE_POLICY.md) so recipients receive a copy, per Section 3.1 of the Terms.
+
+If you redistribute this image or the weights, you must (Gemma Terms §3.1):
+  1. Pass on the Section 3.2 use restrictions (the Prohibited Use Policy) as enforceable terms,
+     with notice to recipients.
+  2. Provide every recipient a copy of the Gemma Terms of Use (this directory does that).
+  3. Mark any modified model files as modified.
+  4. Include this NOTICE text file.
+
+Google claims no rights in the embeddings/outputs you generate; you are responsible for your use.
+"Gemma" is a trademark of Google LLC — no trademark rights are granted.
+
+To avoid these obligations entirely, set EMBED_MODEL to a non-gated, permissively-licensed
+embedding model (e.g. a BGE/MiniLM model) — Jarvis supports any sentence-transformers model.

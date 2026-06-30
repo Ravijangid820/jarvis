@@ -13,8 +13,13 @@ services:
     image: jarvis-server:local
     build: &jarvis-build
       context: .
+      # HF token (optional) for baking the gated embedding model at build — passed as a secret so it
+      # never lands in the image. `HF_TOKEN=… docker compose build`. See docs/setup/docker.md.
+      secrets:
+        - hf_token
       args:
         LLAMA_CPP_REF: ${LLAMA_CPP_REF:-}
+        EMBED_MODEL: ${EMBED_MODEL:-google/embeddinggemma-300m}
         # llama.cpp compile parallelism — lower if the build OOMs, raise if you have RAM to spare.
         BUILD_JOBS: ${BUILD_JOBS:-4}
         # Baked at build time: if ./models has no .gguf, the model is downloaded from here + verified.
@@ -47,7 +52,8 @@ services:
     # No .env required — every value has a default. Override any of these on the CLI
     # (e.g. `ADMIN_PASS=secret docker compose up -d`), in an optional .env, or here.
     environment:
-      - HF_TOKEN=${HF_TOKEN:-}             # needed only for memory/embeddings; blank = that's off
+      - HF_TOKEN=${HF_TOKEN:-}             # only for a RUNTIME embed download; not needed if baked in
+      - EMBED_MODEL=${EMBED_MODEL:-google/embeddinggemma-300m}
       - ADMIN_USER=${ADMIN_USER:-admin}    # default admin/admin — change ADMIN_PASS for anything exposed
       - ADMIN_PASS=${ADMIN_PASS:-admin}
       - HOST_PORT=${HOST_PORT:-5000}       # shown in the startup banner
@@ -58,9 +64,11 @@ services:
       - ./models:/app/models:ro           # GGUF + any local model assets
       - ./tls:/app/tls:ro                 # optional: drop server.crt + server.key here for HTTPS (setup_tls.sh)
       - jarvis-data:/app/memory           # SQLite DB + ChromaDB vectors (persisted)
-      - hf-cache:/app/.cache/huggingface  # embedding model cache (downloaded on first run)
     restart: unless-stopped
 
 volumes:
   jarvis-data:
-  hf-cache:
+
+secrets:
+  hf_token:
+    environment: HF_TOKEN

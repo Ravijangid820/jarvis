@@ -12,13 +12,20 @@ if [ ! -f config/jarvis.json ]; then
   cp config/jarvis.docker.json config/jarvis.json && log "created config/jarvis.json from the Docker template"
 fi
 
-# 2) Embedding model (gated Gemma) — ensure it's in the HF cache. First run downloads ~1.2GB and
-#    needs HF_TOKEN; progress is shown (not silenced) so it doesn't look frozen.
-log "checking embedding model (first run downloads ~1.2GB; needs HF_TOKEN)…"
-if uv run python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('google/embeddinggemma-300m')"; then
-  EMB="ready"
+# 2) Embedding model. If it's baked into the image cache, run fully OFFLINE (no token, no hub calls).
+#    Otherwise fall back to a runtime download (needs HF_TOKEN + accepted Gemma license).
+export EMBED_MODEL="${EMBED_MODEL:-google/embeddinggemma-300m}"
+if find "${HF_HOME:-/app/.cache/huggingface}/hub" -maxdepth 1 -name 'models--*' 2>/dev/null | grep -q .; then
+  export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+  EMBED_SRC="baked-in (offline, no token)"
 else
-  EMB="UNAVAILABLE — set HF_TOKEN + accept the Gemma license, then restart"
+  EMBED_SRC="runtime download (needs HF_TOKEN + Gemma license)"
+fi
+log "checking embedding model ($EMBED_MODEL — $EMBED_SRC)…"
+if uv run python -c "import os; from sentence_transformers import SentenceTransformer; SentenceTransformer(os.environ['EMBED_MODEL'])"; then
+  EMB="ready — $EMBED_SRC"
+else
+  EMB="UNAVAILABLE — bake it in (see docs), or set HF_TOKEN + accept the Gemma license, then restart"
 fi
 
 # 3) Database schema (init is idempotent).

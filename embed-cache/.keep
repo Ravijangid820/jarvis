@@ -1,0 +1,5 @@
+# A pre-downloaded HuggingFace cache of the embedding model, baked into the Docker image so memory
+# works offline at runtime (no HF token). Populate it with: bash src/scripts/prepare_embed_cache.sh
+# (then `docker compose build`). Empty here on purpose — the weights are git-ignored, and the Docker
+# build also accepts a build-time token secret instead (see docs/setup/docker.md). This .keep just
+# preserves the directory so the Dockerfile's `COPY embed-cache/` is always valid.

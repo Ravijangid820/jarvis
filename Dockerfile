@@ -101,9 +101,32 @@ WORKDIR /app
 # Python deps first so the layer caches across source edits.
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
+# Bake the embedding model so memory works OFFLINE at runtime (no HF token needed). Two sources, tried
+# in order: (1) ./embed-cache/ — a pre-downloaded HF cache (src/scripts/prepare_embed_cache.sh); else
+# (2) download at build via an HF token secret (`HF_TOKEN=… docker compose build`, or
+# `docker build --secret id=hf_token,env=HF_TOKEN …`). The default (embeddinggemma) is gated — see
+# licenses/gemma/; a non-gated EMBED_MODEL needs no token. If neither is present the build still
+# succeeds and the model is fetched at runtime instead. (--no-sync: project src isn't copied yet.)
+ARG EMBED_MODEL=google/embeddinggemma-300m
+COPY embed-cache/ /app/.cache/huggingface/
+RUN --mount=type=secret,id=hf_token \
+    if find /app/.cache/huggingface/hub -maxdepth 1 -name 'models--*' 2>/dev/null | grep -q .; then \
+      echo "Embedding model baked from ./embed-cache."; \
+    elif [ -s /run/secrets/hf_token ]; then \
+      echo "Downloading embedding model ${EMBED_MODEL} at build…"; \
+      HF_TOKEN="$(cat /run/secrets/hf_token)" EMBED_MODEL="${EMBED_MODEL}" \
+        uv run --no-sync python -c "import os; from sentence_transformers import SentenceTransformer; SentenceTransformer(os.environ['EMBED_MODEL'])" \
+        && echo "Embedding model baked from HuggingFace." \
+        || echo "WARN: build-time embedding download failed — will fall back to a runtime download."; \
+    else \
+      echo "NOTE: embedding model not baked (no ./embed-cache, no hf_token secret) — runtime download needed."; \
+    fi
 # Application source + config templates (config/jarvis.json is excluded by .dockerignore).
 COPY src/ ./src/
 COPY config/ ./config/
+# Third-party license notices (Gemma Terms + Prohibited Use Policy) — required to travel with the
+# baked embedding model if the image is redistributed. See licenses/gemma/NOTICE.
+COPY licenses/ ./licenses/
 COPY --from=web /web/dist ./frontend/dist
 # llama-server + the ggml backend plugins (one shared lib per CPU variant). ggml dlopens the best
 # match for the host CPU at runtime; llama-entry.sh adds this dir to LD_LIBRARY_PATH.

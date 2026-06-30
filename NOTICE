@@ -2,3 +2,16 @@ Jarvis AI Assistant
 Copyright 2026 Ravi Jangid
 
 This product is licensed under the Apache License, Version 2.0 (see the LICENSE file).
+
+--------------------------------------------------------------------------------
+Third-party model components
+
+The default embedding model, google/embeddinggemma-300m (EmbeddingGemma), is governed
+by the Gemma Terms of Use — NOT Apache-2.0. When it is bundled (e.g. baked into the
+Docker image), the terms and the responsible-use policy travel with it:
+
+  Gemma is provided under and subject to the Gemma Terms of Use found at
+  ai.google.dev/gemma/terms
+
+See licenses/gemma/ for the NOTICE, the Gemma Terms of Use, and the Gemma Prohibited
+Use Policy. To avoid these terms, set EMBED_MODEL to a permissively-licensed model.

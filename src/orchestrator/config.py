@@ -95,10 +95,14 @@ KNOWLEDGE_TOKEN_CAP: int = 512          # max tokens the injected user-profile b
 MIN_COMPLETION_TOKENS: int = 64         # never squeeze the answer below this
 
 # --- Embeddings / RAG -------------------------------------------------------
-# embeddinggemma-300m is ASYMMETRIC: documents and queries need different prompt prefixes.
-EMBED_MODEL_NAME = "google/embeddinggemma-300m"
-EMBED_DOC_PREFIX = "title: none | text: "
-EMBED_QUERY_PREFIX = "task: search result | query: "
+# Configurable: set EMBED_MODEL (env) or an "embedding" block in jarvis.json to use a different model.
+# Default = embeddinggemma-300m (gated; baked into the Docker image — see licenses/gemma/). Changing
+# the model requires RE-INDEXING existing memories (different vector space) and usually different
+# prompt prefixes below. embeddinggemma is ASYMMETRIC: documents and queries need distinct prefixes.
+_EMBED_CFG = CONFIG.get("embedding") if isinstance(CONFIG.get("embedding"), dict) else {}
+EMBED_MODEL_NAME = os.environ.get("EMBED_MODEL") or _EMBED_CFG.get("model") or "google/embeddinggemma-300m"
+EMBED_DOC_PREFIX = _EMBED_CFG.get("doc_prefix", "title: none | text: ")
+EMBED_QUERY_PREFIX = _EMBED_CFG.get("query_prefix", "task: search result | query: ")
 RAG_DISTANCE_THRESHOLD = 0.6  # cosine distance = 1 - similarity; discard > this
 RAG_MAX_RESULTS = 5
 

@@ -32,22 +32,24 @@ a powerful build host is for.
   Qwen3.5-2B, so an empty `./models` auto-downloads + SHA-verifies it at build. To use your own instead,
   drop a `.gguf` in `./models` (it takes precedence) or point `LLM_GGUF_URL` elsewhere. See
   [The model](#the-model).
-- A **HuggingFace token** for the gated Gemma embedding model — accept its license first
-  (<https://huggingface.co/google/embeddinggemma-300m>).
+- A **HuggingFace token** — only to *bake the embedding model* (memory) into the image, and only for the
+  gated default; accept its license first (<https://huggingface.co/google/embeddinggemma-300m>). See
+  [Embedding model](#embedding-model-memory--baked-in). Not needed for the LLM or to just run.
 
 ## Run
-No config file needed — every value defaults (login `admin`/`admin`, no memory until `HF_TOKEN` is set):
+No config file needed — every value defaults (login `admin`/`admin`). To bake memory in, pass the token:
 ```bash
-docker compose up -d --build  # build bakes the model + compiles llama-server; runs with defaults
-docker compose logs -f        # banner shows the login URL
+HF_TOKEN=hf_xxx docker compose up -d --build   # bakes LLM + embedding model + compiles llama-server
+docker compose logs -f                          # banner shows the login URL
 curl http://localhost:5000/health
 ```
-Override anything on the CLI (or an optional `.env`):
+Without the token it still builds and runs — just without memory until you add it (the LLM is baked
+regardless). Override anything on the CLI (or an optional `.env`):
 ```bash
-ADMIN_PASS=secret HF_TOKEN=hf_xxx docker compose up -d
+ADMIN_PASS=secret docker compose up -d
 ```
-The model is baked into the image, so the LLM works with **zero config**. Setting `HF_TOKEN` enables
-memory — first start then downloads the embedding model into the `hf-cache` volume (cached after).
+Both models are baked into the image, so a built image runs with **zero config and no runtime token** —
+including memory, offline.
 
 ## What you see at startup
 Logs go to `docker compose logs -f` (or stream live if you run `up` without `-d`):
@@ -113,6 +115,31 @@ Nothing is locked down — three layers, none needing a rebuild:
 - **`.env`** (server-level): `LLM_CTX` (context window), `LLAMA_THREADS`, and `LLAMA_EXTRA_ARGS` for any
   other llama-server flag (`--mlock`, `--n-gpu-layers`, …). Changing these restarts the `llama` container.
 - These apply to native installs too — the same `config/jarvis.json` keys work outside Docker.
+
+## Embedding model (memory) — baked in
+Long-term memory/RAG needs an embedding model. It's **baked into the image** so it works **offline at
+runtime with no HF token** (like the native box). Default: `google/embeddinggemma-300m`.
+
+Bake it at build time — two ways:
+- **Token secret (simplest):** `HF_TOKEN=hf_xxx docker compose build`. The token is passed as a build
+  **secret** (never stored in the image) and the model is downloaded + baked. The default is **gated** —
+  accept the license at <https://huggingface.co/google/embeddinggemma-300m> with that token's account,
+  and make sure the token can read gated repos.
+- **Pre-download (robust on a flaky network):** `bash src/scripts/prepare_embed_cache.sh` fills
+  `./embed-cache/` once (resumable); then `docker compose build` just copies it in — a fully offline
+  build, no token at build.
+
+Bake neither and the build still succeeds — the model is fetched **at runtime** instead (needs `HF_TOKEN`).
+
+**Use a different embedding model:** set `EMBED_MODEL` (it's both a build arg and a runtime value). A
+**non-gated** model (e.g. `BAAI/bge-small-en-v1.5`) needs **no token at all**. Changing it **re-indexes**
+memory (different vector space) and may need different prefixes (`embedding.doc_prefix`/`query_prefix`
+in `jarvis.json`).
+
+> **License:** embeddinggemma is under the **Gemma Terms of Use** (not open-source). Shipping an image
+> with it baked in carries redistribution obligations — the required NOTICE + Terms + Prohibited Use
+> Policy live in `licenses/gemma/` and are baked into the image. To avoid them, pick a permissive
+> `EMBED_MODEL`.
 
 ## Admin login & API keys
 Nothing to bootstrap at build time — there's no master key or signing secret. The admin account is

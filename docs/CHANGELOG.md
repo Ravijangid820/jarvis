@@ -4,6 +4,22 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-30 — embedding: baked into the image, configurable, Gemma license bundled
+
+- **Embedding model baked in** — memory now works **offline at runtime with no HF token** (like the
+  native box). The Docker build bakes it two ways: a build-time **token secret**
+  (`HF_TOKEN=… docker compose build`, never stored in the image) or a pre-downloaded `./embed-cache/`
+  (`src/scripts/prepare_embed_cache.sh`, resumable — robust on flaky networks). Neither present → falls
+  back to a runtime download. The `hf-cache` volume is gone (model lives in the image); the entrypoint
+  runs `HF_HUB_OFFLINE` when the model is baked.
+- **Configurable** — `EMBED_MODEL` (build arg + runtime) chooses the embedding model, like the LLM.
+  A non-gated model (e.g. `BAAI/bge-small-en-v1.5`) needs no token at all. Wired through `config.py`
+  (`EMBED_MODEL_NAME` + prefixes), `entrypoint.sh`, and `download_models.sh`. Changing it re-indexes
+  memory (different vector space).
+- **License compliance** — embeddinggemma is under the **Gemma Terms of Use** (not open-source). Added
+  `licenses/gemma/` (NOTICE + Terms + Prohibited Use Policy), baked into the image and referenced from
+  the root `NOTICE`, so redistribution obligations travel with the weights.
+
 ## 2026-06-30 — docker: optional .env, zero-config defaults
 
 - **No `.env` required.** Dropped the orchestrator's `env_file: .env`; every variable is now an explicit

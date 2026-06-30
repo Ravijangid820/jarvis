@@ -108,9 +108,14 @@ only ever *need* to set `HF_TOKEN`, and only if you want long-term memory:
 | Variable | Default | What it's for |
 | --- | --- | --- |
 | `ADMIN_USER` / `ADMIN_PASS` | `admin` / `admin` | Login. **Insecure default — set `ADMIN_PASS` for anything exposed.** |
-| `HF_TOKEN` | _(empty)_ | Enables **memory/RAG**. The embedding model is gated — accept the license at <https://huggingface.co/google/embeddinggemma-300m> and use a token that can read gated repos (<https://huggingface.co/settings/tokens>). Chat works fine without it. |
-| `LLM_MODEL` | baked-in Qwen | Use a different model (`.gguf` in `./models`). |
+| `HF_TOKEN` | _(empty)_ | Only to **bake the embedding model** (memory) into the image at build — `HF_TOKEN=hf_xxx docker compose build`. The default is gated (accept the license + use a gated-repo token). Once baked, memory works offline with no token. Not needed for the LLM or to just run. |
+| `EMBED_MODEL` | embeddinggemma | Embedding model for memory (baked in). Use a **non-gated** one (e.g. `BAAI/bge-small-en-v1.5`) for no token at all. |
+| `LLM_MODEL` | baked-in Qwen | Use a different LLM (`.gguf` in `./models`). |
 | `HOST_PORT` | `5000` | Published port. |
+
+The default embedding model (embeddinggemma) is under the **Gemma Terms of Use**, not Apache-2.0 — the
+required notices ship in `licenses/gemma/` and are baked into the image. See
+[docs/setup/docker.md](docs/setup/docker.md) for baking options and licensing.
 
 ```bash
 # override examples — no file needed:

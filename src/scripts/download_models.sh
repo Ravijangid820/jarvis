@@ -15,15 +15,18 @@ cyan() { printf '\033[1;36m▸ %s\033[0m\n' "$1"; }
 warn() { printf '\033[1;33m  ! %s\033[0m\n' "$1"; }
 ok()   { printf '\033[1;32m  ✓ %s\033[0m\n' "$1"; }
 
-# 1) Embedding model → HuggingFace cache (~/.cache/huggingface). Gated (Gemma license):
-#    accept the terms on the model page and `uv run huggingface-cli login` (or set HF_TOKEN).
-cyan "Embedding model: google/embeddinggemma-300m (HuggingFace cache)"
-if uv run python - <<'PY'
+# 1) Embedding model → HuggingFace cache (~/.cache/huggingface). The default (embeddinggemma) is
+#    gated (Gemma license): accept the terms on the model page and `uv run huggingface-cli login`
+#    (or set HF_TOKEN). Override with EMBED_MODEL=<repo> for a different (e.g. non-gated) model.
+EMBED_MODEL="${EMBED_MODEL:-google/embeddinggemma-300m}"
+cyan "Embedding model: $EMBED_MODEL (HuggingFace cache)"
+if EMBED_MODEL="$EMBED_MODEL" uv run python - <<'PY'
+import os
 from sentence_transformers import SentenceTransformer
-SentenceTransformer("google/embeddinggemma-300m")
+SentenceTransformer(os.environ["EMBED_MODEL"])
 PY
 then ok "embedding model present in cache"
-else warn "could not fetch embeddinggemma-300m — accept its license on HuggingFace and run 'uv run huggingface-cli login' (or set HF_TOKEN), then re-run"
+else warn "could not fetch $EMBED_MODEL — accept its license on HuggingFace and run 'uv run huggingface-cli login' (or set HF_TOKEN), then re-run"
 fi
 
 # 2) Piper TTS (binary + en_GB-alan-medium voice)
