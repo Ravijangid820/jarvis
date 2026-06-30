@@ -90,6 +90,44 @@ curl -X POST http://localhost:5000/inbox \
 uv run pytest -q && uv run ruff check src/orchestrator src/scripts tests
 ```
 
+### With Docker (server stack)
+
+The server (orchestrator + llama.cpp) runs in containers — **one image, two services**, with the default
+model baked in. **All configuration is a `.env` file**, so first run is two commands:
+
+```bash
+cp .env.example .env        # then edit it (see the table below)
+docker compose up -d --build
+docker compose logs -f      # watch the startup banner
+```
+
+What to set in `.env`:
+
+| Variable | What it's for |
+| --- | --- |
+| `HF_TOKEN` | **Needed for memory/RAG.** The embedding model is gated — accept the license at <https://huggingface.co/google/embeddinggemma-300m>, create a read token at <https://huggingface.co/settings/tokens>, and paste it here. (Chat works without it; long-term memory doesn't.) |
+| `ADMIN_USER` | Admin login name (default `admin`). |
+| `ADMIN_PASS` | Leave **blank** → a strong password is generated and **printed once in the startup banner**. Or set your own to pin it. |
+| `LLM_MODEL` / `LLM_GGUF_URL` | Use a model other than the baked-in default (optional). |
+
+**Where to find your login:** `docker compose logs orchestrator` shows the banner with the URL, admin
+user, and (if `ADMIN_PASS` was blank) the generated password:
+
+```
+[jarvis]   Web UI / API : http://localhost:5000
+[jarvis]   Admin user   : admin (created)
+[jarvis]   Admin pass   : InH50pwfGcc3_JPd   ← GENERATED (set ADMIN_PASS in .env to pin your own)
+```
+
+Open the URL, log in. Manage users/keys at runtime via the CLI:
+
+```bash
+docker compose exec orchestrator uv run python src/scripts/manage.py mint-key admin "my laptop"
+docker compose exec orchestrator uv run python src/scripts/manage.py create-admin <user> <pass>
+```
+
+Volumes, CPU portability, HTTPS, and publishing the image: **[docs/setup/docker.md](docs/setup/docker.md)**.
+
 ## Project Structure
 
 ```

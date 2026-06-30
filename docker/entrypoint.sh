@@ -28,14 +28,20 @@ else
   DB="INIT FAILED — check volume permissions / config paths"
 fi
 
-# 4) Admin user from env (created only if it doesn't already exist).
-ADMIN="(none — set ADMIN_USER + ADMIN_PASS to auto-create one)"
-if [ -n "${ADMIN_USER:-}" ] && [ -n "${ADMIN_PASS:-}" ]; then
-  if uv run python src/scripts/manage.py create-admin "$ADMIN_USER" "$ADMIN_PASS" >/dev/null 2>&1; then
-    ADMIN="$ADMIN_USER (created)"
-  else
-    ADMIN="$ADMIN_USER (already existed)"
-  fi
+# 4) Admin user. Default the username; if no password was given, GENERATE one and show it once below.
+#    create-admin is a no-op if the user already exists, so a generated password is only meaningful on
+#    the run that actually creates it — hence we only display GEN_PASS when creation succeeds.
+ADMIN_USER="${ADMIN_USER:-admin}"
+GEN_PASS=""
+if [ -z "${ADMIN_PASS:-}" ]; then
+  GEN_PASS="$(python3 -c 'import secrets; print(secrets.token_urlsafe(12))')"
+  ADMIN_PASS="$GEN_PASS"
+fi
+if uv run python src/scripts/manage.py create-admin "$ADMIN_USER" "$ADMIN_PASS" >/dev/null 2>&1; then
+  ADMIN="$ADMIN_USER (created)"
+else
+  ADMIN="$ADMIN_USER (already exists — unchanged)"
+  GEN_PASS=""   # the generated password was NOT applied; don't show a misleading one
 fi
 
 # 5) TLS — opt in by mounting a tls/ dir holding server.crt + server.key (e.g. from setup_tls.sh).
@@ -54,6 +60,7 @@ log "Jarvis orchestrator — starting"
 log "  Web UI / API : ${SCHEME}://localhost:${PORT}"
 log "  TLS          : ${TLS}"
 log "  Admin user   : ${ADMIN}"
+[ -n "$GEN_PASS" ] && log "  Admin pass   : ${GEN_PASS}   ← GENERATED (set ADMIN_PASS in .env to pin your own)"
 log "  Embedding    : ${EMB}"
 log "  Database     : ${DB}   (persisted in the /app/memory volume)"
 log "  LLM backend  : http://llama:8081   (the 'llama' service)"

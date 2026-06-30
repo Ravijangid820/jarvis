@@ -110,10 +110,12 @@ Nothing is locked down — three layers, none needing a rebuild:
   other llama-server flag (`--mlock`, `--n-gpu-layers`, …). Changing these restarts the `llama` container.
 - These apply to native installs too — the same `config/jarvis.json` keys work outside Docker.
 
-## API keys
+## Admin login & API keys
 Nothing to bootstrap at build time — there's no master key or signing secret. The admin account is
-created from `ADMIN_USER`/`ADMIN_PASS`; everything else is minted at runtime and stored (hashed) in the
-DB volume:
+created on first start from `ADMIN_USER` (default `admin`) and `ADMIN_PASS`. **Leave `ADMIN_PASS` blank
+and the entrypoint generates a strong one and prints it once in the startup banner** (`docker compose
+logs orchestrator`) — set it in `.env` to pin your own. Everything else is minted at runtime and stored
+(hashed) in the DB volume:
 
 ```bash
 # a user/device API key (jk-…), printed once:

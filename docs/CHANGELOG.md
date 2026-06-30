@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-30 — docker: reliable TTS, generated admin password, README config docs
+
+- **Piper (TTS) download is resilient**: `piper_setup.sh` now retries + resumes (`-C -`, 5×) like the
+  model fetch, so the binary/voice bake reliably on flaky/slow networks (fixes the `/tts` 503 when the
+  build silently skipped Piper).
+- **Admin password**: leave `ADMIN_PASS` blank and the container entrypoint generates a strong one and
+  **prints it once in the startup banner** (`ADMIN_USER` defaults to `admin`). Set it in `.env` to pin.
+- **README**: added a "With Docker" Quick Start — the `.env` config table (where to paste `HF_TOKEN`,
+  set/where-to-find the admin login), the runtime `manage.py` CLI, and a link to `docs/setup/docker.md`.
+
 ## 2026-06-26 — packaging: Docker for the server stack
 
 - Added a **Docker setup** for the server: a multi-stage `Dockerfile` builds **one self-contained image**
