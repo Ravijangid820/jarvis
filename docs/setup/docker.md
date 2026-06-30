@@ -36,14 +36,18 @@ a powerful build host is for.
   (<https://huggingface.co/google/embeddinggemma-300m>).
 
 ## Run
+No config file needed — every value defaults (login `admin`/`admin`, no memory until `HF_TOKEN` is set):
 ```bash
-cp .env.example .env          # set HF_TOKEN, ADMIN_USER, ADMIN_PASS (model URL is already set)
-docker compose up -d --build  # build downloads + bakes the model (~1.3 GB) and compiles llama-server
-docker compose logs -f        # watch the banner + first-run embedding download
+docker compose up -d --build  # build bakes the model + compiles llama-server; runs with defaults
+docker compose logs -f        # banner shows the login URL
 curl http://localhost:5000/health
 ```
-The model is baked into the image, so anyone running it gets the LLM with **zero config**. First start
-also downloads the embedding model into the `hf-cache` volume (needs `HF_TOKEN`); both are cached after.
+Override anything on the CLI (or an optional `.env`):
+```bash
+ADMIN_PASS=secret HF_TOKEN=hf_xxx docker compose up -d
+```
+The model is baked into the image, so the LLM works with **zero config**. Setting `HF_TOKEN` enables
+memory — first start then downloads the embedding model into the `hf-cache` volume (cached after).
 
 ## What you see at startup
 Logs go to `docker compose logs -f` (or stream live if you run `up` without `-d`):
@@ -112,10 +116,10 @@ Nothing is locked down — three layers, none needing a rebuild:
 
 ## Admin login & API keys
 Nothing to bootstrap at build time — there's no master key or signing secret. The admin account is
-created on first start from `ADMIN_USER` (default `admin`) and `ADMIN_PASS`. **Leave `ADMIN_PASS` blank
-and the entrypoint generates a strong one and prints it once in the startup banner** (`docker compose
-logs orchestrator`) — set it in `.env` to pin your own. Everything else is minted at runtime and stored
-(hashed) in the DB volume:
+created on first start from `ADMIN_USER` / `ADMIN_PASS`, which **default to `admin` / `admin`** so the
+stack runs with zero config. That default is **insecure** — set `ADMIN_PASS` (CLI, `.env`, or
+`docker run -e`) for anything reachable beyond your machine; the banner warns while the default is in
+use. Everything else is minted at runtime and stored (hashed) in the DB volume:
 
 ```bash
 # a user/device API key (jk-…), printed once:
@@ -127,11 +131,12 @@ docker compose exec orchestrator uv run python src/scripts/manage.py mint-key <u
 Or mint them from the **admin UI**. The startup banner reprints the `mint-key` command as a reminder.
 
 ## How configuration works
-Layers — secrets/bootstrap + tunables in env, app settings in a file, data in volumes:
+Layers — tunables in env (all defaulted), app settings in a file, data in volumes:
 
-1. **`.env`** (git-ignored, compose reads it) — `HF_TOKEN`, `ADMIN_USER`/`ADMIN_PASS`, `HOST_PORT`,
-   `LLM_MODEL`, `LLM_GGUF_URL`/`LLM_GGUF_SHA256`, `LLM_CTX`, `LLAMA_THREADS`, and the build arg
-   `LLAMA_CPP_REF`.
+1. **Env vars** (all optional — every one has a default in `docker-compose.yml`). Set them on the CLI
+   (`HF_TOKEN=… docker compose up`), in an **optional** `.env`, or via `docker run -e`:
+   `HF_TOKEN` (memory; default off), `ADMIN_USER`/`ADMIN_PASS` (default `admin`/`admin`), `HOST_PORT`,
+   `LLM_MODEL`, `LLM_CTX`, `LLAMA_THREADS`, plus build args `LLM_GGUF_URL`/`LLM_GGUF_SHA256`/`LLAMA_CPP_REF`/`BUILD_JOBS`.
 2. **`config/jarvis.json`** — app settings. On first run the entrypoint copies it from
    `config/jarvis.docker.json` (relative paths + `fast_brain_url=http://llama:8081`). Edit it on the
    host and restart to change settings. Override the location with `JARVIS_CONFIG` if you prefer.
@@ -162,15 +167,17 @@ docker run -d --name jarvis-llama --network jarvis \
   jarvis-server:local \
   -c 4096 -t 4 --host 0.0.0.0 --port 8081 --parallel 1
 
-# Orchestrator (--env-file loads your .env from the CLI)
+# Orchestrator — defaults to admin/admin; add -e to override (or --env-file .env to load a file)
 docker run -d --name jarvis-orchestrator --network jarvis \
-  --env-file .env -p 5000:5000 \
+  -p 5000:5000 \
+  -e ADMIN_PASS=secret -e HF_TOKEN=hf_xxx \
   -v "$PWD/config:/app/config" \
   -v jarvis-data:/app/memory \
   -v hf-cache:/app/.cache/huggingface \
   jarvis-server:local
 ```
-Same result as `docker compose up`. (Windows PowerShell: use `${PWD}` for the paths.) Compose just
+Same result as `docker compose up`. The `-e` flags are optional — with none, it runs on defaults
+(login `admin`/`admin`, no memory). (Windows PowerShell: use `${PWD}` for the paths.) Compose just
 records all of this so you don't retype it — which is why it's the recommended way.
 
 ## HTTPS / certificates

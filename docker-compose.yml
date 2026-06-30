@@ -3,10 +3,9 @@
 # on the devices that have the camera/mic/speaker — they are NOT part of this compose.
 # See docs/setup/docker.md.
 #
-# Quick start:
-#   cp .env.example .env        # fill in HF_TOKEN, ADMIN_USER/PASS (optionally LLAMA_CPP_REF)
-#   # place the GGUF at ./models/qwen3.5_2b/Qwen3.5-2B-Q4_K_M.gguf
+# Quick start (no .env needed — everything defaults; admin/admin, no memory until HF_TOKEN is set):
 #   docker compose up -d --build
+#   # override anything on the CLI, e.g.:  HF_TOKEN=hf_xxx ADMIN_PASS=secret docker compose up -d
 
 services:
   # The LLM server — same image, started as llama-server (overrides the orchestrator entrypoint).
@@ -45,9 +44,13 @@ services:
     build: *jarvis-build
     depends_on:
       - llama
-    env_file: .env
+    # No .env required — every value has a default. Override any of these on the CLI
+    # (e.g. `ADMIN_PASS=secret docker compose up -d`), in an optional .env, or here.
     environment:
-      - HOST_PORT=${HOST_PORT:-5000}     # shown in the startup banner
+      - HF_TOKEN=${HF_TOKEN:-}             # needed only for memory/embeddings; blank = that's off
+      - ADMIN_USER=${ADMIN_USER:-admin}    # default admin/admin — change ADMIN_PASS for anything exposed
+      - ADMIN_PASS=${ADMIN_PASS:-admin}
+      - HOST_PORT=${HOST_PORT:-5000}       # shown in the startup banner
     ports:
       - "${HOST_PORT:-5000}:5000"
     volumes:

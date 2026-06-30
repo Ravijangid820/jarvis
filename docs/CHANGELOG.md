@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-06-30 — docker: optional .env, zero-config defaults
+
+- **No `.env` required.** Dropped the orchestrator's `env_file: .env`; every variable is now an explicit
+  `${VAR:-default}` in `docker-compose.yml`, so `docker compose up` runs with no config file at all.
+  Override any value on the CLI (`ADMIN_PASS=secret HF_TOKEN=hf_xxx docker compose up -d`), in an
+  optional `.env`, or `docker run -e`.
+- **Admin defaults to `admin` / `admin`** (was: generate-and-print). Simple + predictable; the banner
+  warns while the insecure default is in use — set `ADMIN_PASS` for anything exposed.
+- `HF_TOKEN` stays the only thing a user supplies (and only for memory). README/docs/.env.example reframed
+  around defaults + CLI overrides.
+
 ## 2026-06-30 — docker: reliable TTS, generated admin password, README config docs
 
 - **Piper (TTS) download is resilient**: `piper_setup.sh` now retries + resumes (`-C -`, 5×) like the
