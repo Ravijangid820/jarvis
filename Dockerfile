@@ -113,11 +113,16 @@ RUN --mount=type=secret,id=hf_token \
     if find /app/.cache/huggingface/hub -maxdepth 1 -name 'models--*' 2>/dev/null | grep -q .; then \
       echo "Embedding model baked from ./embed-cache."; \
     elif [ -s /run/secrets/hf_token ]; then \
-      echo "Downloading embedding model ${EMBED_MODEL} at build…"; \
-      HF_TOKEN="$(cat /run/secrets/hf_token)" EMBED_MODEL="${EMBED_MODEL}" \
-        uv run --no-sync python -c "import os; from sentence_transformers import SentenceTransformer; SentenceTransformer(os.environ['EMBED_MODEL'])" \
-        && echo "Embedding model baked from HuggingFace." \
-        || echo "WARN: build-time embedding download failed — will fall back to a runtime download."; \
+      echo "Downloading embedding model ${EMBED_MODEL} at build (retries + resumes on a flaky network)…"; \
+      n=0; ok=0; \
+      while [ "$n" -lt 5 ]; do n=$((n + 1)); \
+        if HF_TOKEN="$(cat /run/secrets/hf_token)" EMBED_MODEL="${EMBED_MODEL}" \
+             uv run --no-sync python -c "import os; from sentence_transformers import SentenceTransformer; SentenceTransformer(os.environ['EMBED_MODEL'])"; \
+        then ok=1; break; fi; \
+        echo "  embed download attempt $n/5 failed; retrying in 10s (HuggingFace resumes partial files)…"; sleep 10; \
+      done; \
+      [ "$ok" = 1 ] && echo "Embedding model baked from HuggingFace." \
+                    || echo "WARN: embedding bake failed after 5 attempts — will fall back to a runtime download."; \
     else \
       echo "NOTE: embedding model not baked (no ./embed-cache, no hf_token secret) — runtime download needed."; \
     fi

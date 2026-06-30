@@ -140,6 +140,11 @@ Bake it at build time — two ways:
 
 Bake neither and the build still succeeds — the model is fetched **at runtime** instead (needs `HF_TOKEN`).
 
+> **Cache gotcha:** BuildKit excludes the token secret from the layer cache, so if a build already ran
+> *without* a token (caching the "not baked" result), simply re-running with the token won't re-bake —
+> the step stays `CACHED`. Force it: change `embed-cache/` contents, or `docker compose build
+> --no-cache` (heavier — also rebuilds llama/LLM). Setting the token on the **first** build avoids this.
+
 **Use a different embedding model:** set `EMBED_MODEL` (it's both a build arg and a runtime value). A
 **non-gated** model (e.g. `BAAI/bge-small-en-v1.5`) needs **no token at all**. Changing it **re-indexes**
 memory (different vector space) and may need different prefixes (`embedding.doc_prefix`/`query_prefix`
