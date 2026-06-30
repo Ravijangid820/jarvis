@@ -48,6 +48,15 @@ regardless). Override anything on the CLI (or an optional `.env`):
 ```bash
 ADMIN_PASS=secret docker compose up -d
 ```
+
+> **Windows PowerShell** doesn't support the inline `VAR=value cmd` form — set it first:
+> ```powershell
+> $env:HF_TOKEN = "hf_xxx"
+> docker compose build
+> docker compose up -d
+> ```
+> (`Remove-Item Env:\HF_TOKEN` to clear it afterwards.) The `VAR=value cmd …` examples elsewhere in
+> this doc are bash/macOS — translate them the same way on PowerShell.
 Both models are baked into the image, so a built image runs with **zero config and no runtime token** —
 including memory, offline.
 
