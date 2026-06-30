@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-07-01 — ci: build + push the image on GitHub Actions (GHCR)
+
+- Added `.github/workflows/build-push.yml` — builds the self-contained image on GitHub's runners and
+  pushes to GHCR, so the multi-GB image is never uploaded from a local machine. Frees ~25 GB of runner
+  disk first (the image needs ~20–30 GB to build), passes `HF_TOKEN` as a BuildKit secret to bake the
+  embedding model (never stored in the image), and downloads both models during the build. Triggered
+  manually (workflow_dispatch) or by pushing a `v*` tag. Docs: docs/setup/docker.md.
+
 ## 2026-06-30 — embedding: baked into the image, configurable, Gemma license bundled
 
 - **Embedding model baked in** — memory now works **offline at runtime with no HF token** (like the

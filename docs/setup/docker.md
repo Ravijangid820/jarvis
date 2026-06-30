@@ -250,10 +250,22 @@ docker login                       # Docker Hub  (or: docker login ghcr.io)
 docker tag jarvis-server:local <you>/jarvis-server:0.1
 docker push <you>/jarvis-server:0.1
 ```
-Notes: the image is large (~5–7 GB — CPU torch + baked model), so the push is slow; **GHCR** handles big
-images better than Docker Hub. Pushing publicly **redistributes the baked model weights** — fine for
-Apache-2.0 models, but confirm the license first. The image is `linux/amd64` + runs on any x86-64 CPU
-(see below); ARM needs a separate `buildx` build.
+Notes: the image is large (~7–8 GB — CPU torch + baked LLM + baked embedding), so the push is slow;
+**GHCR** handles big images better than Docker Hub. Pushing publicly **redistributes the baked weights** —
+the LLM is Apache-2.0, but the embedding (Gemma) carries the Gemma Terms (bundled in `licenses/gemma/`).
+The image is `linux/amd64` + runs on any x86-64 CPU; ARM needs a separate `buildx` build.
+
+### Build + push on GitHub Actions (no upload from your machine)
+`.github/workflows/build-push.yml` builds the image **on GitHub's runners** (fast link) and pushes to
+GHCR — so you never upload 7–8 GB over your own connection. One-time setup:
+1. Add a repo secret **`HF_TOKEN`** (Settings → Secrets and variables → Actions) — a token that accepts
+   the Gemma license and can read gated repos. (Without it the LLM still bakes; the embedding won't.)
+2. Run it: Actions tab → **Build & push image (GHCR)** → *Run workflow* (pick a tag), or push a `v*` git tag.
+3. The image lands at `ghcr.io/<owner>/jarvis-server:<tag>`. It's **private** by default — make it public
+   in the repo's package settings if you want.
+
+The workflow frees ~25 GB of runner disk first (the image needs ~20–30 GB to build), passes `HF_TOKEN` as
+a BuildKit secret (never stored in the image), and downloads both models during the build.
 
 ## Build options
 Both services share one image (a YAML anchor), built once. Build-time arg (set in `.env`):

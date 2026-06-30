@@ -1,0 +1,78 @@
+name: Build & push image (GHCR)
+
+# Builds the self-contained server image on GitHub's runners (fast network — no big upload from your
+# laptop) and pushes it to GitHub Container Registry. Trigger manually (Actions tab → Run workflow)
+# or by pushing a v* tag.
+#
+# Required once: add a repo secret HF_TOKEN (Settings → Secrets and variables → Actions) — a token that
+# accepts the Gemma license and can read gated repos. Without it the embedding model won't bake in
+# (the LLM still does). See docs/setup/docker.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag (e.g. 0.1)"
+        required: true
+        default: "latest"
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free up disk space
+        run: |
+          # The image (CPU torch + baked LLM + baked embedding) needs ~20-30 GB during the build, but a
+          # runner only has ~14 GB free by default. Drop preinstalled SDKs we don't use to reclaim ~25 GB.
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/lib/android \
+                      /opt/hostedtoolcache /usr/local/share/boost /usr/share/swift || true
+          sudo apt-get clean || true
+          df -h /
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image name + tag
+        id: meta
+        run: |
+          owner="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"   # GHCR needs lowercase
+          echo "image=ghcr.io/${owner}/jarvis-server" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build & push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          # Models download during the build (runner has a fast link). The HF token bakes the embedding.
+          build-args: |
+            LLM_GGUF_URL=https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf
+            LLM_GGUF_SHA256=aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223
+            EMBED_MODEL=google/embeddinggemma-300m
+          secrets: |
+            hf_token=${{ secrets.HF_TOKEN }}
+
+      - name: Summary
+        run: echo "Pushed ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}" >> "$GITHUB_STEP_SUMMARY"
