@@ -142,6 +142,37 @@ Why a file and not pure env vars: paths derive from `JARVIS_HOME` (`/app` in the
 config paths resolve against it, so the same image is portable without rewriting the app to be
 12-factor. Env vars cover the few things that are genuinely per-deployment (secrets, the admin seed).
 
+All of this lives **on the host, not in the image** — `.env`, `config/jarvis.json`, and the volumes are
+read at `docker compose up`, never baked in. So you build once and change config freely: edit `.env`
+(or `jarvis.json`) and `docker compose up -d` again — **no rebuild**. (That's also why the image is safe
+to share — it carries no secrets.) Admin creds are a first-run *seed*; to change an existing admin's
+password later, use `manage.py reset-password` (above), not `.env`.
+
+## Running without Compose (optional)
+Compose is just a convenience wrapper over `docker run` — it issues these commands for you. The same two
+containers by hand:
+
+```bash
+docker network create jarvis
+
+# LLM
+docker run -d --name jarvis-llama --network jarvis \
+  -v "$PWD/models:/app/models" \
+  --entrypoint /app/docker/llama-entry.sh \
+  jarvis-server:local \
+  -c 4096 -t 4 --host 0.0.0.0 --port 8081 --parallel 1
+
+# Orchestrator (--env-file loads your .env from the CLI)
+docker run -d --name jarvis-orchestrator --network jarvis \
+  --env-file .env -p 5000:5000 \
+  -v "$PWD/config:/app/config" \
+  -v jarvis-data:/app/memory \
+  -v hf-cache:/app/.cache/huggingface \
+  jarvis-server:local
+```
+Same result as `docker compose up`. (Windows PowerShell: use `${PWD}` for the paths.) Compose just
+records all of this so you don't retype it — which is why it's the recommended way.
+
 ## HTTPS / certificates
 Two options:
 

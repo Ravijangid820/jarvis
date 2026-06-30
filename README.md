@@ -110,6 +110,10 @@ What to set in `.env`:
 | `ADMIN_PASS` | Leave **blank** → a strong password is generated and **printed once in the startup banner**. Or set your own to pin it. |
 | `LLM_MODEL` / `LLM_GGUF_URL` | Use a model other than the baked-in default (optional). |
 
+`.env` lives **on your machine**, next to `docker-compose.yml` — never inside the image. Compose reads it
+at `up` and passes the values into the container. Edit it and `docker compose up -d` to change config;
+**no rebuild**. (Deeper config + a no-Compose `docker run` example: [docs/setup/docker.md](docs/setup/docker.md).)
+
 **Where to find your login:** `docker compose logs orchestrator` shows the banner with the URL, admin
 user, and (if `ADMIN_PASS` was blank) the generated password:
 
