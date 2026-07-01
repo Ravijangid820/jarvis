@@ -261,6 +261,8 @@ illegal-instruction crashes, while still using AVX2/AVX-512 when the CPU has the
 (ARM hosts — Apple Silicon, Pi — still need an arm64 build via `buildx`.)
 
 ## Publishing the image
+Published images + their differences (0.1 vs 0.2): **[image-releases.md](image-releases.md)**.
+
 `docker compose build` produces `jarvis-server:local`; tag and push it from the CLI:
 ```bash
 docker compose build

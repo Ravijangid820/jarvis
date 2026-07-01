@@ -4,6 +4,24 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## v2.2.0 — 2026-07-01 — Containerization
+
+Milestone: the server stack (orchestrator + llama.cpp) is now **containerized end-to-end**, on top of the
+v2.1.0 native platform. One self-contained image, runnable three ways — two-container compose,
+single-container all-in-one, or raw `docker run` — with the LLM **and** embedding model baked in so it
+works offline with zero config. Published to GHCR (built on GitHub Actions). Highlights (details in the
+dated entries below):
+
+- **Portable** — llama.cpp built with all CPU variants → auto-detects AVX/AVX2/AVX-512 at runtime; one
+  image runs on any x86-64 host, no per-CPU rebuild.
+- **Self-contained** — Qwen3.5-2B (LLM) + embeddinggemma (memory) baked in; CPU-only torch; offline, no
+  runtime token. Gemma license bundled.
+- **Simple** — zero-config defaults (`admin`/`admin`), optional `.env`, single-container mode.
+- **Resilient build** — retrying clone/downloads, capped compile, CRLF-tolerant, GitHub Actions → GHCR.
+
+Container image releases (0.1 vs 0.2) and their differences: **[docs/setup/image-releases.md](setup/image-releases.md)**.
+The native install (systemd) is unchanged and fully supported.
+
 ## 2026-07-01 — docker: single-container (all-in-one) mode
 
 - Added `docker/all-in-one.sh` — runs llama-server + the orchestrator in ONE container over loopback
