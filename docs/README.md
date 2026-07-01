@@ -12,6 +12,7 @@ machines with independent environments).
 | Component | Runs on | Setup doc | Entry point |
 |---|---|---|---|
 | **Server** — orchestrator + web UI (+ HTTPS + services) | the Proxmox LXC | [setup/server.md](setup/server.md) (+ [DEPLOY.md](DEPLOY.md) for re-deploys) | `sudo bash src/scripts/setup-server.sh` |
+| **Server via Docker** — containerized server stack (build locally or pull from GHCR) | any x86-64 host | [setup/docker.md](setup/docker.md) · [setup/image-releases.md](setup/image-releases.md) | `docker compose up -d --build` |
 | **TLS / HTTPS** — encrypt the LAN (local CA; included in setup-server) | the server + each device | [setup/tls.md](setup/tls.md) | `bash src/scripts/setup_tls.sh` |
 | **Camera vision agent** — motion/face/pose/gestures (laptop webcam or Pi) | the device | [setup/camera.md](setup/camera.md) | `camera/setup.ps1` (Win) · `bash camera/setup.sh` (Pi) |
 | **Voice listener** — wake word → `/inbox` (whisper) | the server box | [setup/voice.md](setup/voice.md) | `bash src/scripts/run_listener.sh` |
@@ -48,6 +49,9 @@ camera/             on-device camera/vision agent (laptop webcam or Pi) — own 
 clients/            device agents on other machines — e.g. clients/volume-agent/ (Windows volume)
 config/             schema.sql + jarvis.example.json (real jarvis.json is gitignored)
 systemd/            llama-fast + jarvis-orchestrator service units
+Dockerfile*         container images: fat all-in-one + Dockerfile.orchestrator (slim, for the split)
+docker/             container entrypoints: entrypoint.sh, llama-entry.sh, all-in-one.sh
+docker-compose*.yml compose files: fat two-service + docker-compose.split.yml (two-image production split)
 tests/              pytest suite
 ```
 

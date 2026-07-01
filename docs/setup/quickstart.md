@@ -4,6 +4,9 @@ The whole path in one place. For depth on any piece, see the per-component guide
 ([server.md](server.md)), **TLS** ([tls.md](tls.md)), **camera** ([camera.md](camera.md)), **voice**
 ([voice.md](voice.md)), **volume agent** ([volume-agent.md](volume-agent.md)).
 
+> Prefer containers? The server also runs in **Docker** — build locally or pull from GHCR; see
+> [docker.md](docker.md). The device agents below still run natively on each device.
+
 Mental model: **server** = one script (bootstrap + HTTPS) + mint a key; **each device** = one setup
 script + drop in two files (`ca.crt`, `agent.key`) + run.
 

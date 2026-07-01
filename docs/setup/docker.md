@@ -305,14 +305,16 @@ orchestrator image would need rebuilding.
 **memory only** (chat still works). ARM needs a rebuild.
 
 ## Publishing the image
-Published images + their differences (0.1 vs 0.2): **[image-releases.md](image-releases.md)**.
-
-`docker compose build` produces `jarvis-server:local`; tag and push it from the CLI:
+Published image tags + their differences: **[image-releases.md](image-releases.md)**. Tags track the repo
+version (git `vX.Y.Z` → image `X.Y.Z` + `latest`) — usually the GitHub Actions workflow does this for you.
+To tag + push by hand instead:
 ```bash
 docker compose build
-docker login                       # Docker Hub  (or: docker login ghcr.io)
-docker tag jarvis-server:local <you>/jarvis-server:0.1
-docker push <you>/jarvis-server:0.1
+docker login ghcr.io               # (or Docker Hub: docker login)
+docker tag jarvis-server:local ghcr.io/<you>/jarvis-server:2.2.0
+docker tag jarvis-server:local ghcr.io/<you>/jarvis-server:latest
+docker push ghcr.io/<you>/jarvis-server:2.2.0
+docker push ghcr.io/<you>/jarvis-server:latest
 ```
 Notes: the image is large (~7–8 GB — CPU torch + baked LLM + baked embedding), so the push is slow;
 **GHCR** handles big images better than Docker Hub. Pushing publicly **redistributes the baked weights** —

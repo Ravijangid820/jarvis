@@ -92,8 +92,11 @@ uv run pytest -q && uv run ruff check src/orchestrator src/scripts tests
 
 ### With Docker (server stack)
 
-The server (orchestrator + llama.cpp) runs in containers — **one image, two services**, with the default
-model baked in. **No config file required** — every value has a default, so first run is one command:
+The server (orchestrator + llama.cpp) is containerized, with the default model baked in. Build it locally
+(below) or **pull the published image from GHCR** (`ghcr.io/ravijangid820/jarvis-server:latest`). Run it
+three ways — two services, a single all-in-one container, or a two-image production split (see
+[docs/setup/docker.md](docs/setup/docker.md)). **No config file required** — every value has a default, so
+first run is one command:
 
 ```bash
 docker compose up -d --build      # runs with defaults: login admin / admin, no memory until HF_TOKEN
@@ -131,7 +134,8 @@ docker compose exec orchestrator uv run python src/scripts/manage.py mint-key ad
 docker compose exec orchestrator uv run python src/scripts/manage.py create-admin <user> <pass>
 ```
 
-Volumes, CPU portability, HTTPS, and publishing the image: **[docs/setup/docker.md](docs/setup/docker.md)**.
+Run shapes (two-service / all-in-one / split), published image tags, volumes, CPU/arch support, HTTPS, and
+publishing: **[docs/setup/docker.md](docs/setup/docker.md)** · **[docs/setup/image-releases.md](docs/setup/image-releases.md)**.
 
 ## Project Structure
 
