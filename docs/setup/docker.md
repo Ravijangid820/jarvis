@@ -194,6 +194,24 @@ read at `docker compose up`, never baked in. So you build once and change config
 to share — it carries no secrets.) Admin creds are a first-run *seed*; to change an existing admin's
 password later, use `manage.py reset-password` (above), not `.env`.
 
+## Single container (all-in-one / combined)
+Prefer **one** container over the two-service split? Run llama-server and the orchestrator together in one,
+talking over loopback — no Docker network or `llama` hostname needed:
+```bash
+docker run --init -p 5000:5000 --restart unless-stopped \
+  --entrypoint /app/docker/all-in-one.sh \
+  ghcr.io/<owner>/jarvis-server:0.1
+```
+`all-in-one.sh` starts llama-server in the background on `127.0.0.1:8081`, points the orchestrator at it
+(via `JARVIS_FAST_BRAIN_URL`), and supervises both — mirroring the native box (two processes, one machine).
+`--init` gives a proper PID 1 that reaps children; `--restart unless-stopped` recovers if a service dies.
+All the usual env vars still apply (`ADMIN_PASS`, `EMBED_MODEL`, `LLM_CTX`, …).
+
+Trade-offs vs the two-container compose: simplest to run, but **no independent restart** (if either
+service dies the container exits) and logs interleave. Fine for single-node/personal use; use the
+two-container split for scale or independent lifecycle. (Needs an image built with this entrypoint — a
+rebuild/re-run of the workflow.)
+
 ## Running without Compose (optional)
 Compose is just a convenience wrapper over `docker run` — it issues these commands for you. The same two
 containers by hand:

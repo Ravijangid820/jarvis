@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-07-01 — docker: single-container (all-in-one) mode
+
+- Added `docker/all-in-one.sh` — runs llama-server + the orchestrator in ONE container over loopback
+  (`docker run --init -p 5000:5000 --entrypoint /app/docker/all-in-one.sh <image>`), mirroring the native
+  box. Simpler than the two-container split (no network/hostname); trade-off is no independent restart +
+  interleaved logs. `config.py` gains a `JARVIS_FAST_BRAIN_URL` env override so the orchestrator points at
+  the local llama. Two-container compose remains the default.
+
 ## 2026-07-01 — ci: build + push the image on GitHub Actions (GHCR)
 
 - Added `.github/workflows/build-push.yml` — builds the self-contained image on GitHub's runners and
