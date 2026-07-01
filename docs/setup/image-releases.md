@@ -1,9 +1,15 @@
 # Container image releases (GHCR)
 
-Published at `ghcr.io/ravijangid820/jarvis-server:<tag>`. The image is the **server stack** (orchestrator
-+ llama.cpp); the camera/volume agents and voice listener run natively. See
-[docker.md](docker.md) for how to run each shape (two-container compose, single-container all-in-one, or
-raw `docker run`).
+Two images are published (same version, built together by the Actions workflow):
+
+| Image | Default entrypoint | Use |
+| --- | --- | --- |
+| `ghcr.io/ravijangid820/jarvis-server` | orchestrator only | two-service compose, or all-in-one via `--entrypoint` override |
+| `ghcr.io/ravijangid820/jarvis-combined` | **all-in-one** (both services) | plain `docker run` / **Proxmox OCI** — no override needed |
+
+`jarvis-combined` is a thin layer on `jarvis-server` (only the default entrypoint differs). The image is the
+**server stack** (orchestrator + llama.cpp); the camera/volume agents and voice listener run natively. See
+[docker.md](docker.md) for how to run each shape.
 
 > **Tag numbering.** Image tags track the **repo version**: pushing git tag `vX.Y.Z` builds image `X.Y.Z`
 > **+** `latest` (Docker tags drop the leading `v`, so the number matches the repo tag exactly). The

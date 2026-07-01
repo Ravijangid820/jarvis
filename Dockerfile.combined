@@ -1,0 +1,17 @@
+# syntax=docker/dockerfile:1
+# COMBINED / all-in-one APPLIANCE image: the fat jarvis-server image with the DEFAULT entrypoint set to
+# all-in-one.sh — so a plain `docker run` (or a Proxmox VE 9.1 OCI container, which runs the image's
+# *default* entrypoint and can't easily override it) starts BOTH llama-server AND the orchestrator in one
+# container, with no --entrypoint override needed.
+#
+# It's a thin layer on top of the already-built fat image (everything — the baked LLM + embedding, env
+# vars, volumes — is inherited), so it builds in seconds and shares all the base layers. The base tag is
+# passed by the Actions workflow so this image tracks the same version.
+ARG BASE_IMAGE=ghcr.io/ravijangid820/jarvis-server:latest
+FROM ${BASE_IMAGE}
+
+# Default run = both services (vs the base image's default, which is the orchestrator alone).
+ENTRYPOINT ["/app/docker/all-in-one.sh"]
+
+LABEL org.opencontainers.image.title="jarvis-combined" \
+      org.opencontainers.image.description="Jarvis all-in-one: llama-server + orchestrator in one container (default entrypoint). For Proxmox OCI / single-container runs."

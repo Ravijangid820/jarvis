@@ -195,22 +195,35 @@ to share — it carries no secrets.) Admin creds are a first-run *seed*; to chan
 password later, use `manage.py reset-password` (above), not `.env`.
 
 ## Single container (all-in-one / combined)
-Prefer **one** container over the two-service split? Run llama-server and the orchestrator together in one,
-talking over loopback — no Docker network or `llama` hostname needed:
+Prefer **one** container over the two-service split? Two ways to run both llama-server and the orchestrator
+in one container (they talk over loopback — no Docker network or `llama` hostname):
+
+**A) The `jarvis-combined` image (recommended).** A published image whose **default entrypoint** is already
+all-in-one — so no `--entrypoint` override, and it works where you *can't* override the entrypoint (e.g.
+**Proxmox VE 9.1 OCI containers**, which run the image's default):
+```bash
+docker run --init -p 5000:5000 --restart unless-stopped \
+  ghcr.io/<owner>/jarvis-combined:latest
+```
+
+**B) The `jarvis-server` image with an explicit override** (same result, one flag):
 ```bash
 docker run --init -p 5000:5000 --restart unless-stopped \
   --entrypoint /app/docker/all-in-one.sh \
   ghcr.io/<owner>/jarvis-server:latest
 ```
+
 `all-in-one.sh` starts llama-server in the background on `127.0.0.1:8081`, points the orchestrator at it
 (via `JARVIS_FAST_BRAIN_URL`), and supervises both — mirroring the native box (two processes, one machine).
 `--init` gives a proper PID 1 that reaps children; `--restart unless-stopped` recovers if a service dies.
 All the usual env vars still apply (`ADMIN_PASS`, `EMBED_MODEL`, `LLM_CTX`, …).
 
+`jarvis-combined` is a thin layer on `jarvis-server` (only the default entrypoint differs) — it shares all
+the base layers, so it's tiny and versioned in lockstep by the same Actions build.
+
 Trade-offs vs the two-container compose: simplest to run, but **no independent restart** (if either
 service dies the container exits) and logs interleave. Fine for single-node/personal use; use the
-two-container split for scale or independent lifecycle. (Needs an image built with this entrypoint — a
-rebuild/re-run of the workflow.)
+two-container split for scale or independent lifecycle.
 
 ## Two-image split (production shape)
 The fat image is one build run three ways. The **production-grade** shape instead uses **two separate,

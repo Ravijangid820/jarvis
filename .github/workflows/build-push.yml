@@ -53,15 +53,25 @@ jobs:
         run: |
           owner="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"   # GHCR needs lowercase
           image="ghcr.io/${owner}/jarvis-server"
+          combined="ghcr.io/${owner}/jarvis-combined"
           echo "image=${image}" >> "$GITHUB_OUTPUT"
           if [ "${{ github.event_name }}" = "push" ]; then
             # Image tag tracks the repo version: git tag v2.2.0 -> image 2.2.0 (+ latest).
             # Docker tags drop the leading 'v', so the number matches the repo tag exactly.
             ver="${GITHUB_REF_NAME#v}"
-            echo "tags=${image}:${ver},${image}:latest" >> "$GITHUB_OUTPUT"
           else
-            echo "tags=${image}:${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+            ver="${{ inputs.tag }}"
           fi
+          # Only add :latest when it's a concrete version (not already 'latest').
+          if [ "${ver}" = "latest" ]; then
+            echo "tags=${image}:latest" >> "$GITHUB_OUTPUT"
+            echo "combined_tags=${combined}:latest" >> "$GITHUB_OUTPUT"
+          else
+            echo "tags=${image}:${ver},${image}:latest" >> "$GITHUB_OUTPUT"
+            echo "combined_tags=${combined}:${ver},${combined}:latest" >> "$GITHUB_OUTPUT"
+          fi
+          # The combined image is FROM the fat image at this exact tag (built + pushed in the step above).
+          echo "base=${image}:${ver}" >> "$GITHUB_OUTPUT"
 
       - name: Build & push
         uses: docker/build-push-action@v6
@@ -78,5 +88,21 @@ jobs:
           secrets: |
             hf_token=${{ secrets.HF_TOKEN }}
 
+      - name: Build & push combined (all-in-one) image
+        # Thin layer on the fat image just pushed above: flips the default entrypoint to all-in-one.sh so
+        # a plain run / Proxmox OCI container starts both services. Shares all base layers → tiny + fast.
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.combined
+          push: true
+          tags: ${{ steps.meta.outputs.combined_tags }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          build-args: |
+            BASE_IMAGE=${{ steps.meta.outputs.base }}
+
       - name: Summary
-        run: echo "Pushed ${{ steps.meta.outputs.tags }}" >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          echo "Pushed:" >> "$GITHUB_STEP_SUMMARY"
+          echo "- ${{ steps.meta.outputs.tags }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- ${{ steps.meta.outputs.combined_tags }}  (all-in-one default entrypoint)" >> "$GITHUB_STEP_SUMMARY"

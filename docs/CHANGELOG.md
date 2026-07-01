@@ -22,6 +22,15 @@ dated entries below):
 Container image releases (0.1 vs 0.2) and their differences: **[docs/setup/image-releases.md](setup/image-releases.md)**.
 The native install (systemd) is unchanged and fully supported.
 
+## 2026-07-02 — docker: `jarvis-combined` all-in-one image (Proxmox OCI)
+
+- New `Dockerfile.combined` — a thin layer on `jarvis-server` that sets the **default entrypoint** to
+  `all-in-one.sh`, so a plain `docker run` (or a **Proxmox VE 9.1 OCI container**, which runs the image's
+  default entrypoint and can't easily override it) starts **both** llama-server and the orchestrator.
+- Actions workflow builds + pushes it as `ghcr.io/<owner>/jarvis-combined` alongside `jarvis-server`,
+  same version. Shares all base layers → tiny/fast.
+- docs: all-in-one section documents both images; image-releases.md lists the two published images.
+
 ## 2026-07-01 — docker: two-image split (production shape)
 
 Added the production-grade two-image topology alongside the fat image (which is untouched):
