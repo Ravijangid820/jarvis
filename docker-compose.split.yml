@@ -31,7 +31,9 @@ services:
 
   # --- Orchestrator: slim image (FastAPI + UI + embeddings + TTS, no LLM) ---
   orchestrator:
-    image: jarvis-orchestrator:local
+    # Published image — `docker compose -f docker-compose.split.yml pull` to use it as-is, or
+    # `... up --build` to build it locally from the Dockerfile below (tagged as this image).
+    image: ${ORCH_IMAGE:-ghcr.io/ravijangid820/jarvis-orchestrator:latest}
     build:
       context: .
       dockerfile: Dockerfile.orchestrator

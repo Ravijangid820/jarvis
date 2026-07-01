@@ -22,6 +22,16 @@ dated entries below):
 Container image releases (0.1 vs 0.2) and their differences: **[docs/setup/image-releases.md](setup/image-releases.md)**.
 The native install (systemd) is unchanged and fully supported.
 
+## 2026-07-02 — docker: publish `jarvis-orchestrator` (slim, split app half)
+
+- Actions workflow gains a `build-orchestrator` job → pushes `ghcr.io/<owner>/jarvis-orchestrator`
+  (from `Dockerfile.orchestrator`: FastAPI + UI + embeddings + TTS, **no llama-server / GGUF**), same
+  version scheme. Separate job = fresh runner disk.
+- `docker-compose.split.yml` now defaults the orchestrator to the **published** image (`ORCH_IMAGE` env
+  override; still `--build`-able) and documents `pull`.
+- **Not runnable standalone** — it has no LLM; pair it with the official `llama.cpp` image via the split
+  compose. image-releases.md lists all three published images and their roles.
+
 ## 2026-07-02 — docker: `jarvis-combined` all-in-one image (Proxmox OCI)
 
 - New `Dockerfile.combined` — a thin layer on `jarvis-server` that sets the **default entrypoint** to

@@ -231,13 +231,16 @@ leaner images** with independent lifecycles:
 
 - **`llama`** → the **official** `ghcr.io/ggml-org/llama.cpp:server` image — no from-source compile to
   maintain; just point it at a GGUF.
-- **`orchestrator`** → a **slim** image (`Dockerfile.orchestrator`): FastAPI + UI + embeddings + TTS,
-  **no llama-server and no baked GGUF** (~1.3 GB + the compile dropped).
+- **`orchestrator`** → a **slim** image, **published** at `ghcr.io/<owner>/jarvis-orchestrator` (built from
+  `Dockerfile.orchestrator`): FastAPI + UI + embeddings + TTS, **no llama-server and no baked GGUF** (~1.3 GB
+  + the compile dropped). It has **no LLM**, so it only works paired with the `llama` service.
 
-They talk over the compose network (`orchestrator → http://llama:8081`). Run it:
+They talk over the compose network (`orchestrator → http://llama:8081`). Run it — **pull** the published
+orchestrator, or `--build` it locally:
 ```bash
 bash src/scripts/download_models.sh          # put a GGUF in ./models first
-docker compose -f docker-compose.split.yml up -d --build
+docker compose -f docker-compose.split.yml pull    # pulls jarvis-orchestrator + the official llama image
+docker compose -f docker-compose.split.yml up -d   # (or: up -d --build  to build the orchestrator locally)
 ```
 Set `LLM_MODEL` if your GGUF's filename differs from `Qwen3.5-2B-Q4_K_M.gguf`; `EMBED_MODEL`, `ADMIN_PASS`,
 `HF_TOKEN`, `LLM_CTX`, `LLAMA_THREADS`, `HOST_PORT` all apply as usual.
