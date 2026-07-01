@@ -212,6 +212,34 @@ service dies the container exits) and logs interleave. Fine for single-node/pers
 two-container split for scale or independent lifecycle. (Needs an image built with this entrypoint — a
 rebuild/re-run of the workflow.)
 
+## Two-image split (production shape)
+The fat image is one build run three ways. The **production-grade** shape instead uses **two separate,
+leaner images** with independent lifecycles:
+
+- **`llama`** → the **official** `ghcr.io/ggml-org/llama.cpp:server` image — no from-source compile to
+  maintain; just point it at a GGUF.
+- **`orchestrator`** → a **slim** image (`Dockerfile.orchestrator`): FastAPI + UI + embeddings + TTS,
+  **no llama-server and no baked GGUF** (~1.3 GB + the compile dropped).
+
+They talk over the compose network (`orchestrator → http://llama:8081`). Run it:
+```bash
+bash src/scripts/download_models.sh          # put a GGUF in ./models first
+docker compose -f docker-compose.split.yml up -d --build
+```
+Set `LLM_MODEL` if your GGUF's filename differs from `Qwen3.5-2B-Q4_K_M.gguf`; `EMBED_MODEL`, `ADMIN_PASS`,
+`HF_TOKEN`, `LLM_CTX`, `LLAMA_THREADS`, `HOST_PORT` all apply as usual.
+
+**When to use which:**
+| Shape | Best for |
+| --- | --- |
+| all-in-one (1 container) | simplest personal/single-node use |
+| fat image, 2 services (`docker-compose.yml`) | the middle ground; runs on **any** x86-64 incl. the AVX-only box |
+| **two images (`docker-compose.split.yml`)** | production: leaner pulls, independent updates/scaling of LLM vs app |
+
+**Caveat:** the official llama image needs an **AVX2** CPU (any modern host — including this Codespace).
+On the old **AVX-only** box, use the from-source fat image (it auto-detects AVX). This split is the first
+cut — build/run it once to confirm the official image's entrypoint/port before relying on it in prod.
+
 ## Running without Compose (optional)
 Compose is just a convenience wrapper over `docker run` — it issues these commands for you. The same two
 containers by hand:

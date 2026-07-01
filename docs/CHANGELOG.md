@@ -22,6 +22,18 @@ dated entries below):
 Container image releases (0.1 vs 0.2) and their differences: **[docs/setup/image-releases.md](setup/image-releases.md)**.
 The native install (systemd) is unchanged and fully supported.
 
+## 2026-07-01 — docker: two-image split (production shape)
+
+Added the production-grade two-image topology alongside the fat image (which is untouched):
+- `Dockerfile.orchestrator` — slim orchestrator image (FastAPI + UI + embeddings + TTS; **no** llama-server,
+  **no** baked GGUF — ~1.3 GB + the from-source compile dropped).
+- `docker-compose.split.yml` — pairs it with the **official** `ghcr.io/ggml-org/llama.cpp:server` image
+  (GGUF from `./models`); they talk over the network at `http://llama:8081`.
+- docs/setup/docker.md — new "Two-image split" section + a when-to-use-which table.
+
+First cut — build/run once to confirm the official image's entrypoint/port. The official image needs an
+AVX2 CPU; the AVX-only box keeps the auto-detecting from-source fat image.
+
 ## 2026-07-01 — docker: single-container (all-in-one) mode
 
 - Added `docker/all-in-one.sh` — runs llama-server + the orchestrator in ONE container over loopback

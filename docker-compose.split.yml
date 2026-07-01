@@ -1,0 +1,65 @@
+# Jarvis — server stack, TWO-IMAGE production split:
+#   • llama        → the OFFICIAL ghcr.io/ggml-org/llama.cpp:server image (no custom build)
+#   • orchestrator → a SLIM image built here from Dockerfile.orchestrator (no llama-server, no GGUF)
+# They talk over the compose network (orchestrator → http://llama:8081, from config/jarvis.docker.json).
+#
+# Compare with docker-compose.yml (one fat image, two services) and the all-in-one single container.
+# See docs/setup/docker.md → "Two-image split".
+#
+#   docker compose -f docker-compose.split.yml up -d --build
+#
+# NOTES
+#  • The llama service loads the GGUF from ./models — put it there first, e.g.
+#      bash src/scripts/download_models.sh        (or copy your own <name>.gguf in)
+#    then set LLM_MODEL if the filename differs from the default below.
+#  • The official image needs an AVX2 CPU (any modern host). On the old AVX-only box use the
+#    from-source fat image (docker-compose.yml) instead — it auto-detects and runs on AVX.
+
+services:
+  # --- LLM: official llama.cpp server, no build ---
+  llama:
+    image: ghcr.io/ggml-org/llama.cpp:server
+    command: >
+      -m /models/${LLM_MODEL:-Qwen3.5-2B-Q4_K_M.gguf}
+      -c ${LLM_CTX:-4096}
+      -t ${LLAMA_THREADS:-4}
+      --host 0.0.0.0 --port 8081 --parallel 1
+    volumes:
+      - ./models:/models:ro       # put the GGUF here (download_models.sh, or your own)
+    restart: unless-stopped
+
+  # --- Orchestrator: slim image (FastAPI + UI + embeddings + TTS, no LLM) ---
+  orchestrator:
+    image: jarvis-orchestrator:local
+    build:
+      context: .
+      dockerfile: Dockerfile.orchestrator
+      # HF token (optional) to bake the gated embedding model at build — passed as a secret so it
+      # never lands in the image. `HF_TOKEN=… docker compose -f docker-compose.split.yml build`.
+      secrets:
+        - hf_token
+      args:
+        EMBED_MODEL: ${EMBED_MODEL:-google/embeddinggemma-300m}
+    depends_on:
+      - llama
+    # No .env required — every value has a default. Override on the CLI, in an optional .env, or here.
+    environment:
+      - HF_TOKEN=${HF_TOKEN:-}             # only for a RUNTIME embed download; not needed if baked in
+      - EMBED_MODEL=${EMBED_MODEL:-google/embeddinggemma-300m}
+      - ADMIN_USER=${ADMIN_USER:-admin}    # default admin/admin — change ADMIN_PASS for anything exposed
+      - ADMIN_PASS=${ADMIN_PASS:-admin}
+      - HOST_PORT=${HOST_PORT:-5000}       # shown in the startup banner
+    ports:
+      - "${HOST_PORT:-5000}:5000"
+    volumes:
+      - ./config:/app/config              # jarvis.json (created from the docker template on first run)
+      - ./tls:/app/tls:ro                 # optional: drop server.crt + server.key here for HTTPS
+      - jarvis-data:/app/memory           # SQLite DB + ChromaDB vectors (persisted)
+    restart: unless-stopped
+
+volumes:
+  jarvis-data:
+
+secrets:
+  hf_token:
+    environment: HF_TOKEN

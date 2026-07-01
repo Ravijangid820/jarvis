@@ -1,0 +1,62 @@
+# syntax=docker/dockerfile:1
+# SLIM ORCHESTRATOR image for the two-image (production) split: FastAPI API + built React UI +
+# embeddings (memory) + Piper TTS. It does NOT contain llama-server or the LLM GGUF — those live in a
+# separate `llama` service (the official ghcr.io/ggml-org/llama.cpp:server image). The orchestrator
+# reaches the LLM over the network at http://llama:8081 (from config/jarvis.docker.json). Pairs with
+# docker-compose.split.yml.
+#
+# vs the single fat image (./Dockerfile): drops the from-source llama.cpp build + the baked GGUF
+# (~1.3 GB + the compile). Intentionally parallel to that file so the working fat image is untouched;
+# could be DRY'd via a shared base stage later.
+
+# --- Stage 1: build the React frontend ---
+FROM node:20-slim AS web
+WORKDIR /web
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
+# --- Stage 2: Python runtime (orchestrator) ---
+FROM python:3.13-slim AS app
+ENV JARVIS_HOME=/app \
+    JARVIS_CONFIG=/app/config/jarvis.json \
+    HF_HOME=/app/.cache/huggingface \
+    UV_PYTHON_DOWNLOADS=never \
+    PYTHONUNBUFFERED=1
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates curl tar gzip libgomp1 libstdc++6 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+WORKDIR /app
+# Python deps first (layer cache).
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev
+# Bake the embedding model (memory works offline, no runtime token) — same as the fat image: a
+# pre-downloaded ./embed-cache, else a build-time HF token secret; else runtime-download fallback.
+ARG EMBED_MODEL=google/embeddinggemma-300m
+COPY embed-cache/ /app/.cache/huggingface/
+RUN --mount=type=secret,id=hf_token \
+    if find /app/.cache/huggingface/hub -maxdepth 1 -name 'models--*' 2>/dev/null | grep -q .; then \
+      echo "Embedding model baked from ./embed-cache."; \
+    elif [ -s /run/secrets/hf_token ]; then \
+      echo "Downloading embedding model ${EMBED_MODEL} at build (retries + resumes)…"; \
+      n=0; ok=0; while [ "$n" -lt 5 ]; do n=$((n + 1)); \
+        if HF_TOKEN="$(cat /run/secrets/hf_token)" EMBED_MODEL="${EMBED_MODEL}" \
+             uv run --no-sync python -c "import os; from sentence_transformers import SentenceTransformer; SentenceTransformer(os.environ['EMBED_MODEL'])"; \
+        then ok=1; break; fi; echo "  attempt $n/5 failed; retrying in 10s…"; sleep 10; done; \
+      [ "$ok" = 1 ] && echo "Embedding model baked from HuggingFace." \
+                    || echo "WARN: embedding bake failed — will fall back to a runtime download."; \
+    else echo "NOTE: embedding not baked (no ./embed-cache, no hf_token secret) — runtime download needed."; fi
+# App + config + license notices + built UI.
+COPY src/ ./src/
+COPY config/ ./config/
+COPY licenses/ ./licenses/
+COPY --from=web /web/dist ./frontend/dist
+# Piper TTS (normalize CRLF from Windows checkouts first).
+RUN sed -i 's/\r$//' src/scripts/*.sh; \
+    bash src/scripts/piper_setup.sh || echo "WARN: piper_setup failed — TTS will be unavailable until fixed"
+COPY docker/ ./docker/
+RUN sed -i 's/\r$//' docker/*.sh && chmod +x docker/*.sh
+EXPOSE 5000
+ENTRYPOINT ["/app/docker/entrypoint.sh"]
