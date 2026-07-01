@@ -12,8 +12,9 @@
 #  • The llama service loads the GGUF from ./models — put it there first, e.g.
 #      bash src/scripts/download_models.sh        (or copy your own <name>.gguf in)
 #    then set LLM_MODEL if the filename differs from the default below.
-#  • The official image needs an AVX2 CPU (any modern host). On the old AVX-only box use the
-#    from-source fat image (docker-compose.yml) instead — it auto-detects and runs on AVX.
+#  • Portable like the fat image: the official image is built with GGML_CPU_ALL_VARIANTS + GGML_BACKEND_DL
+#    (see upstream .devops/cpu.Dockerfile), so it auto-detects and runs on ANY x86-64 — AVX, AVX2, AVX-512
+#    (incl. the old AVX-only box) — and is multi-arch (amd64/arm64). No AVX2 requirement.
 
 services:
   # --- LLM: official llama.cpp server, no build ---

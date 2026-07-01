@@ -31,8 +31,10 @@ Added the production-grade two-image topology alongside the fat image (which is 
   (GGUF from `./models`); they talk over the network at `http://llama:8081`.
 - docs/setup/docker.md — new "Two-image split" section + a when-to-use-which table.
 
-First cut — build/run once to confirm the official image's entrypoint/port. The official image needs an
-AVX2 CPU; the AVX-only box keeps the auto-detecting from-source fat image.
+First cut — build/run once to confirm the official image's entrypoint/port. Portability note: the official
+image is built with `GGML_CPU_ALL_VARIANTS` (verified in upstream `.devops/cpu.Dockerfile`), so like the
+fat image it auto-detects and runs on any x86-64 — AVX, AVX2, AVX-512 (incl. the AVX-only box) — no AVX2
+requirement. Pick the fat image only for a single fully-offline, self-contained artifact.
 
 ## 2026-07-01 — docker: single-container (all-in-one) mode
 

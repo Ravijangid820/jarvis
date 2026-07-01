@@ -233,12 +233,17 @@ Set `LLM_MODEL` if your GGUF's filename differs from `Qwen3.5-2B-Q4_K_M.gguf`; `
 | Shape | Best for |
 | --- | --- |
 | all-in-one (1 container) | simplest personal/single-node use |
-| fat image, 2 services (`docker-compose.yml`) | the middle ground; runs on **any** x86-64 incl. the AVX-only box |
+| fat image, 2 services (`docker-compose.yml`) | **self-contained** — LLM + embedding baked, fully offline, one artifact |
 | **two images (`docker-compose.split.yml`)** | production: leaner pulls, independent updates/scaling of LLM vs app |
 
-**Caveat:** the official llama image needs an **AVX2** CPU (any modern host — including this Codespace).
-On the old **AVX-only** box, use the from-source fat image (it auto-detects AVX). This split is the first
-cut — build/run it once to confirm the official image's entrypoint/port before relying on it in prod.
+**CPU portability — same as the fat image.** The official llama image is compiled with
+`GGML_CPU_ALL_VARIANTS=ON` + `GGML_BACKEND_DL=ON` (verified in the upstream
+[`.devops/cpu.Dockerfile`](https://github.com/ggml-org/llama.cpp/blob/master/.devops/cpu.Dockerfile)) —
+exactly like our from-source build. So it auto-detects and runs on **any x86-64 (AVX, AVX2, AVX-512)** —
+including the old AVX-only box — and is multi-arch (amd64/arm64/s390x). **No AVX2 requirement.** So
+portability is *not* a reason to avoid the split; pick the fat image only when you want one fully-offline,
+self-contained artifact (model baked in). This split is the first cut — build/run it once to confirm the
+official image's entrypoint/port before relying on it in prod.
 
 ## Running without Compose (optional)
 Compose is just a convenience wrapper over `docker run` — it issues these commands for you. The same two
