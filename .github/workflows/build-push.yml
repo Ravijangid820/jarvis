@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Image tag (e.g. 0.1)"
+        description: "Image tag for a manual build (e.g. 2.2.0). Tag pushes derive this automatically."
         required: true
         default: "latest"
   push:
@@ -48,15 +48,19 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Compute image name + tag
+      - name: Compute image name + tags
         id: meta
         run: |
           owner="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"   # GHCR needs lowercase
-          echo "image=ghcr.io/${owner}/jarvis-server" >> "$GITHUB_OUTPUT"
+          image="ghcr.io/${owner}/jarvis-server"
+          echo "image=${image}" >> "$GITHUB_OUTPUT"
           if [ "${{ github.event_name }}" = "push" ]; then
-            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            # Image tag tracks the repo version: git tag v2.2.0 -> image 2.2.0 (+ latest).
+            # Docker tags drop the leading 'v', so the number matches the repo tag exactly.
+            ver="${GITHUB_REF_NAME#v}"
+            echo "tags=${image}:${ver},${image}:latest" >> "$GITHUB_OUTPUT"
           else
-            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+            echo "tags=${image}:${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build & push
@@ -64,7 +68,7 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
+          tags: ${{ steps.meta.outputs.tags }}
           labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
           # Models download during the build (runner has a fast link). The HF token bakes the embedding.
           build-args: |
@@ -75,4 +79,4 @@ jobs:
             hf_token=${{ secrets.HF_TOKEN }}
 
       - name: Summary
-        run: echo "Pushed ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}" >> "$GITHUB_STEP_SUMMARY"
+        run: echo "Pushed ${{ steps.meta.outputs.tags }}" >> "$GITHUB_STEP_SUMMARY"

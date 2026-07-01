@@ -200,7 +200,7 @@ talking over loopback — no Docker network or `llama` hostname needed:
 ```bash
 docker run --init -p 5000:5000 --restart unless-stopped \
   --entrypoint /app/docker/all-in-one.sh \
-  ghcr.io/<owner>/jarvis-server:0.1
+  ghcr.io/<owner>/jarvis-server:latest
 ```
 `all-in-one.sh` starts llama-server in the background on `127.0.0.1:8081`, points the orchestrator at it
 (via `JARVIS_FAST_BRAIN_URL`), and supervises both — mirroring the native box (two processes, one machine).

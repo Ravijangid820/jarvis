@@ -5,11 +5,12 @@ Published at `ghcr.io/ravijangid820/jarvis-server:<tag>`. The image is the **ser
 [docker.md](docker.md) for how to run each shape (two-container compose, single-container all-in-one, or
 raw `docker run`).
 
-> Numbering note: the **repo** is versioned with semver git tags (`v2.2.0`, …); the **image** uses its own
-> short tags (`0.1`, `0.2`, …). Image `0.2` is built from repo tag **v2.2.0**. You can align them going
-> forward (tag images `2.2.0`) if you prefer one scheme.
+> **Tag numbering.** Image tags track the **repo version**: pushing git tag `vX.Y.Z` builds image `X.Y.Z`
+> **+** `latest` (Docker tags drop the leading `v`, so the number matches the repo tag exactly). The
+> earlier ad-hoc `0.1`/`0.2` tags predate this — `0.2`'s content is identical to **`2.2.0`** (repo v2.2.0).
+> **Use `2.2.0` or `latest` going forward** (re-run the Actions workflow on the `v2.2.0` tag to publish them).
 
-## `0.2` — current, recommended (repo v2.2.0)
+## `2.2.0` / `latest` — current, recommended (first published as `0.2`)
 Built via the GitHub Actions workflow. Everything `0.1` had, plus:
 
 - **Embedding model baked in.** `embeddinggemma-300m` ships inside the image, so **memory/RAG works
@@ -32,8 +33,8 @@ The first working container. Contains:
 - **Two containers** (orchestrator + `llama`) via compose.
 - **Embedding NOT baked** → memory needed an **`HF_TOKEN` at runtime** (downloaded on first start).
 
-## What changed, `0.1` → `0.2`
-| | `0.1` | `0.2` |
+## What changed, `0.1` → `2.2.0` (was `0.2`)
+| | `0.1` | `2.2.0` |
 | --- | --- | --- |
 | Embedding / memory | runtime download, needs `HF_TOKEN` at run | **baked in — offline, no token** |
 | Deployment shapes | two-container only | + **single-container all-in-one** |
@@ -44,4 +45,5 @@ The first working container. Contains:
 
 Unchanged in both: baked Qwen LLM, all-CPU-variant portability, CPU-only, self-contained server image.
 
-**Use `0.2`** — it's the superset. `0.1` remains for reference/rollback.
+**Use `2.2.0` / `latest`** — it's the superset (same content first published as `0.2`). `0.1` remains for
+reference/rollback.
