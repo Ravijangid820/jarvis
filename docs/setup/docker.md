@@ -286,12 +286,23 @@ Two options:
   (the banner shows `TLS: on` and an `https://` URL). Devices fetch the CA from `GET /ca.crt` and pin its
   fingerprint, exactly as in the native setup. No certs mounted → HTTP (the default).
 
-## CPU portability
-The llama.cpp build uses `GGML_CPU_ALL_VARIANTS` + `GGML_BACKEND_DL`: it compiles one set of CPU backend
-plugins (SSE4.2, AVX, AVX2, AVX-512, …) and **ggml loads the best one for the host CPU at runtime**. So a
-single `linux/amd64` image runs on AVX-only and AVX2 machines without rebuilding and without
-illegal-instruction crashes, while still using AVX2/AVX-512 when the CPU has them. No flag to set.
-(ARM hosts — Apple Silicon, Pi — still need an arm64 build via `buildx`.)
+## CPU / architecture support (portability)
+The stack runs on **any x86-64 CPU with AVX — roughly 2011 onward, old or new** — including the deployment
+box (Sandy-Bridge i5: AVX, no AVX2). Audited per component:
+
+| Component | Floor | Notes |
+| --- | --- | --- |
+| **LLM (llama.cpp)** | any x86-64 (even no-AVX) | `GGML_CPU_ALL_VARIANTS` + `GGML_BACKEND_DL` compile SSE4.2/AVX/AVX2/AVX-512 backends; ggml auto-loads the best at runtime — no rebuild, no illegal-instruction crash. The split's official image uses the *same* upstream flags. |
+| **Embedding / memory (PyTorch)** | **AVX** | Official torch CPU wheels require AVX (the AVX2-minimum proposal [pytorch#94021](https://github.com/pytorch/pytorch/issues/94021) is still open/unimplemented). On a CPU *without* AVX, torch illegal-instructions → **memory/RAG won't load, but chat/LLM still works**. |
+| **TTS (Piper)** | x86-64 (prebuilt) | `piper_linux_x86_64`; if it can't run it degrades gracefully — TTS off, everything else fine. |
+| **API / UI / Python** | arch-generic | pure Python on the amd64 base. |
+
+**Architecture:** the image is `linux/amd64`. **ARM** (Apple Silicon, Raspberry Pi) needs an arm64 build
+(`docker buildx --platform linux/arm64`); the official llama image is already multi-arch, but the
+orchestrator image would need rebuilding.
+
+**Bottom line:** any x86-64 from ~2011 (AVX) runs the *whole* stack, no flags. Pre-AVX x86-64 loses
+**memory only** (chat still works). ARM needs a rebuild.
 
 ## Publishing the image
 Published images + their differences (0.1 vs 0.2): **[image-releases.md](image-releases.md)**.
