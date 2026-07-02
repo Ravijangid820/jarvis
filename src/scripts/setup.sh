@@ -85,7 +85,8 @@ step "Setup complete"
 cat <<EOF
 Next steps:
   • Review config/jarvis.json (host, db_path, fast_brain_url).
-  • Make sure the LLM GGUF is in place (set LLM_GGUF_URL or drop the file under models/).
+  • LLM GGUF: the default Qwen3.5-2B downloads automatically — if it failed above (network), just
+    re-run; set LLM_GGUF_URL only to use a *different* model.
   • Start the LLM:  <repo>/llama.cpp/build/bin/llama-server -m <gguf> -c 4096 --host 127.0.0.1 --port 8081
   • Start the app:  cd src/orchestrator && uv run uvicorn main:app --host 127.0.0.1 --port 5000
   • Or install the units in systemd/ (see docs/DEPLOY.md), then add TLS (docs/DEPLOY.md → "Adding TLS").
