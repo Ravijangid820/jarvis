@@ -74,6 +74,23 @@ def vectors_available() -> bool:
     return memory_collection is not None and _embed_model is not None
 
 
+def embedding_status() -> Dict[str, Any]:
+    """Embedding model name, vector dimension, and stored-memory count — for the admin health board.
+    Best-effort: never raises (returns available=False if the model didn't load)."""
+    if not vectors_available():
+        return {"available": False, "model": EMBED_MODEL_NAME}
+    try:
+        dim = (_embed_model.get_embedding_dimension if hasattr(_embed_model, "get_embedding_dimension")
+               else _embed_model.get_sentence_embedding_dimension)()
+    except Exception:
+        dim = None
+    try:
+        count = memory_collection.count()
+    except Exception:
+        count = None
+    return {"available": True, "model": EMBED_MODEL_NAME, "dim": dim, "count": count}
+
+
 def _embed_documents(texts: List[str]) -> List[List[float]]:
     vecs = _embed_model.encode([EMBED_DOC_PREFIX + t for t in texts], normalize_embeddings=True)
     return [v.tolist() for v in vecs]

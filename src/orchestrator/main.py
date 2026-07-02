@@ -41,7 +41,7 @@ import memory
 from auth import hash_password, hash_token, verify_password
 from intents import is_gesture_volume, parse_reminder, parse_volume
 from budget import is_default_session
-from config import (ADMIN_MAX_INPUT, ALLOWED_ORIGINS, BASE_DIR, CHROMA_DB_PATH,
+from config import (ADMIN_MAX_INPUT, ALLOWED_ORIGINS, APP_VERSION, BASE_DIR, CHROMA_DB_PATH,
                     COMPLETION_RESERVE_DEFAULT, CONFIG, INDEX_HTML, LLM_URL, PIPER_BIN, PIPER_MODEL,
                     RATE_LIMIT_RPM, REACT_DIST_DIR, REGULAR_MAX_INPUT, REQUIRE_PRESENCE_FOR_CONTROL,
                     STATIC_DIR, VALID_FACT_CATEGORIES, logger)
@@ -473,17 +473,49 @@ def _ping_llm() -> bool:
         return False
 
 
+def _llm_status() -> tuple:
+    """(ok, detail): the LLM's REAL loaded model + context, read from llama-server's /props — so the
+    board shows what's actually running, not a hardcoded name (and self-corrects if LLM_MODEL changes).
+    Falls back to a /health ping for the up/down signal if /props isn't available."""
+    try:
+        p = urlsplit(LLM_URL)
+        with urllib.request.urlopen(f"{p.scheme}://{p.netloc}/props", timeout=1.5) as r:
+            props = json.loads(r.read().decode("utf-8"))
+        dgs = props.get("default_generation_settings") or {}
+        model_path = props.get("model_path") or dgs.get("model") or ""
+        model = os.path.basename(str(model_path)).removesuffix(".gguf") or "model"
+        n_ctx = dgs.get("n_ctx") or props.get("n_ctx")
+        return True, (f"{model} · ctx {n_ctx}" if n_ctx else model)
+    except Exception:
+        return _ping_llm(), "fast brain"
+
+
+def _embedding_detail(emb: Dict[str, Any]) -> str:
+    """One-line detail for the Embeddings row: model · dim · N memories (best-effort)."""
+    if not emb.get("available"):
+        return "model not loaded"
+    bits = []
+    if emb.get("model"):
+        bits.append(os.path.basename(emb["model"]))          # google/embeddinggemma-300m -> embeddinggemma-300m
+    if emb.get("dim"):
+        bits.append(f"dim {emb['dim']}")
+    if emb.get("count") is not None:
+        bits.append(f"{emb['count']} memories")
+    return " · ".join(bits) or "vector search ready"
+
+
 def _service_status() -> list:
     """Status of each subsystem for the admin console: green (active) / red (inactive), with a
     one-line detail. Camera/edge liveness is inferred from device_heartbeats (recent = running)."""
     def s(name, ok, detail=""):
         return {"name": name, "status": "active" if ok else "inactive", "detail": detail}
 
+    llm_ok, llm_detail = _llm_status()
+    emb = memory.embedding_status()
     services = [
         s("Orchestrator (API)", True, "serving this request"),
-        s("LLM (llama.cpp)", _ping_llm(), "qwen3.5-2b (fast brain)"),
-        s("Embeddings / RAG", memory.vectors_available(),
-          "vector search ready" if memory.vectors_available() else "model not loaded"),
+        s("LLM (llama.cpp)", llm_ok, llm_detail),
+        s("Embeddings / RAG", emb.get("available", False), _embedding_detail(emb)),
         s("Voice / TTS (Piper)", PIPER_BIN.exists() and PIPER_MODEL.exists(),
           PIPER_MODEL.name if PIPER_MODEL.exists() else "piper binary/voice missing"),
     ]
@@ -518,9 +550,16 @@ def _service_status() -> list:
 
 @app.get("/admin/services")
 def admin_services(request: Request) -> Dict[str, Any]:
-    """Per-subsystem health for the admin console (active/inactive + detail)."""
+    """Per-subsystem health for the admin console (active/inactive + detail), plus the app version and
+    an at-a-glance operational summary (how many subsystems are up)."""
     _require_admin(request)
-    return {"services": _service_status()}
+    services = _service_status()
+    up = sum(1 for x in services if x["status"] == "active")
+    return {
+        "services": services,
+        "version": APP_VERSION,
+        "summary": {"up": up, "total": len(services), "operational": up == len(services)},
+    }
 
 
 # ----------------- Voice / TTS -----------------
