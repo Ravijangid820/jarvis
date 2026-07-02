@@ -1,57 +1,32 @@
-# Container image releases (GHCR)
+# Container images (GHCR)
 
-Two images are published (same version, built together by the Actions workflow):
+The **LLM is the official upstream image** (`ghcr.io/ggml-org/llama.cpp:server`) — we don't build or
+publish llama.cpp. This repo publishes **two** images (same version, built together by the Actions
+workflow):
 
-| Image | Contains | Use |
+| Image | Contains | Run as |
 | --- | --- | --- |
-| `ghcr.io/ravijangid820/jarvis-server` | full stack (orchestrator + llama.cpp + models) | two-service compose, or all-in-one via `--entrypoint` override |
-| `ghcr.io/ravijangid820/jarvis-combined` | full stack, **default-runs both** | plain `docker run` / **Proxmox OCI** — no override needed |
-| `ghcr.io/ravijangid820/jarvis-orchestrator` | **slim — orchestrator only, NO LLM** | the split's app half; **must** pair with a llama backend (`docker-compose.split.yml`) — not runnable standalone |
+| **`ghcr.io/ravijangid820/jarvis-combined`** | official `llama-server` + orchestrator + baked LLM & embedding, in one image | **single container** (default entrypoint runs both) — simplest / **Proxmox OCI** |
+| **`ghcr.io/ravijangid820/jarvis-orchestrator`** | **slim app only** — FastAPI + UI + embeddings + TTS, **no LLM** | the **two-service split**: pairs with the official `llama.cpp:server` image (`docker-compose.yml`). Not runnable standalone. |
 
-`jarvis-combined` is a thin layer on `jarvis-server` (only the default entrypoint differs).
-`jarvis-orchestrator` is built from `Dockerfile.orchestrator` (llama-server + GGUF dropped) — on its own it
-serves the UI but has no LLM, so it needs a companion `llama` service. All are the **server stack**; the
-camera/volume agents and voice listener run natively. See [docker.md](docker.md) for how to run each shape.
+- `jarvis-combined` is built **on** the official `ggml-org/llama.cpp:server` image (Ubuntu 24.04 + its
+  prebuilt, all-CPU-variant `llama-server`) — no compile; a new llama.cpp release is a `LLAMA_IMAGE` bump.
+- `jarvis-orchestrator` (from `Dockerfile.orchestrator`) has **no LLM** — on its own it serves the UI but
+  needs a companion `llama` service.
 
-> **Tag numbering.** Image tags track the **repo version**: pushing git tag `vX.Y.Z` builds image `X.Y.Z`
-> **+** `latest` (Docker tags drop the leading `v`, so the number matches the repo tag exactly). The
-> earlier ad-hoc `0.1`/`0.2` tags predate this — `0.2`'s content is identical to **`2.2.0`** (repo v2.2.0).
-> **Use `2.2.0` or `latest` going forward** (re-run the Actions workflow on the `v2.2.0` tag to publish them).
+Both bake the embedding model (offline memory, no runtime token) + ship the Gemma license. The
+camera/volume agents and voice listener run natively. See [docker.md](docker.md) for how to run each.
 
-## `2.2.0` / `latest` — current, recommended (first published as `0.2`)
-Built via the GitHub Actions workflow. Everything `0.1` had, plus:
+> **Tag numbering.** Image tags track the **repo version**: git tag `vX.Y.Z` → image `X.Y.Z` + `latest`
+> (Docker tags drop the leading `v`). For reproducible production builds, pin `LLAMA_IMAGE` to a specific
+> `ghcr.io/ggml-org/llama.cpp:server-b<NNNN>` tag (`:server` floats).
 
-- **Embedding model baked in.** `embeddinggemma-300m` ships inside the image, so **memory/RAG works
-  offline at runtime with no HF token** (like the native box). Configurable via `EMBED_MODEL`.
-- **Single-container (all-in-one) mode.** Run llama-server + orchestrator in *one* container over
-  loopback: `--entrypoint /app/docker/all-in-one.sh`. (Two-container compose still supported.)
-- **Zero-config defaults + optional `.env`.** Runs with no config file; login defaults to `admin`/`admin`
-  (override via env); every value has a default.
-- **Gemma license bundled** (`licenses/gemma/`) so the baked embedding is redistribution-compliant.
-- **Built + pushed on GitHub Actions** (no multi-GB upload from a local machine).
+## History
+Earlier releases published a single fat **`jarvis-server`** image that **compiled llama.cpp from source**
+(tags `0.1`, then `0.2` = `2.2.0`). As of **v2.3.0** that image is **retired**: we ride the official
+prebuilt llama.cpp binary instead — the same all-CPU-variant portability (runs on the AVX-only box), with
+zero compile to maintain and automatic benefit from upstream releases.
 
-## `0.1` — initial containerized image
-The first working container. Contains:
-
-- **LLM baked in** (`Qwen3.5-2B-Q4_K_M`, unsloth GGUF, SHA-verified).
-- **Runs on any x86-64 CPU** — llama.cpp built with `GGML_CPU_ALL_VARIANTS`, so it auto-detects and loads
-  the best backend (SSE4.2 → AVX → AVX2 → AVX-512) at runtime. No per-CPU rebuild, no crashes.
-- **CPU-only PyTorch** (no ~5 GB CUDA), **Python 3.13** base, resilient build (retrying clone/downloads,
-  capped compile), CRLF-tolerant scripts, reliable Piper TTS.
-- **Two containers** (orchestrator + `llama`) via compose.
-- **Embedding NOT baked** → memory needed an **`HF_TOKEN` at runtime** (downloaded on first start).
-
-## What changed, `0.1` → `2.2.0` (was `0.2`)
-| | `0.1` | `2.2.0` |
-| --- | --- | --- |
-| Embedding / memory | runtime download, needs `HF_TOKEN` at run | **baked in — offline, no token** |
-| Deployment shapes | two-container only | + **single-container all-in-one** |
-| Config | env-driven | + **admin/admin zero-config**, optional `.env` |
-| Embedding model | fixed (embeddinggemma) | **configurable** (`EMBED_MODEL`) |
-| Licensing | — | **Gemma terms bundled** |
-| Build | local `docker compose build` | **GitHub Actions → GHCR** |
-
-Unchanged in both: baked Qwen LLM, all-CPU-variant portability, CPU-only, self-contained server image.
-
-**Use `2.2.0` / `latest`** — it's the superset (same content first published as `0.2`). `0.1` remains for
-reference/rollback.
+- `0.1` — first container; LLM baked, but embedding **not** baked (needed an `HF_TOKEN` at runtime).
+- `0.2` = `2.2.0` — baked both models, added the all-in-one mode, zero-config defaults, Gemma license.
+- `2.3.0` — dropped the from-source build; `jarvis-combined` (on the official image) + `jarvis-orchestrator`.

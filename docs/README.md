@@ -49,9 +49,10 @@ camera/             on-device camera/vision agent (laptop webcam or Pi) — own 
 clients/            device agents on other machines — e.g. clients/volume-agent/ (Windows volume)
 config/             schema.sql + jarvis.example.json (real jarvis.json is gitignored)
 systemd/            llama-fast + jarvis-orchestrator service units
-Dockerfile*         container images: fat all-in-one + Dockerfile.orchestrator (slim, for the split)
-docker/             container entrypoints: entrypoint.sh, llama-entry.sh, all-in-one.sh
-docker-compose*.yml compose files: fat two-service + docker-compose.split.yml (two-image production split)
+Dockerfile.combined     single-container image (built ON the official llama.cpp image)
+Dockerfile.orchestrator slim orchestrator image (no LLM) for the two-service split
+docker/                 container entrypoints: entrypoint.sh (orchestrator), all-in-one.sh (combined)
+docker-compose.yml      the split: official llama.cpp image + jarvis-orchestrator
 tests/              pytest suite
 ```
 

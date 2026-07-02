@@ -2,12 +2,11 @@
 # SLIM ORCHESTRATOR image for the two-image (production) split: FastAPI API + built React UI +
 # embeddings (memory) + Piper TTS. It does NOT contain llama-server or the LLM GGUF — those live in a
 # separate `llama` service (the official ghcr.io/ggml-org/llama.cpp:server image). The orchestrator
-# reaches the LLM over the network at http://llama:8081 (from config/jarvis.docker.json). Pairs with
-# docker-compose.split.yml.
+# reaches the LLM over the network at http://llama:8081 (from config/jarvis.docker.json). This is the
+# default two-service `docker-compose.yml`.
 #
-# vs the single fat image (./Dockerfile): drops the from-source llama.cpp build + the baked GGUF
-# (~1.3 GB + the compile). Intentionally parallel to that file so the working fat image is untouched;
-# could be DRY'd via a shared base stage later.
+# Published as ghcr.io/<owner>/jarvis-orchestrator. For a single self-contained container instead, see
+# Dockerfile.combined (jarvis-combined).
 
 # --- Stage 1: build the React frontend ---
 FROM node:20-slim AS web

@@ -1,56 +1,52 @@
-# Jarvis — server stack. ONE image (built from the Dockerfile: orchestrator + a from-source
-# llama.cpp) run as TWO services. The camera agent, volume agent, and voice listener run natively
-# on the devices that have the camera/mic/speaker — they are NOT part of this compose.
-# See docs/setup/docker.md.
+# Jarvis — server stack (two services). The LLM is the OFFICIAL, upstream-maintained llama.cpp server
+# image (no from-source compile to own); the ONLY image we build is the orchestrator. A new llama.cpp
+# release is a one-line bump of LLAMA_IMAGE. The camera/volume agents and voice listener run natively.
 #
-# Quick start (no .env needed — everything defaults; admin/admin, no memory until HF_TOKEN is set):
-#   docker compose up -d --build
-#   # override anything on the CLI, e.g.:  HF_TOKEN=hf_xxx ADMIN_PASS=secret docker compose up -d
+#   bash src/scripts/download_models.sh              # put a GGUF in ./models first
+#   docker compose pull && docker compose up -d      # pull published orchestrator + official llama
+#   # …or build the orchestrator locally:  docker compose up -d --build
+#   # override anything on the CLI, e.g.:  ADMIN_PASS=secret HF_TOKEN=hf_xxx docker compose up -d
+#
+# Want ONE self-contained container instead (e.g. Proxmox OCI)? Use the jarvis-combined image — see
+# docs/setup/docker.md.
 
 services:
-  # The LLM server — same image, started as llama-server (overrides the orchestrator entrypoint).
+  # --- LLM: the OFFICIAL llama.cpp server (all-CPU-variant, runs on AVX/AVX2/AVX-512). For production,
+  #     pin LLAMA_IMAGE to a specific tag (e.g. ghcr.io/ggml-org/llama.cpp:server-b<NNNN>). ---
   llama:
-    image: jarvis-server:local
-    build: &jarvis-build
+    image: ${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server}
+    command: >
+      -m /models/${LLM_MODEL:-Qwen3.5-2B-Q4_K_M.gguf}
+      -c ${LLM_CTX:-4096}
+      -t ${LLAMA_THREADS:-4}
+      --host 0.0.0.0 --port 8081 --parallel 1
+    volumes:
+      - ./models:/models:ro       # put the GGUF here (src/scripts/download_models.sh, or your own)
+    healthcheck:                  # the official image ships curl; gate the orchestrator on this
+      test: ["CMD", "curl", "-fsS", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+
+  # --- Orchestrator: the only image we build (FastAPI + UI + embeddings + TTS, no LLM). Talks to the
+  #     llama service at http://llama:8081 (config/jarvis.docker.json). ---
+  orchestrator:
+    image: ${ORCH_IMAGE:-ghcr.io/ravijangid820/jarvis-orchestrator:latest}
+    build:
       context: .
-      # HF token (optional) for baking the gated embedding model at build — passed as a secret so it
-      # never lands in the image. `HF_TOKEN=… docker compose build`. See docs/setup/docker.md.
+      dockerfile: Dockerfile.orchestrator
+      # HF token (optional) to bake the gated embedding model at build — passed as a secret so it never
+      # lands in the image. `HF_TOKEN=… docker compose build`.
       secrets:
         - hf_token
       args:
-        LLAMA_CPP_REF: ${LLAMA_CPP_REF:-}
         EMBED_MODEL: ${EMBED_MODEL:-google/embeddinggemma-300m}
-        # llama.cpp compile parallelism — lower if the build OOMs, raise if you have RAM to spare.
-        BUILD_JOBS: ${BUILD_JOBS:-4}
-        # Baked at build time: if ./models has no .gguf, the model is downloaded from here + verified.
-        LLM_GGUF_URL: ${LLM_GGUF_URL:-}
-        LLM_GGUF_SHA256: ${LLM_GGUF_SHA256:-}
-        # Which GGUF to bake if ./models holds several (matched by filename; else first found).
-        DEFAULT_MODEL: ${DEFAULT_MODEL:-Qwen3.5-2B-Q4_K_M.gguf}
-    # The wrapper ensures the model is present (fetch + verify on first run if missing), then runs
-    # llama-server. Model + context come from .env, so swapping models is a one-line change.
-    entrypoint: ["/app/docker/llama-entry.sh"]
-    command: ["-c", "${LLM_CTX:-4096}", "-t", "${LLAMA_THREADS:-4}",
-              "--host", "0.0.0.0", "--port", "8081", "--parallel", "1"]
-    environment:
-      # Blank LLM_MODEL = use the model baked into the image. Set it to override with your own.
-      - LLM_MODEL=${LLM_MODEL:-}
-      - LLM_GGUF_URL=${LLM_GGUF_URL:-}
-      - LLM_GGUF_SHA256=${LLM_GGUF_SHA256:-}
-      # Any extra llama-server flags, e.g. "--top-k 40 --repeat-penalty 1.1 --mlock".
-      - LLAMA_EXTRA_ARGS=${LLAMA_EXTRA_ARGS:-}
-    volumes:
-      - ./models:/app/models      # your own models (rw); the baked default lives separately at /opt
-    restart: unless-stopped
-
-  # The orchestrator — same image, default entrypoint (bootstrap + uvicorn). Serves HTTP on :5000.
-  orchestrator:
-    image: jarvis-server:local
-    build: *jarvis-build
     depends_on:
-      - llama
-    # No .env required — every value has a default. Override any of these on the CLI
-    # (e.g. `ADMIN_PASS=secret docker compose up -d`), in an optional .env, or here.
+      llama:
+        condition: service_healthy   # don't start until the LLM answers /health
+    # No .env required — every value has a default. Override on the CLI, in an optional .env, or here.
     environment:
       - HF_TOKEN=${HF_TOKEN:-}             # only for a RUNTIME embed download; not needed if baked in
       - EMBED_MODEL=${EMBED_MODEL:-google/embeddinggemma-300m}
@@ -61,8 +57,7 @@ services:
       - "${HOST_PORT:-5000}:5000"
     volumes:
       - ./config:/app/config              # jarvis.json (created from the docker template on first run)
-      - ./models:/app/models:ro           # GGUF + any local model assets
-      - ./tls:/app/tls:ro                 # optional: drop server.crt + server.key here for HTTPS (setup_tls.sh)
+      - ./tls:/app/tls:ro                 # optional: drop server.crt + server.key here for HTTPS
       - jarvis-data:/app/memory           # SQLite DB + ChromaDB vectors (persisted)
     restart: unless-stopped
 

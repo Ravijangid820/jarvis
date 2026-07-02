@@ -1,8 +1,11 @@
-name: Build & push image (GHCR)
+name: Build & push images (GHCR)
 
-# Builds the self-contained server image on GitHub's runners (fast network — no big upload from your
-# laptop) and pushes it to GitHub Container Registry. Trigger manually (Actions tab → Run workflow)
-# or by pushing a v* tag.
+# Builds Jarvis' images on GitHub's runners (fast network — no big upload from your laptop) and pushes
+# them to GitHub Container Registry. We do NOT compile llama.cpp: the combined image is built ON the
+# official ghcr.io/ggml-org/llama.cpp:server image. Two images are published:
+#   • jarvis-combined     — self-contained single container (official llama + orchestrator + models)
+#   • jarvis-orchestrator — slim app only (for the two-service split; pairs with the official llama image)
+# Trigger manually (Actions → Run workflow) or by pushing a v* tag → image X.Y.Z + latest.
 #
 # Required once: add a repo secret HF_TOKEN (Settings → Secrets and variables → Actions) — a token that
 # accepts the Gemma license and can read gated repos. Without it the embedding model won't bake in
@@ -23,23 +26,21 @@ permissions:
   packages: write
 
 jobs:
-  build-push:
+  # ---- jarvis-combined: single self-contained container, built ON the official llama image ----
+  build-combined:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Free up disk space
         run: |
-          # The image (CPU torch + baked LLM + baked embedding) needs ~20-30 GB during the build, but a
-          # runner only has ~14 GB free by default. Drop preinstalled SDKs we don't use to reclaim ~25 GB.
+          # torch + baked LLM + baked embedding need ~20-30 GB; a runner has ~14 GB free by default.
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/lib/android \
                       /opt/hostedtoolcache /usr/local/share/boost /usr/share/swift || true
           sudo apt-get clean || true
           df -h /
 
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -48,39 +49,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Compute image name + tags
+      - name: Compute tags
         id: meta
         run: |
-          owner="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"   # GHCR needs lowercase
-          image="ghcr.io/${owner}/jarvis-server"
-          combined="ghcr.io/${owner}/jarvis-combined"
-          echo "image=${image}" >> "$GITHUB_OUTPUT"
-          if [ "${{ github.event_name }}" = "push" ]; then
-            # Image tag tracks the repo version: git tag v2.2.0 -> image 2.2.0 (+ latest).
-            # Docker tags drop the leading 'v', so the number matches the repo tag exactly.
-            ver="${GITHUB_REF_NAME#v}"
-          else
-            ver="${{ inputs.tag }}"
-          fi
-          # Only add :latest when it's a concrete version (not already 'latest').
-          if [ "${ver}" = "latest" ]; then
-            echo "tags=${image}:latest" >> "$GITHUB_OUTPUT"
-            echo "combined_tags=${combined}:latest" >> "$GITHUB_OUTPUT"
-          else
-            echo "tags=${image}:${ver},${image}:latest" >> "$GITHUB_OUTPUT"
-            echo "combined_tags=${combined}:${ver},${combined}:latest" >> "$GITHUB_OUTPUT"
-          fi
-          # The combined image is FROM the fat image at this exact tag (built + pushed in the step above).
-          echo "base=${image}:${ver}" >> "$GITHUB_OUTPUT"
+          owner="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          image="ghcr.io/${owner}/jarvis-combined"
+          if [ "${{ github.event_name }}" = "push" ]; then ver="${GITHUB_REF_NAME#v}"; else ver="${{ inputs.tag }}"; fi
+          if [ "${ver}" = "latest" ]; then echo "tags=${image}:latest" >> "$GITHUB_OUTPUT";
+          else echo "tags=${image}:${ver},${image}:latest" >> "$GITHUB_OUTPUT"; fi
 
-      - name: Build & push
+      - name: Build & push jarvis-combined
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: Dockerfile.combined
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
-          # Models download during the build (runner has a fast link). The HF token bakes the embedding.
           build-args: |
             LLM_GGUF_URL=https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf
             LLM_GGUF_SHA256=aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223
@@ -88,33 +73,13 @@ jobs:
           secrets: |
             hf_token=${{ secrets.HF_TOKEN }}
 
-      - name: Build & push combined (all-in-one) image
-        # Thin layer on the fat image just pushed above: flips the default entrypoint to all-in-one.sh so
-        # a plain run / Proxmox OCI container starts both services. Shares all base layers → tiny + fast.
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile.combined
-          push: true
-          tags: ${{ steps.meta.outputs.combined_tags }}
-          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
-          build-args: |
-            BASE_IMAGE=${{ steps.meta.outputs.base }}
+      - run: echo "Pushed ${{ steps.meta.outputs.tags }}  (single-container all-in-one)" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Summary
-        run: |
-          echo "Pushed:" >> "$GITHUB_STEP_SUMMARY"
-          echo "- ${{ steps.meta.outputs.tags }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- ${{ steps.meta.outputs.combined_tags }}  (all-in-one default entrypoint)" >> "$GITHUB_STEP_SUMMARY"
-
+  # ---- jarvis-orchestrator: slim app image for the two-service split ----
   build-orchestrator:
-    # Slim orchestrator image for the split (Dockerfile.orchestrator: FastAPI + UI + embeddings + TTS,
-    # NO llama-server, NO GGUF). Independent of the fat image, so it runs as its own job (fresh runner
-    # disk). NOTE: this image has no LLM — it only works paired with a llama backend (docker-compose.split.yml).
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Free up disk space
         run: |
@@ -123,8 +88,7 @@ jobs:
           sudo apt-get clean || true
           df -h /
 
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -133,23 +97,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Compute image name + tags
+      - name: Compute tags
         id: meta
         run: |
           owner="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
           image="ghcr.io/${owner}/jarvis-orchestrator"
-          if [ "${{ github.event_name }}" = "push" ]; then
-            ver="${GITHUB_REF_NAME#v}"
-          else
-            ver="${{ inputs.tag }}"
-          fi
-          if [ "${ver}" = "latest" ]; then
-            echo "tags=${image}:latest" >> "$GITHUB_OUTPUT"
-          else
-            echo "tags=${image}:${ver},${image}:latest" >> "$GITHUB_OUTPUT"
-          fi
+          if [ "${{ github.event_name }}" = "push" ]; then ver="${GITHUB_REF_NAME#v}"; else ver="${{ inputs.tag }}"; fi
+          if [ "${ver}" = "latest" ]; then echo "tags=${image}:latest" >> "$GITHUB_OUTPUT";
+          else echo "tags=${image}:${ver},${image}:latest" >> "$GITHUB_OUTPUT"; fi
 
-      - name: Build & push orchestrator (slim, no LLM)
+      - name: Build & push jarvis-orchestrator (slim, no LLM)
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -162,5 +119,4 @@ jobs:
           secrets: |
             hf_token=${{ secrets.HF_TOKEN }}
 
-      - name: Summary
-        run: echo "Pushed ${{ steps.meta.outputs.tags }}  (slim orchestrator — needs a llama backend)" >> "$GITHUB_STEP_SUMMARY"
+      - run: echo "Pushed ${{ steps.meta.outputs.tags }}  (slim orchestrator — needs a llama backend)" >> "$GITHUB_STEP_SUMMARY"

@@ -9,19 +9,26 @@ this compose (install them with `docs/setup/camera.md`, `volume-agent.md`, `voic
 > report errors; expect a short pass to green.
 
 ## What runs
-**One image, two services.** The `Dockerfile` builds a single image containing the orchestrator **and**
-a from-source `llama-server` (compiled with controllable CPU flags, mirroring the native
-`build_native.sh` build — no dependency on a prebuilt llama image). Compose runs that one image twice:
+**The LLM is the official, upstream-maintained `ghcr.io/ggml-org/llama.cpp:server` image — we don't
+compile llama.cpp.** The only images this repo builds are the orchestrator (+ a combined convenience
+image built *on top of* that official image). Two images are published:
+
+| Image | What it is | Run as |
+| --- | --- | --- |
+| **`jarvis-combined`** | official `llama-server` + orchestrator + baked LLM & embedding, in **one** image | a **single container** (default entrypoint runs both) — simplest / **Proxmox OCI** |
+| **`jarvis-orchestrator`** | **slim app only** — FastAPI + UI + embeddings + TTS, **no LLM** | the **two-service split**: pairs with the official llama image over the network |
+
+The two-service split (`docker-compose.yml`) runs:
 
 | Service | Role |
 | --- | --- |
-| `llama` | Runs the compiled `llama-server`: loads the GGUF, serves the OpenAI-style API on `:8081` (internal only). |
+| `llama` | the **official** llama.cpp server: loads the GGUF, serves the OpenAI-style API on `:8081` (internal only). |
 | `orchestrator` | FastAPI API + built React UI + Piper TTS + embeddings. Serves **HTTP** on `:5000`. |
 
-Why from source (not the official `ghcr.io/ggml-org/llama.cpp:server` image): this project deliberately
-builds llama.cpp with explicit GGML flags so it runs on a chosen CPU baseline. Compiling in-image keeps
-that control and gives parity with the native install. The cost is a longer first build — which is what
-a powerful build host is for.
+Why the official image: llama.cpp is upstream's to maintain — we ride their prebuilt, **all-CPU-variant**
+binary (runs on AVX / AVX2 / AVX-512, auto-detected — including the old box), so a new llama.cpp release is
+a one-line image bump and there's **no compile to own**. `jarvis-combined` is built directly on that same
+official image (Ubuntu 24.04 + `/app/llama-server`), with our orchestrator layered on.
 
 ## Prerequisites
 - **Docker + Compose** on the build host. The image's llama.cpp is built with **all CPU variants** and
@@ -37,17 +44,25 @@ a powerful build host is for.
   [Embedding model](#embedding-model-memory--baked-in). Not needed for the LLM or to just run.
 
 ## Run
-No config file needed — every value defaults (login `admin`/`admin`). To bake memory in, pass the token:
+The default `docker-compose.yml` is the **two-service split**: the official llama image + the published
+`jarvis-orchestrator`. Put a GGUF in `./models`, then pull + run (no config file — every value defaults,
+login `admin`/`admin`):
 ```bash
-HF_TOKEN=hf_xxx docker compose up -d --build   # bakes LLM + embedding model + compiles llama-server
+bash src/scripts/download_models.sh             # GGUF → ./models (for the llama service)
+docker compose pull && docker compose up -d     # official llama + published orchestrator
 docker compose logs -f                          # banner shows the login URL
 curl http://localhost:5000/health
 ```
-Without the token it still builds and runs — just without memory until you add it (the LLM is baked
-regardless). Override anything on the CLI (or an optional `.env`):
+Prefer to build the orchestrator yourself (and bake memory in)? Pass the token and `--build`:
 ```bash
-ADMIN_PASS=secret docker compose up -d
+HF_TOKEN=hf_xxx docker compose up -d --build    # builds jarvis-orchestrator, bakes the embedding model
 ```
+Without the token it still runs — just without memory until you add it. Override anything on the CLI
+(or an optional `.env`), e.g. `ADMIN_PASS=secret docker compose up -d`.
+
+> **One container instead of two?** Use the **`jarvis-combined`** image (self-contained; runs both
+> services) — see [Single container](#single-container-all-in-one--combined). That's the image for
+> **Proxmox OCI**.
 
 > **Windows PowerShell** doesn't support the inline `VAR=value cmd` form — set it first:
 > ```powershell
@@ -177,7 +192,7 @@ Layers — tunables in env (all defaulted), app settings in a file, data in volu
 1. **Env vars** (all optional — every one has a default in `docker-compose.yml`). Set them on the CLI
    (`HF_TOKEN=… docker compose up`), in an **optional** `.env`, or via `docker run -e`:
    `HF_TOKEN` (memory; default off), `ADMIN_USER`/`ADMIN_PASS` (default `admin`/`admin`), `HOST_PORT`,
-   `LLM_MODEL`, `LLM_CTX`, `LLAMA_THREADS`, plus build args `LLM_GGUF_URL`/`LLM_GGUF_SHA256`/`LLAMA_CPP_REF`/`BUILD_JOBS`.
+   `LLM_MODEL`, `LLM_CTX`, `LLAMA_THREADS`, `LLAMA_IMAGE`, plus combined-image build args `LLM_GGUF_URL`/`LLM_GGUF_SHA256`.
 2. **`config/jarvis.json`** — app settings. On first run the entrypoint copies it from
    `config/jarvis.docker.json` (relative paths + `fast_brain_url=http://llama:8081`). Edit it on the
    host and restart to change settings. Override the location with `JARVIS_CONFIG` if you prefer.
@@ -195,98 +210,77 @@ to share — it carries no secrets.) Admin creds are a first-run *seed*; to chan
 password later, use `manage.py reset-password` (above), not `.env`.
 
 ## Single container (all-in-one / combined)
-Prefer **one** container over the two-service split? Two ways to run both llama-server and the orchestrator
-in one container (they talk over loopback — no Docker network or `llama` hostname):
-
-**A) The `jarvis-combined` image (recommended).** A published image whose **default entrypoint** is already
-all-in-one — so no `--entrypoint` override, and it works where you *can't* override the entrypoint (e.g.
-**Proxmox VE 9.1 OCI containers**, which run the image's default):
+Prefer **one** container over the split? The **`jarvis-combined`** image runs both llama-server and the
+orchestrator in one container (they talk over loopback — no Docker network or `llama` hostname). Its
+**default entrypoint** is already all-in-one, so no `--entrypoint` override — and it works where you
+*can't* override the entrypoint (e.g. **Proxmox VE 9.1 OCI containers**, which run the image's default):
 ```bash
 docker run --init -p 5000:5000 --restart unless-stopped \
+  -e ADMIN_PASS=secret -v jarvis-data:/app/memory \
   ghcr.io/<owner>/jarvis-combined:latest
 ```
+`all-in-one.sh` starts the (official, prebuilt) `llama-server` on `127.0.0.1:8081`, points the orchestrator
+at it (via `JARVIS_FAST_BRAIN_URL`), and supervises both — mirroring the native box. `--init` gives a proper
+PID 1 that reaps children; `--restart unless-stopped` recovers if a service dies. All the usual env vars
+apply (`ADMIN_PASS`, `EMBED_MODEL`, `LLM_CTX`, …).
 
-**B) The `jarvis-server` image with an explicit override** (same result, one flag):
+`jarvis-combined` is built **on** the official `ggml-org/llama.cpp:server` image (its prebuilt all-variant
+`llama-server`), with the orchestrator + baked LLM & embedding layered on — self-contained, no compile.
+
+Trade-offs vs the split: simplest to run, but **no independent restart** (if either service dies the
+container exits — rely on the restart policy) and logs interleave. Fine for single-node/personal use.
+
+## Two-image split (default `docker-compose.yml`)
+The **production shape** — and the compose default — two images with independent lifecycles:
+- **`llama`** → the **official** `ghcr.io/ggml-org/llama.cpp:server` image — nothing to build; point it at a GGUF.
+- **`orchestrator`** → **`ghcr.io/<owner>/jarvis-orchestrator`** (slim: FastAPI + UI + embeddings + TTS, **no LLM**).
+
+They talk over the compose network (`orchestrator → http://llama:8081`); the orchestrator waits on the
+llama `/health` check before starting. Run it — pull the published images, or `--build` the orchestrator:
 ```bash
-docker run --init -p 5000:5000 --restart unless-stopped \
-  --entrypoint /app/docker/all-in-one.sh \
-  ghcr.io/<owner>/jarvis-server:latest
+bash src/scripts/download_models.sh              # GGUF → ./models (for the llama service)
+docker compose pull && docker compose up -d      # (or: up -d --build  to build the orchestrator locally)
 ```
-
-`all-in-one.sh` starts llama-server in the background on `127.0.0.1:8081`, points the orchestrator at it
-(via `JARVIS_FAST_BRAIN_URL`), and supervises both — mirroring the native box (two processes, one machine).
-`--init` gives a proper PID 1 that reaps children; `--restart unless-stopped` recovers if a service dies.
-All the usual env vars still apply (`ADMIN_PASS`, `EMBED_MODEL`, `LLM_CTX`, …).
-
-`jarvis-combined` is a thin layer on `jarvis-server` (only the default entrypoint differs) — it shares all
-the base layers, so it's tiny and versioned in lockstep by the same Actions build.
-
-Trade-offs vs the two-container compose: simplest to run, but **no independent restart** (if either
-service dies the container exits) and logs interleave. Fine for single-node/personal use; use the
-two-container split for scale or independent lifecycle.
-
-## Two-image split (production shape)
-The fat image is one build run three ways. The **production-grade** shape instead uses **two separate,
-leaner images** with independent lifecycles:
-
-- **`llama`** → the **official** `ghcr.io/ggml-org/llama.cpp:server` image — no from-source compile to
-  maintain; just point it at a GGUF.
-- **`orchestrator`** → a **slim** image, **published** at `ghcr.io/<owner>/jarvis-orchestrator` (built from
-  `Dockerfile.orchestrator`): FastAPI + UI + embeddings + TTS, **no llama-server and no baked GGUF** (~1.3 GB
-  + the compile dropped). It has **no LLM**, so it only works paired with the `llama` service.
-
-They talk over the compose network (`orchestrator → http://llama:8081`). Run it — **pull** the published
-orchestrator, or `--build` it locally:
-```bash
-bash src/scripts/download_models.sh          # put a GGUF in ./models first
-docker compose -f docker-compose.split.yml pull    # pulls jarvis-orchestrator + the official llama image
-docker compose -f docker-compose.split.yml up -d   # (or: up -d --build  to build the orchestrator locally)
-```
-Set `LLM_MODEL` if your GGUF's filename differs from `Qwen3.5-2B-Q4_K_M.gguf`; `EMBED_MODEL`, `ADMIN_PASS`,
-`HF_TOKEN`, `LLM_CTX`, `LLAMA_THREADS`, `HOST_PORT` all apply as usual.
+Set `LLM_MODEL` if your GGUF's filename differs from `Qwen3.5-2B-Q4_K_M.gguf`; `LLAMA_IMAGE` to pin the llama
+tag; `EMBED_MODEL`, `ADMIN_PASS`, `HF_TOKEN`, `LLM_CTX`, `LLAMA_THREADS`, `HOST_PORT` apply as usual.
 
 **When to use which:**
 | Shape | Best for |
 | --- | --- |
-| all-in-one (1 container) | simplest personal/single-node use |
-| fat image, 2 services (`docker-compose.yml`) | **self-contained** — LLM + embedding baked, fully offline, one artifact |
-| **two images (`docker-compose.split.yml`)** | production: leaner pulls, independent updates/scaling of LLM vs app |
+| `jarvis-combined` (1 container) | simplest personal/single-node use; **Proxmox OCI** |
+| split, 2 services (`docker-compose.yml`) | production: official llama + slim app, independent updates/scaling |
 
-**CPU portability — same as the fat image.** The official llama image is compiled with
-`GGML_CPU_ALL_VARIANTS=ON` + `GGML_BACKEND_DL=ON` (verified in the upstream
-[`.devops/cpu.Dockerfile`](https://github.com/ggml-org/llama.cpp/blob/master/.devops/cpu.Dockerfile)) —
-exactly like our from-source build. So it auto-detects and runs on **any x86-64 (AVX, AVX2, AVX-512)** —
-including the old AVX-only box — and is multi-arch (amd64/arm64/s390x). **No AVX2 requirement.** So
-portability is *not* a reason to avoid the split; pick the fat image only when you want one fully-offline,
-self-contained artifact (model baked in). This split is the first cut — build/run it once to confirm the
-official image's entrypoint/port before relying on it in prod.
+Both images use the official all-CPU-variant `llama-server`, so both run on **any x86-64 (AVX, AVX2,
+AVX-512)** — including the old AVX-only box. Details: [CPU / architecture support](#cpu--architecture-support-portability).
 
 ## Running without Compose (optional)
-Compose is just a convenience wrapper over `docker run` — it issues these commands for you. The same two
-containers by hand:
+Compose just wraps `docker run`. By hand:
 
+**One container** — `jarvis-combined` (simplest):
+```bash
+docker run -d --name jarvis --init -p 5000:5000 --restart unless-stopped \
+  -e ADMIN_PASS=secret -v jarvis-data:/app/memory \
+  ghcr.io/<owner>/jarvis-combined:latest
+```
+
+**Two containers** — the split (official llama + orchestrator on a shared network; the orchestrator
+resolves the llama container by name, `http://llama:8081`):
 ```bash
 docker network create jarvis
 
-# LLM
-docker run -d --name jarvis-llama --network jarvis \
-  -v "$PWD/models:/app/models" \
-  --entrypoint /app/docker/llama-entry.sh \
-  jarvis-server:local \
-  -c 4096 -t 4 --host 0.0.0.0 --port 8081 --parallel 1
+# LLM: the official image + your GGUF
+docker run -d --name llama --network jarvis \
+  -v "$PWD/models:/models:ro" \
+  ghcr.io/ggml-org/llama.cpp:server \
+  -m /models/Qwen3.5-2B-Q4_K_M.gguf -c 4096 -t 4 --host 0.0.0.0 --port 8081 --parallel 1
 
-# Orchestrator — defaults to admin/admin; add -e to override (or --env-file .env to load a file)
+# Orchestrator — defaults to admin/admin; add -e to override
 docker run -d --name jarvis-orchestrator --network jarvis \
-  -p 5000:5000 \
-  -e ADMIN_PASS=secret -e HF_TOKEN=hf_xxx \
-  -v "$PWD/config:/app/config" \
-  -v jarvis-data:/app/memory \
-  -v hf-cache:/app/.cache/huggingface \
-  jarvis-server:local
+  -p 5000:5000 -e ADMIN_PASS=secret \
+  -v "$PWD/config:/app/config" -v jarvis-data:/app/memory \
+  ghcr.io/<owner>/jarvis-orchestrator:latest
 ```
-Same result as `docker compose up`. The `-e` flags are optional — with none, it runs on defaults
-(login `admin`/`admin`, no memory). (Windows PowerShell: use `${PWD}` for the paths.) Compose just
-records all of this so you don't retype it — which is why it's the recommended way.
+Same result as `docker compose up`. (Windows PowerShell: use `${PWD}` for the paths.)
 
 ## HTTPS / certificates
 Two options:
@@ -308,7 +302,7 @@ box (Sandy-Bridge i5: AVX, no AVX2). Audited per component:
 
 | Component | Floor | Notes |
 | --- | --- | --- |
-| **LLM (llama.cpp)** | any x86-64 (even no-AVX) | `GGML_CPU_ALL_VARIANTS` + `GGML_BACKEND_DL` compile SSE4.2/AVX/AVX2/AVX-512 backends; ggml auto-loads the best at runtime — no rebuild, no illegal-instruction crash. The split's official image uses the *same* upstream flags. |
+| **LLM (llama.cpp)** | any x86-64 (even no-AVX) | We use the **official** `llama.cpp:server` binary, built `GGML_CPU_ALL_VARIANTS` + `GGML_BACKEND_DL` (upstream [`.devops/cpu.Dockerfile`](https://github.com/ggml-org/llama.cpp/blob/master/.devops/cpu.Dockerfile)) — ggml auto-loads the best CPU backend at runtime; no rebuild, no illegal-instruction crash. |
 | **Embedding / memory (PyTorch)** | **AVX** | Official torch CPU wheels require AVX (the AVX2-minimum proposal [pytorch#94021](https://github.com/pytorch/pytorch/issues/94021) is still open/unimplemented). On a CPU *without* AVX, torch illegal-instructions → **memory/RAG won't load, but chat/LLM still works**. |
 | **TTS (Piper)** | x86-64 (prebuilt) | `piper_linux_x86_64`; if it can't run it degrades gracefully — TTS off, everything else fine. |
 | **API / UI / Python** | arch-generic | pure Python on the amd64 base. |
@@ -320,41 +314,32 @@ orchestrator image would need rebuilding.
 **Bottom line:** any x86-64 from ~2011 (AVX) runs the *whole* stack, no flags. Pre-AVX x86-64 loses
 **memory only** (chat still works). ARM needs a rebuild.
 
-## Publishing the image
-Published image tags + their differences: **[image-releases.md](image-releases.md)**. Tags track the repo
-version (git `vX.Y.Z` → image `X.Y.Z` + `latest`) — usually the GitHub Actions workflow does this for you.
-To tag + push by hand instead:
-```bash
-docker compose build
-docker login ghcr.io               # (or Docker Hub: docker login)
-docker tag jarvis-server:local ghcr.io/<you>/jarvis-server:2.2.0
-docker tag jarvis-server:local ghcr.io/<you>/jarvis-server:latest
-docker push ghcr.io/<you>/jarvis-server:2.2.0
-docker push ghcr.io/<you>/jarvis-server:latest
-```
-Notes: the image is large (~7–8 GB — CPU torch + baked LLM + baked embedding), so the push is slow;
-**GHCR** handles big images better than Docker Hub. Pushing publicly **redistributes the baked weights** —
-the LLM is Apache-2.0, but the embedding (Gemma) carries the Gemma Terms (bundled in `licenses/gemma/`).
-The image is `linux/amd64` + runs on any x86-64 CPU; ARM needs a separate `buildx` build.
+## Publishing the images
+Two images are published — **`jarvis-combined`** and **`jarvis-orchestrator`** (roles + tags:
+**[image-releases.md](image-releases.md)**). Tags track the repo version (git `vX.Y.Z` → image `X.Y.Z` +
+`latest`). We do **not** publish llama.cpp — that's the upstream `ggml-org/llama.cpp:server` image.
 
 ### Build + push on GitHub Actions (no upload from your machine)
-`.github/workflows/build-push.yml` builds the image **on GitHub's runners** (fast link) and pushes to
-GHCR — so you never upload 7–8 GB over your own connection. One-time setup:
-1. Add a repo secret **`HF_TOKEN`** (Settings → Secrets and variables → Actions) — a token that accepts
-   the Gemma license and can read gated repos. (Without it the LLM still bakes; the embedding won't.)
-2. Run it: Actions tab → **Build & push image (GHCR)** → *Run workflow* (pick a tag), or push a `v*` git tag.
-3. The image lands at `ghcr.io/<owner>/jarvis-server:<tag>`. It's **private** by default — make it public
-   in the repo's package settings if you want.
+`.github/workflows/build-push.yml` builds **on GitHub's runners** (fast link) and pushes to GHCR — two
+parallel jobs, one per image. One-time setup:
+1. Add a repo secret **`HF_TOKEN`** (Settings → Secrets and variables → Actions) — accepts the Gemma
+   license + reads gated repos. (Without it the LLM still bakes; the embedding won't.)
+2. Run it: Actions → **Build & push images (GHCR)** → *Run workflow* (pick a tag), or push a `v*` git tag.
+3. Images land at `ghcr.io/<owner>/jarvis-combined` and `…/jarvis-orchestrator`. New packages are
+   **private** by default — make them public in the package settings to pull without creds.
 
-The workflow frees ~25 GB of runner disk first (the image needs ~20–30 GB to build), passes `HF_TOKEN` as
-a BuildKit secret (never stored in the image), and downloads both models during the build.
+Each job frees ~25 GB of runner disk first, passes `HF_TOKEN` as a BuildKit secret (never in the image),
+and downloads the model(s) during the build. Pushing publicly **redistributes the baked weights** — the
+LLM is Apache-2.0, the embedding (Gemma) carries the Gemma Terms (bundled in `licenses/gemma/`).
 
 ## Build options
-Both services share one image (a YAML anchor), built once. Build-time arg (set in `.env`):
-- `LLAMA_CPP_REF` — pin the llama.cpp upstream release for a reproducible build (recommended). Unset
-  builds upstream HEAD with a warning.
+Build-time args:
+- **`LLAMA_IMAGE`** (combined) — the official llama base to build on. **Pin a specific tag**
+  (`ghcr.io/ggml-org/llama.cpp:server-b<NNNN>`) for reproducible production builds; `:server` floats.
+- **`LLM_GGUF_URL` / `LLM_GGUF_SHA256` / `DEFAULT_MODEL`** (combined) — the LLM baked in, SHA-verified.
+- **`EMBED_MODEL`** (both) — the embedding model baked in.
 
-Rebuild after changing it: `docker compose build --no-cache` (or just `up -d --build`).
+Rebuild: `docker compose build --no-cache` (orchestrator), or re-run the Actions workflow.
 
 ## Notes / known rough edges (verify on first build)
 - **Image size**: CPU **torch** (embeddings) plus the **baked-in model** make the image large (several GB

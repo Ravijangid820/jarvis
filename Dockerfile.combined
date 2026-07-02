@@ -1,17 +1,88 @@
 # syntax=docker/dockerfile:1
-# COMBINED / all-in-one APPLIANCE image: the fat jarvis-server image with the DEFAULT entrypoint set to
-# all-in-one.sh — so a plain `docker run` (or a Proxmox VE 9.1 OCI container, which runs the image's
-# *default* entrypoint and can't easily override it) starts BOTH llama-server AND the orchestrator in one
-# container, with no --entrypoint override needed.
-#
-# It's a thin layer on top of the already-built fat image (everything — the baked LLM + embedding, env
-# vars, volumes — is inherited), so it builds in seconds and shares all the base layers. The base tag is
-# passed by the Actions workflow so this image tracks the same version.
-ARG BASE_IMAGE=ghcr.io/ravijangid820/jarvis-server:latest
-FROM ${BASE_IMAGE}
+# COMBINED / all-in-one image — ONE self-contained container built ON TOP OF the OFFICIAL llama.cpp
+# server image. We do NOT compile llama.cpp: the base already ships a prebuilt, all-CPU-variant
+# `llama-server` at /app/llama-server (runs on AVX / AVX2 / AVX-512, auto-detected). We just layer the
+# orchestrator + baked LLM & embedding on top and set the default entrypoint to all-in-one, so a plain
+# `docker run` — or a Proxmox VE 9.1 OCI container (which runs the image's *default* entrypoint) — starts
+# BOTH services with no override. New llama.cpp release = bump LLAMA_IMAGE, no build to maintain.
 
-# Default run = both services (vs the base image's default, which is the orchestrator alone).
+# --- Stage 1: build the React frontend ---
+FROM node:20-slim AS web
+WORKDIR /web
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
+# --- Stage 2: resolve/bake the default model (from ./models, else download + verify) ---
+FROM debian:12-slim AS model
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+ARG LLM_GGUF_URL=
+ARG LLM_GGUF_SHA256=
+ARG DEFAULT_MODEL=Qwen3.5-2B-Q4_K_M.gguf
+COPY models/ /staged/
+RUN set -eu; mkdir -p /out; \
+    existing="$(find /staged -name "$DEFAULT_MODEL" -type f | head -n1 || true)"; \
+    [ -z "$existing" ] && existing="$(find /staged -name '*.gguf' -type f | sort | head -n1 || true)"; \
+    if [ -n "$existing" ]; then echo "Baking model from build context: $existing"; cp "$existing" /out/; \
+    elif [ -n "$LLM_GGUF_URL" ]; then \
+      echo "No model in ./models — downloading from LLM_GGUF_URL"; \
+      case "$LLM_GGUF_URL" in https://*) ;; *) echo "WARN: LLM_GGUF_URL is not https:// — could be tampered in transit";; esac; \
+      fn="$(basename "$LLM_GGUF_URL")"; case "$fn" in *.gguf) ;; *) fn=model.gguf;; esac; \
+      curl -L --fail --retry 5 --retry-all-errors --retry-delay 5 -C - -o "/out/$fn" "$LLM_GGUF_URL"; \
+      if [ -n "$LLM_GGUF_SHA256" ]; then echo "${LLM_GGUF_SHA256}  /out/$fn" | sha256sum -c -; \
+      else echo "WARN: LLM_GGUF_SHA256 not set — skipping integrity check"; fi; \
+    else echo "NOTE: no model in ./models and no LLM_GGUF_URL — image ships without a baked default."; fi
+
+# --- Stage 3: runtime = official llama.cpp server + our orchestrator ---
+# Pin LLAMA_IMAGE to a specific tag (e.g. :server-b<NNNN>) for reproducible/robust production builds;
+# :server is the floating latest server build.
+ARG LLAMA_IMAGE=ghcr.io/ggml-org/llama.cpp:server
+FROM ${LLAMA_IMAGE}
+# Base = ubuntu 24.04 with /app/llama-server + its ggml libs (in /app), libgomp1 + curl already present.
+# Our app lives alongside at /app (JARVIS_HOME=/app), coexisting with the llama-server binary + libs —
+# no filename clashes. llama-server stays put; all-in-one.sh runs /app/llama-server on loopback.
+ENV JARVIS_HOME=/app \
+    JARVIS_CONFIG=/app/config/jarvis.json \
+    HF_HOME=/app/.cache/huggingface \
+    PYTHONUNBUFFERED=1 \
+    LLAMA_ARG_HOST=127.0.0.1
+# Runtime libs for torch/onnxruntime + the Piper fetch. (libgomp1 already in the base.)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates curl tar gzip libstdc++6 \
+    && rm -rf /var/lib/apt/lists/*
+# uv (pinned copy, no curl|sh). No system Python 3.13 on ubuntu 24.04, so let uv fetch a standalone one.
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+WORKDIR /app
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev
+# Bake the embedding model (memory works offline, no runtime token): ./embed-cache, else a build-time
+# HF token secret; else a runtime-download fallback. Same recipe as the orchestrator image.
+ARG EMBED_MODEL=google/embeddinggemma-300m
+COPY embed-cache/ /app/.cache/huggingface/
+RUN --mount=type=secret,id=hf_token \
+    if find /app/.cache/huggingface/hub -maxdepth 1 -name 'models--*' 2>/dev/null | grep -q .; then \
+      echo "Embedding model baked from ./embed-cache."; \
+    elif [ -s /run/secrets/hf_token ]; then \
+      echo "Downloading embedding model ${EMBED_MODEL} at build (retries + resumes)…"; \
+      n=0; ok=0; while [ "$n" -lt 5 ]; do n=$((n + 1)); \
+        if HF_TOKEN="$(cat /run/secrets/hf_token)" EMBED_MODEL="${EMBED_MODEL}" \
+             uv run --no-sync python -c "import os; from sentence_transformers import SentenceTransformer; SentenceTransformer(os.environ['EMBED_MODEL'])"; \
+        then ok=1; break; fi; echo "  attempt $n/5 failed; retrying in 10s…"; sleep 10; done; \
+      [ "$ok" = 1 ] && echo "Embedding model baked from HuggingFace." \
+                    || echo "WARN: embedding bake failed — will fall back to a runtime download."; \
+    else echo "NOTE: embedding not baked (no ./embed-cache, no hf_token secret) — runtime download needed."; fi
+COPY src/ ./src/
+COPY config/ ./config/
+COPY licenses/ ./licenses/
+COPY --from=web /web/dist ./frontend/dist
+# Baked default model — kept at /opt so a ./models bind-mount never hides it.
+COPY --from=model /out/ /opt/jarvis/models/
+RUN sed -i 's/\r$//' src/scripts/*.sh; \
+    bash src/scripts/piper_setup.sh || echo "WARN: piper_setup failed — TTS unavailable until fixed"
+COPY docker/ ./docker/
+RUN sed -i 's/\r$//' docker/*.sh && chmod +x docker/*.sh
+EXPOSE 5000
+# Default = BOTH services (the whole point of this image).
 ENTRYPOINT ["/app/docker/all-in-one.sh"]
-
-LABEL org.opencontainers.image.title="jarvis-combined" \
-      org.opencontainers.image.description="Jarvis all-in-one: llama-server + orchestrator in one container (default entrypoint). For Proxmox OCI / single-container runs."

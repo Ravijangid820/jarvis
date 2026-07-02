@@ -4,6 +4,26 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## v2.3.0 — 2026-07-02 — Official llama.cpp image (drop the from-source build)
+
+Stop compiling llama.cpp in Docker — **ride the official `ghcr.io/ggml-org/llama.cpp:server` image**
+(built `GGML_CPU_ALL_VARIANTS`, so same portability: runs on the AVX-only box). A new llama.cpp release is
+now a one-line `LLAMA_IMAGE` bump; the only thing this repo builds is the orchestrator.
+
+- **Removed** the from-source fat image: `Dockerfile`, `docker/llama-entry.sh`, `docker-compose.split.yml`,
+  and the `jarvis-server` image (retired). No more llama.cpp compile, `LLAMA_CPP_REF`, all-variants flags,
+  OOM caps, or resilient-clone retries to maintain.
+- **`Dockerfile.combined`** rebuilt **on** the official image (Ubuntu 24.04 + `/app/llama-server`) — our
+  orchestrator + baked LLM/embedding layered on; default entrypoint runs both (`jarvis-combined`, for
+  single-container / Proxmox OCI). `all-in-one.sh` now runs the official prebuilt binary.
+- **`docker-compose.yml`** is now the two-service split: official llama image + `jarvis-orchestrator`, with
+  a llama `/health` gate (`depends_on: service_healthy`) before the orchestrator starts.
+- **Workflow** builds two images in parallel (`jarvis-combined`, `jarvis-orchestrator`); no `jarvis-server`.
+- Docs (docker.md, image-releases.md, README, index) rewritten; native systemd install unchanged.
+
+> Validate the new `jarvis-combined` build (one Actions run + a smoke test) before pulling it to Proxmox —
+> it's a from-scratch build on a new base. The old image keeps running until you pull.
+
 ## v2.2.0 — 2026-07-01 — Containerization
 
 Milestone: the server stack (orchestrator + llama.cpp) is now **containerized end-to-end**, on top of the

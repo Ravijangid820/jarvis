@@ -92,15 +92,17 @@ uv run pytest -q && uv run ruff check src/orchestrator src/scripts tests
 
 ### With Docker (server stack)
 
-The server (orchestrator + llama.cpp) is containerized, with the default model baked in. Build it locally
-(below) or **pull the published image from GHCR** (`ghcr.io/ravijangid820/jarvis-server:latest`). Run it
-three ways — two services, a single all-in-one container, or a two-image production split (see
-[docs/setup/docker.md](docs/setup/docker.md)). **No config file required** — every value has a default, so
-first run is one command:
+The server is containerized. The **LLM uses the official `llama.cpp` image** (no compile to maintain); the
+only image we build is the orchestrator. Two ways to run (see [docs/setup/docker.md](docs/setup/docker.md)):
+- **Single container** — pull **`ghcr.io/ravijangid820/jarvis-combined:latest`** (llama + orchestrator in
+  one; ideal for **Proxmox OCI**).
+- **Two services** (default compose) — the official llama image + `jarvis-orchestrator`.
 
+**No config file required** — every value defaults (login `admin`/`admin`). First run:
 ```bash
-docker compose up -d --build      # runs with defaults: login admin / admin, no memory until HF_TOKEN
-docker compose logs -f            # watch the startup banner (shows the login URL)
+bash src/scripts/download_models.sh   # GGUF → ./models (for the llama service)
+docker compose up -d                  # official llama + published orchestrator (add --build to build it)
+docker compose logs -f                # startup banner shows the login URL
 ```
 
 Open **http://localhost:5000** and log in with **`admin` / `admin`**.

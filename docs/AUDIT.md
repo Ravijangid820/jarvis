@@ -542,7 +542,7 @@ agent (`clients/volume-agent/`), install/supply-chain scripts, the frontend, and
 | F5 no CSP | ✅ Fixed | Strict CSP + `Referrer-Policy: no-referrer` on every response. |
 | F6 DB world-readable | ✅ Fixed | `init_db()` chmods DB+WAL/SHM to `0600`; `UMask=0077` keeps new files owner-only. |
 | F7 unbounded event data / no retention | ✅ Fixed | `data` capped at 4 KB; `vision_events` capped to last 5000; delivered `device_commands` purged after 1 day. |
-| F8 supply-chain downloads | ✅ Fixed (mechanisms in place; exact pins/hashes are operator-supplied) | `trust_remote_code=False` on the embedding model (closes a model-repo RCE vector) + `EMBED_MODEL_REVISION` pin; Piper `PIPER_VERSION` pin + `PIPER_SHA256`/`VOICE_SHA256` verify; GGUF https-check + `LLM_GGUF_SHA256`; `LLAMA_CPP_REF` pin + commit logged; agent deps upper-bounded. |
+| F8 supply-chain downloads | ✅ Fixed (mechanisms in place; exact pins/hashes are operator-supplied) | `trust_remote_code=False` on the embedding model (closes a model-repo RCE vector) + `EMBED_MODEL_REVISION` pin; Piper `PIPER_VERSION` pin + `PIPER_SHA256`/`VOICE_SHA256` verify; GGUF https-check + `LLM_GGUF_SHA256`; Docker LLM via the official `llama.cpp` image (pin `LLAMA_IMAGE` tag), native via `LLAMA_CPP_REF` pin + commit logged; agent deps upper-bounded. |
 | F9 self-scoped prompt injection | — Accepted | Self-only; delimited framing kept. |
 | F10 long-lived credentials | ◑ Partial | Added `/auth/logout-all` (revoke-all). Token lifetime (30 d) / rotation / key expiry unchanged. |
 | F11 0-row mutations return ok | ✅ Fixed | Rename → 403 on not-yours; knowledge update/delete → 404 on missing. |
