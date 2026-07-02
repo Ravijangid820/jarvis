@@ -17,15 +17,19 @@ for tool in git cmake; do
 done
 
 # Cap parallel compile jobs by RAM. cc1plus on llama.cpp's large model translation units can use ~2 GB
-# each, so an unbounded `-j` OOM-kills the compiler ("cc1plus: Killed"). Default ≈ 1 job per 2 GB
-# (reserving ~2 GB for the OS), at least 1, capped at the CPU count. Override with BUILD_JOBS=<n>.
+# each, so an unbounded `-j` OOM-kills the compiler ("cc1plus: Killed"). Scale to the RAM actually
+# AVAILABLE right now (a box may already be using memory — editor server, other services) — MemAvailable,
+# falling back to MemTotal on old kernels. Budget ~2 GB per job, keep ~1 GB in reserve; ≥1, ≤ CPU count.
+# Override with BUILD_JOBS=<n>.
 if [ -z "${BUILD_JOBS:-}" ]; then
-  _mem_gb=$(awk '/MemTotal/{printf "%d",$2/1024/1024}' /proc/meminfo 2>/dev/null || echo 4)
+  _mem_kb=$(awk '/^MemAvailable:/{print $2; exit}' /proc/meminfo 2>/dev/null)
+  [ -n "${_mem_kb:-}" ] || _mem_kb=$(awk '/^MemTotal:/{print $2; exit}' /proc/meminfo 2>/dev/null)
+  _mem_gb=$(( ${_mem_kb:-4194304} / 1024 / 1024 ))
   _cpus=$(nproc 2>/dev/null || echo 2)
-  BUILD_JOBS=$(( (_mem_gb - 2) / 2 )); [ "$BUILD_JOBS" -lt 1 ] && BUILD_JOBS=1
+  BUILD_JOBS=$(( (_mem_gb - 1) / 2 )); [ "$BUILD_JOBS" -lt 1 ] && BUILD_JOBS=1
   [ "$BUILD_JOBS" -gt "$_cpus" ] && BUILD_JOBS="$_cpus"
 fi
-cyan "compile jobs: -j ${BUILD_JOBS}  (RAM-aware — override with BUILD_JOBS=<n> if it still OOMs, e.g. BUILD_JOBS=1)"
+cyan "compile jobs: -j ${BUILD_JOBS}  (from available RAM — override with BUILD_JOBS=<n>, e.g. BUILD_JOBS=1)"
 
 # --- llama.cpp (REQUIRED) — build the LLM server first; a failure here is fatal (as it should be) ---
 cyan "llama.cpp (llama-server)"
