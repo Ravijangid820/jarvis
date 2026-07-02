@@ -16,22 +16,20 @@ SVC_USER="${JARVIS_USER:-jarvis}"
 step() { printf '\n\033[1;36m▸ %s\033[0m\n' "$1"; }
 
 step "1/4  Bootstrap (env, config, frontend, DB, admin, native build, models)"
-bash src/scripts/setup.sh
+# SKIP_RUN: bootstrap only — this installer starts the services as a systemd unit below, not inline.
+SKIP_RUN=1 bash src/scripts/setup.sh
 
 # The remaining steps install + start systemd units. On a box without systemd (a Codespace, most
-# containers), that can't work — so stop cleanly after the bootstrap and print how to run it manually,
+# containers), that can't work — so stop cleanly after the bootstrap and point at the run script,
 # instead of failing confusingly at systemctl.
 if ! { command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; }; then
   step "No systemd here (Codespace / container) — bootstrap done; skipping the service install."
-  GGUF="$(find "$REPO/models" -name '*.gguf' 2>/dev/null | head -n1)"
   cat <<EOF
 
-Run Jarvis manually (two terminals):
-  ${REPO}/llama.cpp/build/bin/llama-server -m "${GGUF:-models/qwen3.5_2b/*.gguf}" -c 4096 -t 4 --host 127.0.0.1 --port 8081 --parallel 1
-  uv run uvicorn main:app --app-dir src/orchestrator --host 0.0.0.0 --port 5000
+Run Jarvis (both services, Ctrl-C to stop):
+  bash src/scripts/run.sh
 
-First-time admin login:  uv run python src/scripts/manage.py create-admin admin <password>
-Then open http://localhost:5000
+Login is admin/admin by default. Then open http://localhost:5000
 EOF
   exit 0
 fi

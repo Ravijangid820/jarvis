@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # One-shot setup for a fresh checkout — system or container. Idempotent: safe to re-run.
+# Bootstraps everything (env, config, frontend, DB, admin, native build, models), seeds a default
+# admin/admin, then RUNS both services (Ctrl-C to stop). For a boot service instead: install_services.sh.
 #
 #   bash src/scripts/setup.sh
 #
 # Env toggles:
 #   SKIP_NATIVE=1            skip the whisper.cpp / llama.cpp C++ build
 #   SKIP_MODELS=1            skip model downloads (run download_models.sh later)
-#   ADMIN_USER, ADMIN_PASS   create an admin user non-interactively
+#   SKIP_RUN=1              bootstrap only — don't start the services at the end
+#   ADMIN_USER, ADMIN_PASS   admin login to seed (default admin/admin)
 #   LLM_GGUF_URL, HF_TOKEN   passed through to download_models.sh
 set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -57,14 +60,15 @@ else
 fi
 
 step "Admin user"
-if uv run python src/scripts/manage.py list-users 2>/dev/null | grep -q "no users"; then
-  if [ -n "${ADMIN_USER:-}" ] && [ -n "${ADMIN_PASS:-}" ]; then
-    uv run python src/scripts/manage.py create-admin "$ADMIN_USER" "$ADMIN_PASS" && ok "admin '$ADMIN_USER' created"
-  else
-    warn "no users yet — create one: uv run python src/scripts/manage.py create-admin <user> <pass>"
-  fi
+# Default to admin/admin so a fresh setup runs with zero config (same as the Docker path); override with
+# ADMIN_USER / ADMIN_PASS. create-admin is a no-op if the user already exists.
+ADMIN_USER="${ADMIN_USER:-admin}"
+ADMIN_PASS="${ADMIN_PASS:-admin}"
+if uv run python src/scripts/manage.py create-admin "$ADMIN_USER" "$ADMIN_PASS" >/dev/null 2>&1; then
+  ok "admin '$ADMIN_USER' created"
+  [ "$ADMIN_PASS" = "admin" ] && warn "login is admin/admin (default) — change the password for anything exposed"
 else
-  ok "users already exist"
+  ok "admin '$ADMIN_USER' already exists (unchanged)"
 fi
 
 if [ "${SKIP_NATIVE:-0}" != "1" ]; then
@@ -82,12 +86,14 @@ else
 fi
 
 step "Setup complete"
-cat <<EOF
-Next steps:
-  • Review config/jarvis.json (host, db_path, fast_brain_url).
-  • LLM GGUF: the default Qwen3.5-2B downloads automatically — if it failed above (network), just
-    re-run; set LLM_GGUF_URL only to use a *different* model.
-  • Start the LLM:  <repo>/llama.cpp/build/bin/llama-server -m <gguf> -c 4096 --host 127.0.0.1 --port 8081
-  • Start the app:  cd src/orchestrator && uv run uvicorn main:app --host 127.0.0.1 --port 5000
-  • Or install the units in systemd/ (see docs/DEPLOY.md), then add TLS (docs/DEPLOY.md → "Adding TLS").
+if [ "${SKIP_RUN:-0}" = "1" ]; then
+  # Bootstrap-only (e.g. setup-server.sh, which goes on to install the systemd units).
+  cat <<EOF
+  • Run it now:       bash src/scripts/run.sh                       (both services, Ctrl-C to stop)
+  • Or as a service:  sudo bash src/scripts/install_services.sh     (systemd; see docs/DEPLOY.md)
+  • Config: config/jarvis.json (host, db_path, fast_brain_url). Set LLM_GGUF_URL for a different model.
 EOF
+else
+  step "Starting Jarvis — Ctrl-C to stop.  (Run as a boot service instead: sudo bash src/scripts/install_services.sh)"
+  exec bash "$REPO/src/scripts/run.sh"
+fi
