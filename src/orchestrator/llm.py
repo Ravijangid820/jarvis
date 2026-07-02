@@ -100,15 +100,21 @@ def request_llm(messages: List[Dict[str, str]], temperature=None, top_k=None, to
 
 
 def request_llm_tools(messages: List[Dict[str, Any]], tools: List[Dict[str, Any]],
-                      temperature=None) -> Dict[str, Any]:
+                      temperature=None, n_predict=None) -> Dict[str, Any]:
     """One non-streaming call that offers the model `tools`. It either returns tool_calls (a command)
     or plain content (a normal answer) — a single round-trip, so no extra latency vs a normal reply."""
+    # Bound the completion so prompt + answer fit the context window (same clamp as the streaming path).
+    # None -> fall back to the config sampling default; still None -> omit and let llama.cpp decide.
+    if n_predict is None:
+        n_predict = SAMPLING_DEFAULTS.get("max_tokens")
     data: Dict[str, Any] = {
         "messages": messages,
         "temperature": temperature if temperature is not None else TEMPERATURE,
         "stream": False, "cache_prompt": True,
         "tools": tools, "tool_choice": "auto",
     }
+    if n_predict is not None:
+        data["max_tokens"] = n_predict
     req = urllib.request.Request(LLM_URL, data=json.dumps(data).encode("utf-8"),
                                  headers={"Content-Type": "application/json"})
     try:

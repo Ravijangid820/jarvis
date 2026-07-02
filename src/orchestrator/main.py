@@ -1353,7 +1353,7 @@ def process_input(request: QueryRequest, raw_request: Request):
     t0 = time.time()
     with memory.Inflight():
         # One call with tools offered: the model either invokes a tool (a command) or just answers.
-        llm_resp = request_llm_tools(messages, TOOLS_SPEC, temperature=request.temperature)
+        llm_resp = request_llm_tools(messages, TOOLS_SPEC, temperature=request.temperature, n_predict=max_tokens)
     t1 = time.time()
 
     msg = (llm_resp.get("choices") or [{}])[0].get("message", {})
