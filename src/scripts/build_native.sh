@@ -42,7 +42,10 @@ if [ ! -d "$REPO/llama.cpp/.git" ]; then
     git clone --depth 1 https://github.com/ggml-org/llama.cpp "$REPO/llama.cpp"
   fi
 fi
-echo "  llama.cpp at commit: $(git -C "$REPO/llama.cpp" rev-parse HEAD)"
+# Containers/Codespaces often check the tree out under a different uid → git's "dubious ownership"
+# guard. Mark these build dirs safe so rev-parse (and any git op) works regardless of owner.
+git config --global --add safe.directory "$REPO/llama.cpp" 2>/dev/null || true
+echo "  llama.cpp at commit: $(git -C "$REPO/llama.cpp" rev-parse HEAD 2>/dev/null || echo unknown)"
 cmake -S "$REPO/llama.cpp" -B "$REPO/llama.cpp/build" -DGGML_AVX=ON -DGGML_AVX2=OFF -DGGML_NATIVE=OFF
 cmake --build "$REPO/llama.cpp/build" -j "$BUILD_JOBS" --target llama-server
 echo "  ✓ llama-server: $REPO/llama.cpp/build/bin/llama-server"
