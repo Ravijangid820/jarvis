@@ -6,6 +6,11 @@
 # `docker run` — or a Proxmox VE 9.1 OCI container (which runs the image's *default* entrypoint) — starts
 # BOTH services with no override. New llama.cpp release = bump LLAMA_IMAGE, no build to maintain.
 
+# GLOBAL build arg — must be declared BEFORE the first FROM to be usable in the runtime-stage FROM below.
+# Pin to a specific tag (e.g. ghcr.io/ggml-org/llama.cpp:server-b<NNNN>) for reproducible production
+# builds; :server is the floating latest server build.
+ARG LLAMA_IMAGE=ghcr.io/ggml-org/llama.cpp:server
+
 # --- Stage 1: build the React frontend ---
 FROM node:20-slim AS web
 WORKDIR /web
@@ -36,9 +41,7 @@ RUN set -eu; mkdir -p /out; \
     else echo "NOTE: no model in ./models and no LLM_GGUF_URL — image ships without a baked default."; fi
 
 # --- Stage 3: runtime = official llama.cpp server + our orchestrator ---
-# Pin LLAMA_IMAGE to a specific tag (e.g. :server-b<NNNN>) for reproducible/robust production builds;
-# :server is the floating latest server build.
-ARG LLAMA_IMAGE=ghcr.io/ggml-org/llama.cpp:server
+# LLAMA_IMAGE is the global arg declared at the top of this file (before the first FROM).
 FROM ${LLAMA_IMAGE}
 # Base = ubuntu 24.04 with /app/llama-server + its ggml libs (in /app), libgomp1 + curl already present.
 # Our app lives alongside at /app (JARVIS_HOME=/app), coexisting with the llama-server binary + libs —
