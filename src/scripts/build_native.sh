@@ -16,6 +16,17 @@ for tool in git cmake; do
   command -v "$tool" >/dev/null || { echo "missing prerequisite: $tool (install build-essential + cmake)"; exit 1; }
 done
 
+# Cap parallel compile jobs by RAM. cc1plus on llama.cpp's large model translation units can use ~2 GB
+# each, so an unbounded `-j` OOM-kills the compiler ("cc1plus: Killed"). Default ≈ 1 job per 2 GB
+# (reserving ~2 GB for the OS), at least 1, capped at the CPU count. Override with BUILD_JOBS=<n>.
+if [ -z "${BUILD_JOBS:-}" ]; then
+  _mem_gb=$(awk '/MemTotal/{printf "%d",$2/1024/1024}' /proc/meminfo 2>/dev/null || echo 4)
+  _cpus=$(nproc 2>/dev/null || echo 2)
+  BUILD_JOBS=$(( (_mem_gb - 2) / 2 )); [ "$BUILD_JOBS" -lt 1 ] && BUILD_JOBS=1
+  [ "$BUILD_JOBS" -gt "$_cpus" ] && BUILD_JOBS="$_cpus"
+fi
+cyan "compile jobs: -j ${BUILD_JOBS}  (RAM-aware — override with BUILD_JOBS=<n> if it still OOMs, e.g. BUILD_JOBS=1)"
+
 # --- llama.cpp (REQUIRED) — build the LLM server first; a failure here is fatal (as it should be) ---
 cyan "llama.cpp (llama-server)"
 LLAMA_CPP_REF="${LLAMA_CPP_REF:-}"
@@ -29,7 +40,7 @@ if [ ! -d "$REPO/llama.cpp/.git" ]; then
 fi
 echo "  llama.cpp at commit: $(git -C "$REPO/llama.cpp" rev-parse HEAD)"
 cmake -S "$REPO/llama.cpp" -B "$REPO/llama.cpp/build" -DGGML_AVX=ON -DGGML_AVX2=OFF -DGGML_NATIVE=OFF
-cmake --build "$REPO/llama.cpp/build" -j --target llama-server
+cmake --build "$REPO/llama.cpp/build" -j "$BUILD_JOBS" --target llama-server
 echo "  ✓ llama-server: $REPO/llama.cpp/build/bin/llama-server"
 
 # --- whisper.cpp (OPTIONAL, voice only) — never blocks the LLM above ---
@@ -53,7 +64,7 @@ else
     ensure_sdl2 || warn "SDL2 not installed — the whisper build will likely fail (voice only)"
     [ -d "$REPO/whisper/.git" ] || git clone --branch v1.8.6 --depth 1 https://github.com/ggerganov/whisper.cpp "$REPO/whisper" || return 1
     cmake -S "$REPO/whisper" -B "$REPO/whisper/build" -DGGML_AVX=ON -DGGML_AVX2=OFF -DGGML_NATIVE=OFF -DWHISPER_SDL2=ON || return 1
-    cmake --build "$REPO/whisper/build" -j || return 1
+    cmake --build "$REPO/whisper/build" -j "$BUILD_JOBS" || return 1
   }
   cyan "whisper.cpp (v1.8.6) — STT for the voice listener; optional"
   if whisper_build; then

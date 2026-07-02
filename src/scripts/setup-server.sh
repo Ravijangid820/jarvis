@@ -18,6 +18,24 @@ step() { printf '\n\033[1;36m▸ %s\033[0m\n' "$1"; }
 step "1/4  Bootstrap (env, config, frontend, DB, admin, native build, models)"
 bash src/scripts/setup.sh
 
+# The remaining steps install + start systemd units. On a box without systemd (a Codespace, most
+# containers), that can't work — so stop cleanly after the bootstrap and print how to run it manually,
+# instead of failing confusingly at systemctl.
+if ! { command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; }; then
+  step "No systemd here (Codespace / container) — bootstrap done; skipping the service install."
+  GGUF="$(find "$REPO/models" -name '*.gguf' 2>/dev/null | head -n1)"
+  cat <<EOF
+
+Run Jarvis manually (two terminals):
+  ${REPO}/llama.cpp/build/bin/llama-server -m "${GGUF:-models/qwen3.5_2b/*.gguf}" -c 4096 -t 4 --host 127.0.0.1 --port 8081 --parallel 1
+  uv run uvicorn main:app --app-dir src/orchestrator --host 0.0.0.0 --port 5000
+
+First-time admin login:  uv run python src/scripts/manage.py create-admin admin <password>
+Then open http://localhost:5000
+EOF
+  exit 0
+fi
+
 step "2/4  Install + start systemd services (service user: $SVC_USER)"
 # install_services creates the user, relocates the llama build, chowns the writable data dirs
 # (.venv/.cache/memory/logs/config) to the service user, and enables + starts both units (HTTP).
