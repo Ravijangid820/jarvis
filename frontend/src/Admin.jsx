@@ -20,6 +20,7 @@ export default function Admin({ token, onExit }) {
   const [keys, setKeys] = useState([])
   const [faces, setFaces] = useState([])
   const [services, setServices] = useState([])
+  const [sysInfo, setSysInfo] = useState({})   // { version, summary:{up,total,operational}, checkedAt }
   const [uName, setUName] = useState("")
   const [uPass, setUPass] = useState("")
   const [kUser, setKUser] = useState("")
@@ -66,6 +67,7 @@ export default function Admin({ token, onExit }) {
         api("/admin/events?type=face_seen&limit=20"), api("/admin/knowledge/global"), api("/presence")])
       setStats(s); setUsers(u.users || []); setKeys(k.keys || [])
       setFaces(f.faces || []); setServices(sv.services || []); setEnrollReqs(er.requests || [])
+      setSysInfo({ version: sv.version, summary: sv.summary, checkedAt: Date.now() })
       setRecogs(rc.events || []); setGlobalFacts(gk.facts || []); setPresent(pr.present || []); setErr("")
     } catch (e) { setErr(e.message) }
   }
@@ -79,6 +81,7 @@ export default function Admin({ token, onExit }) {
           api("/admin/services"), api("/admin/faces"), api("/admin/faces/enroll-requests"),
           api("/admin/events?type=face_seen&limit=20"), api("/presence")])
         setServices(sv.services || []); setFaces(f.faces || []); setEnrollReqs(er.requests || [])
+        setSysInfo({ version: sv.version, summary: sv.summary, checkedAt: Date.now() })
         setRecogs(rc.events || []); setPresent(pr.present || [])
       } catch { /* keep last */ }
     }, 15000)
@@ -335,7 +338,21 @@ export default function Admin({ token, onExit }) {
           </div>
 
           <div className="adm-panel">
-            <h2>System Services</h2>
+            <h2>System Services
+              {sysInfo.version && (
+                <span style={{ opacity: 0.55, fontWeight: 400, fontSize: "0.68em", marginLeft: 8 }}>
+                  Jarvis v{sysInfo.version}
+                </span>
+              )}
+            </h2>
+            {sysInfo.summary && (
+              <p className="adm-hint">
+                <span className={"adm-svc-state " + (sysInfo.summary.operational ? "active" : "inactive")}>
+                  {sysInfo.summary.up}/{sysInfo.summary.total} operational
+                </span>
+                {sysInfo.checkedAt ? ` · checked ${new Date(sysInfo.checkedAt).toLocaleTimeString()}` : ""} · auto-refreshes every 15s
+              </p>
+            )}
             <p className="adm-hint">Live status of each subsystem. Camera agents report active when the
               edge device (Pi / laptop) is running and reaching the server.</p>
             <div className="adm-services">
