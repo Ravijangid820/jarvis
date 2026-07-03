@@ -12,14 +12,18 @@ if [ ! -f config/jarvis.json ]; then
   cp config/jarvis.docker.json config/jarvis.json && log "created config/jarvis.json from the Docker template"
 fi
 
-# 2) Embedding model. If it's baked into the image cache, run fully OFFLINE (no token, no hub calls).
-#    Otherwise fall back to a runtime download (needs HF_TOKEN + accepted Gemma license).
+# 2) Embedding model. If the REQUESTED model is baked into the image cache, run fully OFFLINE (no
+#    token, no hub calls). The check is model-specific: a user overriding EMBED_MODEL (with their own
+#    HF_TOKEN if it's gated) must NOT be forced offline just because the default model is baked.
 export EMBED_MODEL="${EMBED_MODEL:-google/embeddinggemma-300m}"
-if find "${HF_HOME:-/app/.cache/huggingface}/hub" -maxdepth 1 -name 'models--*' 2>/dev/null | grep -q .; then
+EMBED_CACHE_DIR="models--$(printf '%s' "$EMBED_MODEL" | sed 's|/|--|g')"
+if [ -d "${HF_HOME:-/app/.cache/huggingface}/hub/${EMBED_CACHE_DIR}" ]; then
   export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
   EMBED_SRC="baked-in (offline, no token)"
+elif [ -n "${HF_TOKEN:-}" ]; then
+  EMBED_SRC="runtime download (using your HF_TOKEN)"
 else
-  EMBED_SRC="runtime download (needs HF_TOKEN + Gemma license)"
+  EMBED_SRC="runtime download (public models only — set HF_TOKEN for gated ones)"
 fi
 log "checking embedding model ($EMBED_MODEL — $EMBED_SRC)…"
 if uv run python -c "import os; from sentence_transformers import SentenceTransformer; SentenceTransformer(os.environ['EMBED_MODEL'])"; then
