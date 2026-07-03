@@ -52,15 +52,17 @@ Prefer the pieces? The bootstrap alone:
 ```bash
 # One-shot bootstrap: uv env, config, frontend build, DB, native engines, models.
 # Idempotent. Toggles: SKIP_NATIVE=1, SKIP_MODELS=1, ADMIN_USER=… ADMIN_PASS=…
-bash src/scripts/setup.sh
+bash src/scripts/setup.sh    # bootstraps everything, seeds admin/admin, then RUNS both services
+                             # (Ctrl-C stops them; SKIP_RUN=1 to bootstrap only)
+bash src/scripts/run.sh      # later runs: start both services again (LLM + orchestrator)
 
 # Or run the pieces individually:
 uv sync                                   # Python env from pyproject + uv.lock
 cp config/jarvis.example.json config/jarvis.json   # then review it
-bash src/scripts/build_native.sh          # whisper.cpp + llama.cpp (AVX-only)
-bash src/scripts/download_models.sh       # embedding (HF) · Piper · whisper base.en · LLM GGUF
+bash src/scripts/build_native.sh          # llama.cpp + whisper.cpp (AVX-only; whisper optional)
+bash src/scripts/download_models.sh       # LLM GGUF (pinned default) · embedding (HF) · Piper · whisper
 (cd frontend && npm ci && npm run build)  # SPA bundle (served at /)
-uv run python src/scripts/manage.py create-admin <user> <pass>
+uv run python src/scripts/manage.py create-admin <user> <pass>   # optional — setup seeds admin/admin
 
 # Install as systemd services — your choice of user:
 sudo bash src/scripts/install_services.sh                    # run as root (simplest)

@@ -4,6 +4,33 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-07-03 — native setup: zero-config parity with Docker
+
+Field-tested the from-source install end to end (Codespace) and fixed every papercut it hit:
+
+- **Zero-config run**: `setup.sh` now seeds a default **admin/admin** login (override
+  `ADMIN_USER`/`ADMIN_PASS`; warns on the weak default) and **starts both services** at the end —
+  Ctrl-C stops them; `SKIP_RUN=1` for bootstrap-only. New **`src/scripts/run.sh`** runs
+  llama-server + the orchestrator together (the native counterpart of the container all-in-one).
+- **Pinned default LLM**: `download_models.sh` fetches the same pinned, SHA-verified Qwen3.5-2B the
+  Docker images bake — no `LLM_GGUF_URL` needed (set it only for a different model).
+- **Build robustness**: llama.cpp builds **first** (whisper can no longer block it); whisper.cpp is
+  optional (`SKIP_WHISPER=1`) with **SDL2 auto-installed** on apt systems; compile parallelism scales
+  to **available RAM** (fixes `cc1plus: Killed` OOM; `BUILD_JOBS=<n>` to override); llama.cpp build dir
+  marked git-safe (container uid quirk).
+- **`setup-server.sh`** detects a no-systemd box (Codespace/container) and stops cleanly after the
+  bootstrap with run instructions, instead of failing at `systemctl`.
+- **`src/scripts/README.md`**: a map of which scripts are entry points vs helpers vs tools.
+
+## 2026-07-02 — admin: real service-health board (UI + API)
+
+- `/admin/services` now reports the **actual loaded LLM** (model + context from llama-server `/props`,
+  self-correcting on model swaps), the embedding **model · dim · memory count**, the app **version**,
+  and an **operational summary** — replacing a hardcoded model string and a bare "ready".
+- Admin UI: "Jarvis vX.Y.Z" heading + "N/N operational · checked <time>" line (green/red) on the
+  System Services panel (status dots + 15s auto-refresh were already present).
+- Non-streaming `/chat` now bounds its completion length like `/chat/stream` (found via ruff F841 in CI).
+
 ## v2.3.0 — 2026-07-02 — Official llama.cpp image (drop the from-source build)
 
 Stop compiling llama.cpp in Docker — **ride the official `ghcr.io/ggml-org/llama.cpp:server` image**
