@@ -23,8 +23,11 @@ RUN npm run build
 FROM debian:12-slim AS model
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
-ARG LLM_GGUF_URL=
-ARG LLM_GGUF_SHA256=
+# Defaults = the pinned, SHA-verified model (same as download_models.sh) so a bare
+# `docker build -f Dockerfile.combined .` with NO build-args still produces a working image.
+# Override the pair together to bake a different model.
+ARG LLM_GGUF_URL=https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf
+ARG LLM_GGUF_SHA256=aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223
 ARG DEFAULT_MODEL=Qwen3.5-2B-Q4_K_M.gguf
 COPY models/ /staged/
 RUN set -eu; mkdir -p /out; \
