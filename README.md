@@ -37,6 +37,13 @@ text-to-speech — running entirely on a 2011-era laptop in a Proxmox LXC. No cl
 
 ## Quick Start
 
+Three install paths — pick one (each guide is a page of copy-paste commands):
+**[combined image](docs/setup/combined-image.md)** (one container, simplest — incl. Proxmox OCI) ·
+**[orchestrator image + official llama](docs/setup/orchestrator-image.md)** (two containers, production) ·
+**[from the repository](docs/setup/repository.md)** (from source, no Docker). Everything defaults
+(login `admin`/`admin`); to persist overrides: `cp .env.example .env` and edit — the same file works
+for Docker **and** the repo scripts.
+
 ### From a fresh clone (system or container)
 
 **Whole server in one command** (bootstrap + systemd services + local-CA HTTPS) — and the full

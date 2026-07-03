@@ -3,7 +3,20 @@
 Index of the project documentation. Start with the [main README](../README.md) for the elevator
 pitch and quick start; the files here go deep on each area.
 
-## Setup guides
+## Install the server — pick ONE
+
+| Path | Install doc | One-liner |
+|---|---|---|
+| **Combined image** — one container, everything baked (simplest; **Proxmox OCI**) | [setup/combined-image.md](setup/combined-image.md) | `docker run … jarvis-combined:latest` |
+| **Orchestrator image + official llama** — two containers (production split; GPU-swappable LLM) | [setup/orchestrator-image.md](setup/orchestrator-image.md) | `docker compose up -d` |
+| **Repository** — from source (dev, or the systemd box; no Docker needed) | [setup/repository.md](setup/repository.md) | `bash src/scripts/setup.sh` |
+
+All three default everything (login `admin`/`admin`, pinned models) — optionally `cp .env.example .env`
+to persist overrides; the same file works for Docker **and** the repo scripts. Deep-dive references:
+[setup/docker.md](setup/docker.md) (config layers, HTTPS, publishing, CPU support) ·
+[setup/image-releases.md](setup/image-releases.md) (published tags).
+
+## Device / component guides
 
 **Start here:** [setup/quickstart.md](setup/quickstart.md) — the whole path end to end (server → device
 → browser) in one page. The per-component guides below go deeper on each piece (they run on different
@@ -11,8 +24,7 @@ machines with independent environments).
 
 | Component | Runs on | Setup doc | Entry point |
 |---|---|---|---|
-| **Server** — orchestrator + web UI (+ HTTPS + services) | the Proxmox LXC | [setup/server.md](setup/server.md) (+ [DEPLOY.md](DEPLOY.md) for re-deploys) | `sudo bash src/scripts/setup-server.sh` |
-| **Server via Docker** — containerized server stack (build locally or pull from GHCR) | any x86-64 host | [setup/docker.md](setup/docker.md) · [setup/image-releases.md](setup/image-releases.md) | `docker compose up -d --build` |
+| **Server (native, full detail)** — orchestrator + web UI (+ HTTPS + services) | the Proxmox LXC | [setup/server.md](setup/server.md) (+ [DEPLOY.md](DEPLOY.md) for re-deploys) | `sudo bash src/scripts/setup-server.sh` |
 | **TLS / HTTPS** — encrypt the LAN (local CA; included in setup-server) | the server + each device | [setup/tls.md](setup/tls.md) | `bash src/scripts/setup_tls.sh` |
 | **Camera vision agent** — motion/face/pose/gestures (laptop webcam or Pi) | the device | [setup/camera.md](setup/camera.md) | `camera/setup.ps1` (Win) · `bash camera/setup.sh` (Pi) |
 | **Voice listener** — wake word → `/inbox` (whisper) | the server box | [setup/voice.md](setup/voice.md) | `bash src/scripts/run_listener.sh` |

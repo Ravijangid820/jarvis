@@ -19,6 +19,7 @@ Only **three** of these are commands you type; the rest are helpers they call, o
 | `piper_setup.sh` | download_models.sh + the Docker builds | Fetches the Piper TTS binary + voice. |
 | `install_services.sh` | setup-server.sh | Installs/starts the systemd units (`llama-fast`, `jarvis-orchestrator`); creates the service user. |
 | `setup_tls.sh` | setup-server.sh + the Docker entrypoint | Local CA + server cert for HTTPS. |
+| `load_env.sh` | sourced by all three entry points | Loads `./.env` (same file docker compose reads); shell-set variables win. |
 | `prepare_embed_cache.sh` | (manual, optional) | Pre-downloads the embedding model into `./embed-cache/` so Docker builds can bake it **offline** (no build-time HF token). |
 
 ## Separate tools (not part of setup)

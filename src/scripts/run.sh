@@ -10,6 +10,8 @@
 set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO"
+# Optional ./.env (same file docker compose reads; shell-set variables win). See .env.example.
+source "$REPO/src/scripts/load_env.sh"
 cyan() { printf '\033[1;36m▸ %s\033[0m\n' "$1"; }
 err()  { printf '\033[1;31m  ✗ %s\033[0m\n' "$1"; }
 

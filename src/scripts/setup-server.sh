@@ -11,6 +11,8 @@
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO"
+# Optional ./.env (same file docker compose reads; shell-set variables win). See .env.example.
+source "$REPO/src/scripts/load_env.sh"
 [ "$(id -u)" = 0 ] || { echo "Run as root (installs systemd units):  sudo bash src/scripts/setup-server.sh"; exit 1; }
 SVC_USER="${JARVIS_USER:-jarvis}"
 step() { printf '\n\033[1;36m▸ %s\033[0m\n' "$1"; }
