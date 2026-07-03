@@ -501,6 +501,8 @@ def _embedding_detail(emb: Dict[str, Any]) -> str:
         bits.append(f"dim {emb['dim']}")
     if emb.get("count") is not None:
         bits.append(f"{emb['count']} memories")
+    if emb.get("runtime", "").startswith("onnx"):
+        bits.append(emb["runtime"])          # highlight the torch-free runtime when active
     return " · ".join(bits) or "vector search ready"
 
 
