@@ -7,6 +7,18 @@ This is a living document to track upcoming features, architectural shifts, and 
 - **Custom JARVIS Community Voice**: Currently using the high-quality British male voice (`en_GB-alan`), but a community-trained JARVIS model (`jgkawell/jarvis`) exists. We should eventually train or download a bespoke Marvel JARVIS voice.
 - **Wake-Word Optimization**: Enhance `run_listener.sh` to use a more robust VAD (Voice Activity Detection) pipeline to prevent false positives when listening for the wake word.
 - **Edge / distributed voice (mic + STT on the device)**: Today the mic and whisper STT run **on the server box** (single-box design); the edge devices do vision only. Move audio capture + whisper transcription onto the device that actually has the mic (the Pi/laptop already running the camera agent) — transcribe locally, gate on the wake word, and POST text to `/inbox`, so the **server drops whisper entirely**. Benefits: mic near the user, STT offloaded from the 2011 server, and support for multiple / multi-room mics. Groundwork already in place: `build_native.sh` supports `SKIP_WHISPER=1` so a server without the mic skips the whisper build.
+- **Speculative decoding (perf experiment — likely the biggest same-hardware win)**: run a tiny draft
+  model (e.g. a 0.5B from the same Qwen family) alongside the 2B — the draft proposes tokens, the 2B
+  verifies in one batch pass. Typical 1.5–2.5× token-generation speedup on CPU. Already plumbed:
+  `LLAMA_EXTRA_ARGS="--model-draft <draft.gguf> ..."` (compose/all-in-one) or the same flags on the
+  native `llama-server`. Experiment on the laptop first; verify quality is unchanged (spec decoding is
+  lossless). Rejected alternative for the record: rewriting the orchestrator in Rust/Go/C++ — the hot
+  path is already C++ (llama.cpp); Python glue is ~15 ms of a 30–60 s request (<0.1%, Amdahl).
+- **ONNX embeddings (drop torch — the biggest resource win)**: torch exists in the stack ONLY to run
+  the 300M embedder (~1.5–2 GB of image, hundreds of MB RAM), and `onnxruntime` is already a dependency
+  (via chromadb). Export/pull embeddinggemma as ONNX (optionally int8) and run it on onnxruntime:
+  much smaller images, lower RAM, faster embeds on the no-AVX2 box. Requires re-indexing memories
+  (`src/scripts/reembed_memory.py`) only if the vectors change; same model → same vector space.
 - **Multi-User Profiles**: Add proper user accounts so the frontend can store separate histories for different household members.
 - **Vector-based Semantic Search**: Replace SQLite FTS5 Keyword RAG with a dedicated vector database (like Chroma or FAISS) and a local embedding model (e.g. `all-MiniLM-L6-v2`). This provides true semantic understanding of memories rather than exact keyword matches. (Note: Embedding models require slightly more CPU/RAM resources per message to compute cosine similarities).
 - **Real-Time Voice Streaming** (DONE): Stream Piper TTS audio bytes instantly to the browser as the LLM generates text, instead of waiting for the full generation to complete.
