@@ -7,13 +7,18 @@ PIPER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/piper"
 mkdir -p "$PIPER_DIR"
 cd "$PIPER_DIR"
 
-# Supply-chain note: a native binary + an ONNX model (both executed/deserialized by the TTS
-# pipeline) are fetched here. Pin a release and verify checksums for a tamper-evident install:
-#   PIPER_VERSION=2023.11.14-2   (default 'latest' is mutable — pinning is recommended)
-#   PIPER_SHA256=<hash>          (optional; verifies the binary tarball)
-#   VOICE_SHA256=<hash>          (optional; verifies the .onnx voice)
-PIPER_VERSION="${PIPER_VERSION:-latest}"
-[ "$PIPER_VERSION" = "latest" ] && echo "  ! PIPER_VERSION unset — using mutable 'latest' (set it to pin)." >&2
+# Supply-chain: a native binary + an ONNX model (both executed/deserialized by the TTS pipeline) are
+# fetched here, so both are PINNED + SHA-256-verified by default (tamper-evident). Overrides:
+#   PIPER_VERSION=<tag|latest>   release tag (default below is rhasspy/piper's final release)
+#   PIPER_SHA256=<hash>          binary tarball hash (defaulted only for the default version)
+#   VOICE_SHA256=<hash>          .onnx voice hash (the voice URL is a mutable HF ref — this pins it)
+PIPER_DEFAULT_VERSION="2023.11.14-2"
+PIPER_VERSION="${PIPER_VERSION:-$PIPER_DEFAULT_VERSION}"
+if [ "$PIPER_VERSION" = "$PIPER_DEFAULT_VERSION" ]; then
+  PIPER_SHA256="${PIPER_SHA256:-a50cb45f355b7af1f6d758c1b360717877ba0a398cc8cbe6d2a7a3a26e225992}"
+fi
+VOICE_SHA256="${VOICE_SHA256:-0a309668932205e762801f1efc2736cd4b0120329622adf62be09e56339d3330}"
+[ "$PIPER_VERSION" = "latest" ] && echo "  ! PIPER_VERSION=latest — mutable, unverified (pin a tag for a tamper-evident install)." >&2
 
 # Resilient download: resume (-C -) + retry up to 5×, so a flaky/slow network doesn't abort the
 # install (mirrors the Docker model fetch). Version-agnostic — works on any curl.

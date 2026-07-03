@@ -32,15 +32,14 @@ fi
 cyan "compile jobs: -j ${BUILD_JOBS}  (from available RAM — override with BUILD_JOBS=<n>, e.g. BUILD_JOBS=1)"
 
 # --- llama.cpp (REQUIRED) — build the LLM server first; a failure here is fatal (as it should be) ---
+# Pinned to an official release tag by default (reproducible + tamper-evident; also much smaller than
+# an ever-growing HEAD). Override: LLAMA_CPP_REF=<tag> for a different release, or =master for HEAD.
 cyan "llama.cpp (llama-server)"
-LLAMA_CPP_REF="${LLAMA_CPP_REF:-}"
+LLAMA_CPP_REF="${LLAMA_CPP_REF:-b9864}"
 if [ ! -d "$REPO/llama.cpp/.git" ]; then
-  if [ -n "$LLAMA_CPP_REF" ]; then
-    git clone --branch "$LLAMA_CPP_REF" --depth 1 https://github.com/ggml-org/llama.cpp "$REPO/llama.cpp"
-  else
-    echo "  ! LLAMA_CPP_REF unset — cloning upstream HEAD (not pinned). Set LLAMA_CPP_REF=<tag> to pin." >&2
-    git clone --depth 1 https://github.com/ggml-org/llama.cpp "$REPO/llama.cpp"
-  fi
+  git clone --branch "$LLAMA_CPP_REF" --depth 1 https://github.com/ggml-org/llama.cpp "$REPO/llama.cpp"
+else
+  echo "  llama.cpp already cloned — building what's checked out (rm -rf llama.cpp to re-clone at $LLAMA_CPP_REF)"
 fi
 # Containers/Codespaces often check the tree out under a different uid → git's "dubious ownership"
 # guard. Mark these build dirs safe so rev-parse (and any git op) works regardless of owner.

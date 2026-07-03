@@ -70,10 +70,10 @@ sudo JARVIS_USER=jarvis bash src/scripts/install_services.sh # dedicated non-roo
 ```
 
 Runs as **root or a dedicated non-root user** — your call (see [docs/setup/server.md](docs/setup/server.md)).
-Paths are repo-relative (data lands under the checkout). The **LLM GGUF source isn't pinned**
-in the repo — set `LLM_GGUF_URL=<url>` for the download, or drop the file under `models/`. The
-embedding model is gated (Gemma license): accept its terms and `uv run huggingface-cli login`
-(or set `HF_TOKEN`).
+Paths are repo-relative (data lands under the checkout). Downloads are **pinned + SHA-256-verified by
+default** (LLM GGUF, Piper binary + voice, llama.cpp release tag) — set `LLM_GGUF_URL=<url>` only for a
+*different* model. The embedding model is gated (Gemma license): accept its terms and
+`uv run huggingface-cli login` (or set `HF_TOKEN`).
 
 ### On an already-provisioned box
 
