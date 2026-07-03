@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## v2.3.1 — 2026-07-03 — patch: user-supplied embedding token; .env everywhere
+
+- **Fix**: overriding `EMBED_MODEL` (+ your own `HF_TOKEN`) at runtime now works in the baked images —
+  the entrypoint's offline switch is model-specific instead of triggering on any cached model.
+- Repo scripts (`setup.sh`/`run.sh`/`setup-server.sh`) load `./.env` (same file docker compose reads;
+  shell-set variables win). `.env.example` documents the `cp` step.
+- Bare `docker build -f Dockerfile.combined` (no build-args) bakes the pinned model instead of none.
+- New pick-one install guides: [setup/combined-image.md](setup/combined-image.md) ·
+  [setup/orchestrator-image.md](setup/orchestrator-image.md) · [setup/repository.md](setup/repository.md).
+
 ## 2026-07-03 — native setup: zero-config parity with Docker
 
 Field-tested the from-source install end to end (Codespace) and fixed every papercut it hit:
