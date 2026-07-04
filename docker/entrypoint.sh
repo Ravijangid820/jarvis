@@ -12,25 +12,23 @@ if [ ! -f config/jarvis.json ]; then
   cp config/jarvis.docker.json config/jarvis.json && log "created config/jarvis.json from the Docker template"
 fi
 
-# 2) Embedding model. If the REQUESTED model is baked into the image cache, run fully OFFLINE (no
-#    token, no hub calls). The check is model-specific: a user overriding EMBED_MODEL (with their own
-#    HF_TOKEN if it's gated) must NOT be forced offline just because the default model is baked.
+# 2) Embedding model — torch-free ONNX bundle baked at /opt/jarvis/embed_onnx. Fully offline; NO
+#    HuggingFace token, ever. Overriding EMBED_MODEL requires mounting a MATCHING bundle (made with
+#    src/scripts/export_embed_onnx.py) and pointing EMBED_ONNX_DIR at it — the model name in the
+#    bundle's meta.json must match, or the orchestrator refuses it (wrong vector space).
 export EMBED_MODEL="${EMBED_MODEL:-google/embeddinggemma-300m}"
-EMBED_CACHE_DIR="models--$(printf '%s' "$EMBED_MODEL" | sed 's|/|--|g')"
-if [ -d "${HF_HOME:-/app/.cache/huggingface}/hub/${EMBED_CACHE_DIR}" ]; then
-  export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
-  EMBED_SRC="baked-in (offline, no token)"
-elif [ -n "${HF_TOKEN:-}" ]; then
-  EMBED_SRC="runtime download (using your HF_TOKEN)"
+export EMBED_ONNX_DIR="${EMBED_ONNX_DIR:-/opt/jarvis/embed_onnx}"
+if [ -f "$EMBED_ONNX_DIR/model.onnx" ] && [ -f "$EMBED_ONNX_DIR/meta.json" ]; then
+  META_MODEL="$(sed -n 's/.*"model": *"\([^"]*\)".*/\1/p' "$EMBED_ONNX_DIR/meta.json" | head -n1)"
+  if [ "$META_MODEL" = "$EMBED_MODEL" ]; then
+    EMB="ready — onnx bundle (torch-free, offline, no token)"
+  else
+    EMB="MISMATCH — bundle is '$META_MODEL' but EMBED_MODEL='$EMBED_MODEL'; mount a matching bundle (EMBED_ONNX_DIR)"
+  fi
 else
-  EMBED_SRC="runtime download (public models only — set HF_TOKEN for gated ones)"
+  EMB="UNAVAILABLE — no ONNX bundle at $EMBED_ONNX_DIR (rebuild the image, or mount one + set EMBED_ONNX_DIR)"
 fi
-log "checking embedding model ($EMBED_MODEL — $EMBED_SRC)…"
-if uv run python -c "import os; from sentence_transformers import SentenceTransformer; SentenceTransformer(os.environ['EMBED_MODEL'])"; then
-  EMB="ready — $EMBED_SRC"
-else
-  EMB="UNAVAILABLE — bake it in (see docs), or set HF_TOKEN + accept the Gemma license, then restart"
-fi
+log "embedding: $EMBED_MODEL — $EMB"
 
 # 3) Database schema (init is idempotent).
 if uv run python -c "import sys; sys.path.insert(0,'src/orchestrator'); import db; db.init_db()" >/dev/null 2>&1; then

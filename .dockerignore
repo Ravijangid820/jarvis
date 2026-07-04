@@ -10,6 +10,8 @@ node_modules
 frontend/node_modules
 frontend/dist
 # NOTE: models/ is intentionally NOT ignored — the GGUF you put there is baked into the image.
+# ...but the local ONNX bundle is (the image fetches its own pinned copy from HF).
+models/embed_onnx
 whisper
 piper
 memory

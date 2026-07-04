@@ -10,8 +10,8 @@ setup with systemd services.
 - **`uv`** ([install](https://docs.astral.sh/uv/getting-started/installation/)) — required.
 - **`git` + `cmake` + a C compiler** (`build-essential`) — required for the native llama.cpp build.
 - **node** — optional (web UI build; API works without it).
-- **`HF_TOKEN`** — optional, only for memory/RAG (the default embedding model is Gemma-gated: accept its
-  license on HuggingFace and use a token that can read gated repos). Chat works without it.
+- **No HuggingFace token** — the embedding downloads as a public, SHA-256-pinned, torch-free ONNX
+  bundle; the LLM GGUF is public too. Nothing to sign up for.
 - ~8 GB free disk, ~4 GB free RAM for the build.
 
 ## 1. Clone and (optionally) configure
@@ -19,7 +19,7 @@ setup with systemd services.
 git clone https://github.com/Ravijangid820/jarvis.git && cd jarvis
 
 # OPTIONAL — persist settings in a file instead of typing env vars each time:
-cp .env.example .env      # then edit: HF_TOKEN, ADMIN_USER/ADMIN_PASS, LLM_CTX, …
+cp .env.example .env      # then edit: ADMIN_USER/ADMIN_PASS, LLM_CTX, …
 ```
 Everything has a default, so `.env` is optional. The repo scripts **and** docker compose read the same
 file; variables you set in the shell always win over `.env`.
@@ -44,7 +44,7 @@ bash src/scripts/run.sh        # start both services again (Ctrl-C to stop)
 ```bash
 sudo bash src/scripts/setup-server.sh
 #  = the same bootstrap + systemd units (llama-fast, jarvis-orchestrator) + local-CA HTTPS.
-#  Options: JARVIS_USER=jarvis · SKIP_TLS=1 · ADMIN_USER/ADMIN_PASS/HF_TOKEN (or put them in .env)
+#  Options: JARVIS_USER=jarvis · SKIP_TLS=1 · ADMIN_USER/ADMIN_PASS (or put them in .env)
 ```
 Details (service user choice, TLS, re-deploys): [server.md](server.md) · [../DEPLOY.md](../DEPLOY.md).
 

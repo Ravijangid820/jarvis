@@ -4,8 +4,9 @@
 #
 #   bash src/scripts/download_models.sh              # put a GGUF in ./models first
 #   docker compose pull && docker compose up -d      # pull published orchestrator + official llama
+#   (no HuggingFace token needed — the embedding ships as a pinned, torch-free ONNX bundle)
 #   # …or build the orchestrator locally:  docker compose up -d --build
-#   # override anything on the CLI, e.g.:  ADMIN_PASS=secret HF_TOKEN=hf_xxx docker compose up -d
+#   # override anything on the CLI, e.g.:  ADMIN_PASS=secret docker compose up -d
 #
 # Want ONE self-contained container instead (e.g. Proxmox OCI)? Use the jarvis-combined image — see
 # docs/setup/docker.md.
@@ -37,19 +38,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.orchestrator
-      # HF token (optional) to bake the gated embedding model at build — passed as a secret so it never
-      # lands in the image. `HF_TOKEN=… docker compose build`.
-      secrets:
-        - hf_token
-      args:
-        EMBED_MODEL: ${EMBED_MODEL:-google/embeddinggemma-300m}
     depends_on:
       llama:
         condition: service_healthy   # don't start until the LLM answers /health
     # No .env required — every value has a default. Override on the CLI, in an optional .env, or here.
     environment:
-      - HF_TOKEN=${HF_TOKEN:-}             # only for a RUNTIME embed download; not needed if baked in
-      - EMBED_MODEL=${EMBED_MODEL:-google/embeddinggemma-300m}
+      - EMBED_MODEL=${EMBED_MODEL:-google/embeddinggemma-300m}   # custom model? mount a matching ONNX bundle
       - ADMIN_USER=${ADMIN_USER:-admin}    # default admin/admin — change ADMIN_PASS for anything exposed
       - ADMIN_PASS=${ADMIN_PASS:-admin}
       - HOST_PORT=${HOST_PORT:-5000}       # shown in the startup banner
@@ -63,7 +57,3 @@ services:
 
 volumes:
   jarvis-data:
-
-secrets:
-  hf_token:
-    environment: HF_TOKEN

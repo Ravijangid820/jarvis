@@ -4,6 +4,26 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## (onnx-implementation branch) 2026-07-04 — torch-free embeddings: ONNX runtime everywhere
+
+The embedder now runs on **onnxruntime + tokenizers** — torch and sentence-transformers are gone from
+the dependency tree (104 → 87 packages; the venv drops from ~2.3 GB to ~370 MB; images shrink ~2 GB).
+
+- **Same model, identical vectors**: the full sentence-transformers pipeline (Transformer + Pooling +
+  2×Dense + Normalize) exported to ONE ONNX graph by `src/scripts/export_embed_onnx.py` and **verified
+  worst-case cosine 1.000000 vs torch** → no re-indexing; ~35% faster query embeds on the box (175 ms
+  vs ~250–277 ms).
+- **No HuggingFace token, anywhere, ever**: the bundle is hosted public at
+  `Ravijangid820/embeddinggemma-300m-onnx` (converted from the official Google weights; Gemma notices
+  bundled) and every file is **SHA-256-pinned** in `download_models.sh` and both Dockerfiles. The whole
+  gated-model/token flow (HF_TOKEN, embed-cache, prepare_embed_cache.sh, BuildKit secret) is removed.
+- Runtime: `src/orchestrator/onnx_embed.py` + auto-detect in `memory.py` (bundle must match
+  `EMBED_MODEL` or it's refused — vector-space guard); health board shows `onnx` as the runtime.
+- Images bake the bundle at `/opt/jarvis/embed_onnx` (a `./models` bind-mount can't shadow it); the
+  Actions workflow needs **no secrets** at all now.
+- Custom `EMBED_MODEL`: export your own bundle (torch pulled ephemerally — see the exporter's header),
+  mount it, set `EMBED_ONNX_DIR`; re-index with `reembed_memory.py` (also ported to ONNX).
+
 ## v2.3.1 — 2026-07-03 — patch: user-supplied embedding token; .env everywhere
 
 - **Fix**: overriding `EMBED_MODEL` (+ your own `HF_TOKEN`) at runtime now works in the baked images —

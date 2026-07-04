@@ -15,12 +15,12 @@ Only **three** of these are commands you type; the rest are helpers they call, o
 | Script | Called by | Does |
 |---|---|---|
 | `build_native.sh` | setup.sh | Compiles llama.cpp (required, first) + whisper.cpp (optional; auto-installs SDL2; `SKIP_WHISPER=1`). RAM-aware `-j` (`BUILD_JOBS=<n>` to override). |
-| `download_models.sh` | setup.sh | LLM GGUF (pinned Qwen3.5-2B default, SHA-verified) · embedding (HF) · Piper · whisper model. |
+| `download_models.sh` | setup.sh | LLM GGUF (pinned Qwen3.5-2B, SHA-verified) · torch-free ONNX embedding bundle (pinned, no token) · Piper · whisper model. |
 | `piper_setup.sh` | download_models.sh + the Docker builds | Fetches the Piper TTS binary + voice. |
 | `install_services.sh` | setup-server.sh | Installs/starts the systemd units (`llama-fast`, `jarvis-orchestrator`); creates the service user. |
 | `setup_tls.sh` | setup-server.sh + the Docker entrypoint | Local CA + server cert for HTTPS. |
 | `load_env.sh` | sourced by all three entry points | Loads `./.env` (same file docker compose reads); shell-set variables win. |
-| `prepare_embed_cache.sh` | (manual, optional) | Pre-downloads the embedding model into `./embed-cache/` so Docker builds can bake it **offline** (no build-time HF token). |
+| `export_embed_onnx.py` | (manual, one-time) | Exports the embedding model's FULL pipeline to ONNX + verifies cosine vs torch — only needed for a *custom* `EMBED_MODEL` (the default bundle is hosted + pinned). |
 
 ## Separate tools (not part of setup)
 

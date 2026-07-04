@@ -69,7 +69,16 @@ def init_embeddings():
         if onnx_model is not None:
             _embed_model = onnx_model
         else:
-            from sentence_transformers import SentenceTransformer
+            # Legacy torch path — sentence-transformers is NO LONGER a project dependency (the ONNX
+            # bundle is the supported runtime). This only works if someone installed it manually.
+            try:
+                from sentence_transformers import SentenceTransformer
+            except ImportError:
+                raise RuntimeError(
+                    f"no ONNX embedding bundle at {EMBED_ONNX_DIR} — run "
+                    "'bash src/scripts/download_models.sh' to fetch it (no token needed), or export "
+                    "one for a custom model with src/scripts/export_embed_onnx.py"
+                ) from None
             # trust_remote_code=False: never execute code shipped in the model repo (supply-chain RCE
             # guard). Pin EMBED_MODEL_REVISION=<commit> for a tamper-evident load (else uses the cache).
             _embed_model = SentenceTransformer(

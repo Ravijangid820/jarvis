@@ -7,8 +7,11 @@ then proves equivalence: cosine(torch, onnx) must be ≥ 0.999 across batch size
 
 One-time dev tool (torch is needed only to export — the runtime uses onnxruntime alone):
 
-    uv run --with onnx python src/scripts/export_embed_onnx.py            # fp32 export + verify
-    uv run --with onnx python src/scripts/export_embed_onnx.py --int8     # + int8 dynamic quant
+(torch/sentence-transformers are NOT project deps — pull them ephemerally, CPU wheels only):
+
+    uv run --index https://download.pytorch.org/whl/cpu \
+           --with sentence-transformers --with onnx --with onnxscript \
+           python src/scripts/export_embed_onnx.py                # fp32 export + verify (--int8 for quant)
 
 Output (gitignored): models/embed_onnx/{model.onnx[, model.int8.onnx], tokenizer.json, meta.json}
 The verify step re-tokenizes with the standalone `tokenizers` library (no torch) — the exact

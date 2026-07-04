@@ -67,7 +67,7 @@ bash src/scripts/run.sh      # later runs: start both services again (LLM + orch
 uv sync                                   # Python env from pyproject + uv.lock
 cp config/jarvis.example.json config/jarvis.json   # then review it
 bash src/scripts/build_native.sh          # llama.cpp + whisper.cpp (AVX-only; whisper optional)
-bash src/scripts/download_models.sh       # LLM GGUF (pinned default) · embedding (HF) · Piper · whisper
+bash src/scripts/download_models.sh       # LLM GGUF · ONNX embedding bundle · Piper · whisper (all pinned)
 (cd frontend && npm ci && npm run build)  # SPA bundle (served at /)
 uv run python src/scripts/manage.py create-admin <user> <pass>   # optional — setup seeds admin/admin
 
@@ -79,8 +79,8 @@ sudo JARVIS_USER=jarvis bash src/scripts/install_services.sh # dedicated non-roo
 Runs as **root or a dedicated non-root user** — your call (see [docs/setup/server.md](docs/setup/server.md)).
 Paths are repo-relative (data lands under the checkout). Downloads are **pinned + SHA-256-verified by
 default** (LLM GGUF, Piper binary + voice, llama.cpp release tag) — set `LLM_GGUF_URL=<url>` only for a
-*different* model. The embedding model is gated (Gemma license): accept its terms and
-`uv run huggingface-cli login` (or set `HF_TOKEN`).
+*different* model. The embedding is a **torch-free ONNX bundle** (public, SHA-256-pinned) —
+**no HuggingFace token needed for anything**.
 
 ### On an already-provisioned box
 
@@ -116,24 +116,23 @@ docker compose logs -f                # startup banner shows the login URL
 
 Open **http://localhost:5000** and log in with **`admin` / `admin`**.
 
-Everything is overridable — pass values on the CLI (or in an optional `.env`, or `docker run -e`). You
-only ever *need* to set `HF_TOKEN`, and only if you want long-term memory:
+Everything is overridable — pass values on the CLI (or in an optional `.env`, or `docker run -e`).
+**Nothing is required** — there is no token to set for anything:
 
 | Variable | Default | What it's for |
 | --- | --- | --- |
 | `ADMIN_USER` / `ADMIN_PASS` | `admin` / `admin` | Login. **Insecure default — set `ADMIN_PASS` for anything exposed.** |
-| `HF_TOKEN` | _(empty)_ | Only to **bake the embedding model** (memory) into the image at build — `HF_TOKEN=hf_xxx docker compose build`. The default is gated (accept the license + use a gated-repo token). Once baked, memory works offline with no token. Not needed for the LLM or to just run. |
-| `EMBED_MODEL` | embeddinggemma | Embedding model for memory (baked in). Use a **non-gated** one (e.g. `BAAI/bge-small-en-v1.5`) for no token at all. |
+| `EMBED_MODEL` | embeddinggemma | Memory embedding (torch-free ONNX bundle baked in — public + SHA-pinned, no token). Custom model → export a bundle with `src/scripts/export_embed_onnx.py`. |
 | `LLM_MODEL` | baked-in Qwen | Use a different LLM (`.gguf` in `./models`). |
 | `HOST_PORT` | `5000` | Published port. |
 
 The default embedding model (embeddinggemma) is under the **Gemma Terms of Use**, not Apache-2.0 — the
 required notices ship in `licenses/gemma/` and are baked into the image. See
-[docs/setup/docker.md](docs/setup/docker.md) for baking options and licensing.
+[docs/setup/docker.md](docs/setup/docker.md) for details and licensing.
 
 ```bash
 # override examples — no file needed:
-ADMIN_PASS=secret HF_TOKEN=hf_xxx docker compose up -d
+ADMIN_PASS=secret docker compose up -d
 ```
 
 These are **runtime env vars on the host**, never baked into the image; change them and `docker compose

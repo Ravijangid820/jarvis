@@ -39,9 +39,9 @@ official image (Ubuntu 24.04 + `/app/llama-server`), with our orchestrator layer
   Qwen3.5-2B, so an empty `./models` auto-downloads + SHA-verifies it at build. To use your own instead,
   drop a `.gguf` in `./models` (it takes precedence) or point `LLM_GGUF_URL` elsewhere. See
   [The model](#the-model).
-- A **HuggingFace token** — only to *bake the embedding model* (memory) into the image, and only for the
-  gated default; accept its license first (<https://huggingface.co/google/embeddinggemma-300m>). See
-  [Embedding model](#embedding-model-memory--baked-in). Not needed for the LLM or to just run.
+- **No HuggingFace token** — for anything. The embedding ships as a public, SHA-256-pinned,
+  torch-free ONNX bundle; the LLM GGUF is public too. See
+  [Embedding model](#embedding-model-memory--torch-free-onnx).
 
 ## Run
 The default `docker-compose.yml` is the **two-service split**: the official llama image + the published
@@ -53,12 +53,9 @@ docker compose pull && docker compose up -d     # official llama + published orc
 docker compose logs -f                          # banner shows the login URL
 curl http://localhost:5000/health
 ```
-Prefer to build the orchestrator yourself (and bake memory in)? Pass the token and `--build`:
-```bash
-HF_TOKEN=hf_xxx docker compose up -d --build    # builds jarvis-orchestrator, bakes the embedding model
-```
-Without the token it still runs — just without memory until you add it. Override anything on the CLI
-(or an optional `.env`), e.g. `ADMIN_PASS=secret docker compose up -d`.
+Prefer to build the orchestrator yourself? `docker compose up -d --build` — the build fetches the
+pinned ONNX embedding bundle itself (no token). Override anything on the CLI (or an optional `.env`),
+e.g. `ADMIN_PASS=secret docker compose up -d`.
 
 > **One container instead of two?** Use the **`jarvis-combined`** image (self-contained; runs both
 > services) — see [Single container](#single-container-all-in-one--combined). That's the image for
@@ -66,11 +63,10 @@ Without the token it still runs — just without memory until you add it. Overri
 
 > **Windows PowerShell** doesn't support the inline `VAR=value cmd` form — set it first:
 > ```powershell
-> $env:HF_TOKEN = "hf_xxx"
-> docker compose build
+> $env:ADMIN_PASS = "secret"
 > docker compose up -d
 > ```
-> (`Remove-Item Env:\HF_TOKEN` to clear it afterwards.) The `VAR=value cmd …` examples elsewhere in
+> (`Remove-Item Env:\ADMIN_PASS` to clear it afterwards.) The `VAR=value cmd …` examples elsewhere in
 > this doc are bash/macOS — translate them the same way on PowerShell.
 Both models are baked into the image, so a built image runs with **zero config and no runtime token** —
 including memory, offline.
@@ -91,7 +87,7 @@ Logs go to `docker compose logs -f` (or stream live if you run `up` without `-d`
   [jarvis]   LLM backend  : http://llama:8081   (the 'llama' service)
   [jarvis] ────────────────────────────────────────────────────────────
   ```
-  If the embedding line says `UNAVAILABLE`, set `HF_TOKEN` (and accept the Gemma license) and restart.
+  If the embedding line says `UNAVAILABLE`, the image's ONNX bundle is missing — rebuild/pull a fresh image.
 
 ## The model
 **Simple by default, flexible when you need it.** A default model (**Qwen3.5-2B**) is **baked into the
@@ -140,30 +136,26 @@ Nothing is locked down — three layers, none needing a rebuild:
   other llama-server flag (`--mlock`, `--n-gpu-layers`, …). Changing these restarts the `llama` container.
 - These apply to native installs too — the same `config/jarvis.json` keys work outside Docker.
 
-## Embedding model (memory) — baked in
-Long-term memory/RAG needs an embedding model. It's **baked into the image** so it works **offline at
-runtime with no HF token** (like the native box). Default: `google/embeddinggemma-300m`.
+## Embedding model (memory) — torch-free ONNX
+Long-term memory/RAG runs on a **torch-free ONNX bundle** of `google/embeddinggemma-300m` — the full
+sentence-transformers pipeline in one graph, **verified numerically identical to torch (cosine
+1.000000)**. It's converted from the official Google weights by `src/scripts/export_embed_onnx.py`,
+hosted **public** at `Ravijangid820/embeddinggemma-300m-onnx`, and every file is **SHA-256-pinned** in
+the build. Consequences:
+- **No HuggingFace token — ever** (build or runtime). The gated-model friction is gone.
+- **No torch in the images** (~2 GB smaller) — the embedder runs on `onnxruntime` + `tokenizers`.
+- The bundle bakes at `/opt/jarvis/embed_onnx`, so a `./models` bind-mount can never shadow it.
 
-Bake it at build time — two ways:
-- **Token secret (simplest):** `HF_TOKEN=hf_xxx docker compose build`. The token is passed as a build
-  **secret** (never stored in the image) and the model is downloaded + baked. The default is **gated** —
-  accept the license at <https://huggingface.co/google/embeddinggemma-300m> with that token's account,
-  and make sure the token can read gated repos.
-- **Pre-download (robust on a flaky network):** `bash src/scripts/prepare_embed_cache.sh` fills
-  `./embed-cache/` once (resumable); then `docker compose build` just copies it in — a fully offline
-  build, no token at build.
-
-Bake neither and the build still succeeds — the model is fetched **at runtime** instead (needs `HF_TOKEN`).
-
-> **Cache gotcha:** BuildKit excludes the token secret from the layer cache, so if a build already ran
-> *without* a token (caching the "not baked" result), simply re-running with the token won't re-bake —
-> the step stays `CACHED`. Force it: change `embed-cache/` contents, or `docker compose build
-> --no-cache` (heavier — also rebuilds llama/LLM). Setting the token on the **first** build avoids this.
-
-**Use a different embedding model:** set `EMBED_MODEL` (it's both a build arg and a runtime value). A
-**non-gated** model (e.g. `BAAI/bge-small-en-v1.5`) needs **no token at all**. Changing it **re-indexes**
-memory (different vector space) and may need different prefixes (`embedding.doc_prefix`/`query_prefix`
-in `jarvis.json`).
+**Use a different embedding model:** export your own bundle (torch pulled ephemerally, CPU wheels):
+```bash
+EMBED_MODEL=<repo> uv run --index https://download.pytorch.org/whl/cpu \
+  --with sentence-transformers --with onnx --with onnxscript \
+  python src/scripts/export_embed_onnx.py
+```
+then mount it and set `EMBED_ONNX_DIR` (+ `EMBED_MODEL` to match — the orchestrator refuses a bundle
+whose `meta.json` model doesn't match, to protect the vector space). Changing models **re-indexes**
+memory (`src/scripts/reembed_memory.py`) and may need different `embedding.doc_prefix`/`query_prefix`
+values in `jarvis.json`.
 
 > **License:** embeddinggemma is under the **Gemma Terms of Use** (not open-source). Shipping an image
 > with it baked in carries redistribution obligations — the required NOTICE + Terms + Prohibited Use
@@ -190,8 +182,8 @@ Or mint them from the **admin UI**. The startup banner reprints the `mint-key` c
 Layers — tunables in env (all defaulted), app settings in a file, data in volumes:
 
 1. **Env vars** (all optional — every one has a default in `docker-compose.yml`). Set them on the CLI
-   (`HF_TOKEN=… docker compose up`), in an **optional** `.env`, or via `docker run -e`:
-   `HF_TOKEN` (memory; default off), `ADMIN_USER`/`ADMIN_PASS` (default `admin`/`admin`), `HOST_PORT`,
+   (`ADMIN_PASS=… docker compose up`), in an **optional** `.env`, or via `docker run -e`:
+   `ADMIN_USER`/`ADMIN_PASS` (default `admin`/`admin`), `HOST_PORT`,
    `LLM_MODEL`, `LLM_CTX`, `LLAMA_THREADS`, `LLAMA_IMAGE`, plus combined-image build args `LLM_GGUF_URL`/`LLM_GGUF_SHA256`.
 2. **`config/jarvis.json`** — app settings. On first run the entrypoint copies it from
    `config/jarvis.docker.json` (relative paths + `fast_brain_url=http://llama:8081`). Edit it on the
@@ -242,7 +234,7 @@ bash src/scripts/download_models.sh              # GGUF → ./models (for the ll
 docker compose pull && docker compose up -d      # (or: up -d --build  to build the orchestrator locally)
 ```
 Set `LLM_MODEL` if your GGUF's filename differs from `Qwen3.5-2B-Q4_K_M.gguf`; `LLAMA_IMAGE` to pin the llama
-tag; `EMBED_MODEL`, `ADMIN_PASS`, `HF_TOKEN`, `LLM_CTX`, `LLAMA_THREADS`, `HOST_PORT` apply as usual.
+tag; `EMBED_MODEL`, `ADMIN_PASS`, `LLM_CTX`, `LLAMA_THREADS`, `HOST_PORT` apply as usual.
 
 **When to use which:**
 | Shape | Best for |
@@ -322,14 +314,12 @@ Two images are published — **`jarvis-combined`** and **`jarvis-orchestrator`**
 ### Build + push on GitHub Actions (no upload from your machine)
 `.github/workflows/build-push.yml` builds **on GitHub's runners** (fast link) and pushes to GHCR — two
 parallel jobs, one per image. One-time setup:
-1. Add a repo secret **`HF_TOKEN`** (Settings → Secrets and variables → Actions) — accepts the Gemma
-   license + reads gated repos. (Without it the LLM still bakes; the embedding won't.)
+1. Nothing — **no secrets needed** (both models are public, pinned downloads).
 2. Run it: Actions → **Build & push images (GHCR)** → *Run workflow* (pick a tag), or push a `v*` git tag.
 3. Images land at `ghcr.io/<owner>/jarvis-combined` and `…/jarvis-orchestrator`. New packages are
    **private** by default — make them public in the package settings to pull without creds.
 
-Each job frees ~25 GB of runner disk first, passes `HF_TOKEN` as a BuildKit secret (never in the image),
-and downloads the model(s) during the build. Pushing publicly **redistributes the baked weights** — the
+Each job frees ~25 GB of runner disk first and downloads the pinned model(s) during the build. Pushing publicly **redistributes the baked weights** — the
 LLM is Apache-2.0, the embedding (Gemma) carries the Gemma Terms (bundled in `licenses/gemma/`).
 
 ## Build options
