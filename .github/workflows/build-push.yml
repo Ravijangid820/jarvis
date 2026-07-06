@@ -14,9 +14,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Image tag for a manual build (e.g. 2.2.0). Tag pushes derive this automatically."
+        description: "Image tag for a manual/TEST build (e.g. 2.4.0-rc1). Manual builds never move :latest — only releases (v* tag pushes) do."
         required: true
-        default: "latest"
+        default: "test"
   push:
     tags: ["v*"]
 
@@ -53,9 +53,15 @@ jobs:
         run: |
           owner="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
           image="ghcr.io/${owner}/jarvis-combined"
-          if [ "${{ github.event_name }}" = "push" ]; then ver="${GITHUB_REF_NAME#v}"; else ver="${{ inputs.tag }}"; fi
-          if [ "${ver}" = "latest" ]; then echo "tags=${image}:latest" >> "$GITHUB_OUTPUT";
-          else echo "tags=${image}:${ver},${image}:latest" >> "$GITHUB_OUTPUT"; fi
+          if [ "${{ github.event_name }}" = "push" ]; then
+            # Release (v* tag): version + latest.
+            ver="${GITHUB_REF_NAME#v}"
+            echo "tags=${image}:${ver},${image}:latest" >> "$GITHUB_OUTPUT"
+          else
+            # Manual/test build (possibly from a branch): ONLY the given tag — never touches :latest,
+            # so running deployments that pull :latest can't receive an untested build.
+            echo "tags=${image}:${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build & push jarvis-combined
         uses: docker/build-push-action@v6
@@ -98,9 +104,15 @@ jobs:
         run: |
           owner="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
           image="ghcr.io/${owner}/jarvis-orchestrator"
-          if [ "${{ github.event_name }}" = "push" ]; then ver="${GITHUB_REF_NAME#v}"; else ver="${{ inputs.tag }}"; fi
-          if [ "${ver}" = "latest" ]; then echo "tags=${image}:latest" >> "$GITHUB_OUTPUT";
-          else echo "tags=${image}:${ver},${image}:latest" >> "$GITHUB_OUTPUT"; fi
+          if [ "${{ github.event_name }}" = "push" ]; then
+            # Release (v* tag): version + latest.
+            ver="${GITHUB_REF_NAME#v}"
+            echo "tags=${image}:${ver},${image}:latest" >> "$GITHUB_OUTPUT"
+          else
+            # Manual/test build (possibly from a branch): ONLY the given tag — never touches :latest,
+            # so running deployments that pull :latest can't receive an untested build.
+            echo "tags=${image}:${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build & push jarvis-orchestrator (slim, no LLM)
         uses: docker/build-push-action@v6
