@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file.
 
 ---
 
-## (onnx-implementation branch) 2026-07-04 — torch-free embeddings: ONNX runtime everywhere
+## v2.4.0 — 2026-07-07 — torch-free embeddings: ONNX runtime everywhere
 
 The embedder now runs on **onnxruntime + tokenizers** — torch and sentence-transformers are gone from
 the dependency tree (104 → 87 packages; the venv drops from ~2.3 GB to ~370 MB; images shrink ~2 GB).
@@ -23,6 +23,10 @@ the dependency tree (104 → 87 packages; the venv drops from ~2.3 GB to ~370 MB
   Actions workflow needs **no secrets** at all now.
 - Custom `EMBED_MODEL`: export your own bundle (torch pulled ephemerally — see the exporter's header),
   mount it, set `EMBED_ONNX_DIR`; re-index with `reembed_memory.py` (also ported to ONNX).
+- CI: manual/test image builds never move `:latest` anymore — only `v*` release tags do.
+- Validated on three environments before release: the production box (RAM 1.7 GB → ~600 MB, all 30
+  vectors served unchanged), a clean Actions runner (secret-free build), and a laptop container
+  (`2.4.0-rc1`).
 
 ## v2.3.1 — 2026-07-03 — patch: user-supplied embedding token; .env everywhere
 
