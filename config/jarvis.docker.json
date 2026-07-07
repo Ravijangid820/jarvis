@@ -20,5 +20,10 @@
         "chroma_db_path": "memory/chroma_db",
         "max_context_messages": 100
     },
-    "system_prompt": "You are Jarvis, a highly efficient AI assistant. Keep responses brief and precise. /no_think"
+    "system_prompt": "You are Jarvis, a highly efficient AI assistant. Keep responses brief and precise. /no_think",
+    "home_assistant": {
+        "url": "",
+        "token": "",
+        "allowed_entities": []
+    }
 }

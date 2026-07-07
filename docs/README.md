@@ -29,6 +29,7 @@ machines with independent environments).
 | **Camera vision agent** — motion/face/pose/gestures (laptop webcam or Pi) | the device | [setup/camera.md](setup/camera.md) | `camera/setup.ps1` (Win) · `bash camera/setup.sh` (Pi) |
 | **Voice listener** — wake word → `/inbox` (whisper) | the server box | [setup/voice.md](setup/voice.md) | `bash src/scripts/run_listener.sh` |
 | **Windows volume agent** — controls the laptop/BT volume | the laptop | [setup/volume-agent.md](setup/volume-agent.md) | `python volume_agent.py` |
+| **Home Assistant** — smart-home control via allowlisted LLM tools | wherever HA runs | [setup/home-assistant.md](setup/home-assistant.md) | set `HA_URL` + `HA_TOKEN` + allowlist |
 
 ## Core docs
 

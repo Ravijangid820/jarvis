@@ -3,7 +3,7 @@
 This is a living document to track upcoming features, architectural shifts, and cool ideas for the Jarvis project.
 
 ## Planned Features
-- **Home Assistant / MQTT Integration**: Connect Jarvis to the smart home network. Allow the LLM to trigger lights, smart plugs, and routines by outputting specific JSON commands that the orchestrator translates into MQTT messages.
+- **Home Assistant / MQTT Integration** (DONE — REST control, 2026-07-07; MQTT events still future): Jarvis controls HA devices via narrow allowlisted tools over HA's REST API (see docs/setup/home-assistant.md). Remaining ideas: MQTT/event push (HA → Jarvis announcements), brightness/color params, sensors as prompt context.
 - **Custom JARVIS Community Voice**: Currently using the high-quality British male voice (`en_GB-alan`), but a community-trained JARVIS model (`jgkawell/jarvis`) exists. We should eventually train or download a bespoke Marvel JARVIS voice.
 - **Wake-Word Optimization**: Enhance `run_listener.sh` to use a more robust VAD (Voice Activity Detection) pipeline to prevent false positives when listening for the wake word.
 - **Edge / distributed voice (mic + STT on the device)**: Today the mic and whisper STT run **on the server box** (single-box design); the edge devices do vision only. Move audio capture + whisper transcription onto the device that actually has the mic (the Pi/laptop already running the camera agent) — transcribe locally, gate on the wake word, and POST text to `/inbox`, so the **server drops whisper entirely**. Benefits: mic near the user, STT offloaded from the 2011 server, and support for multiple / multi-room mics. Groundwork already in place: `build_native.sh` supports `SKIP_WHISPER=1` so a server without the mic skips the whisper build.

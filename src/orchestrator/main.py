@@ -45,6 +45,7 @@ from config import (ADMIN_MAX_INPUT, ALLOWED_ORIGINS, APP_VERSION, BASE_DIR, CHR
                     COMPLETION_RESERVE_DEFAULT, CONFIG, INDEX_HTML, LLM_URL, PIPER_BIN, PIPER_MODEL,
                     RATE_LIMIT_RPM, REACT_DIST_DIR, REGULAR_MAX_INPUT, REQUIRE_PRESENCE_FOR_CONTROL,
                     STATIC_DIR, VALID_FACT_CATEGORIES, logger)
+import ha
 from db import get_db, init_db
 from llm import llm_content, request_llm, request_llm_stream, request_llm_tools, synthesize_tts
 
@@ -521,6 +522,9 @@ def _service_status() -> list:
         s("Voice / TTS (Piper)", PIPER_BIN.exists() and PIPER_MODEL.exists(),
           PIPER_MODEL.name if PIPER_MODEL.exists() else "piper binary/voice missing"),
     ]
+    if ha.configured():
+        services.append(s("Home Assistant", ha.ping(),
+                          f"{len(ha.HA_ALLOWED_ENTITIES)} entities allowlisted · {ha.HA_URL}"))
 
     # Camera agents (Pi / laptop): one row per device that has ever reported, active if its last
     # heartbeat/event is recent. This is the "is the model running on the hardware" indicator.
@@ -1109,6 +1113,22 @@ TOOLS_SPEC = [
         "parameters": {"type": "object", "properties": {}}}},
 ]
 
+if ha.configured():
+    TOOLS_SPEC += [
+        {"type": "function", "function": {
+            "name": "home_control",
+            "description": "Turn a smart-home device (light, switch, plug) on or off, or toggle it.",
+            "parameters": {"type": "object", "properties": {
+                "device": {"type": "string", "description": "which device, e.g. 'kitchen light'"},
+                "action": {"type": "string", "enum": ["on", "off", "toggle"]}},
+                "required": ["device", "action"]}}},
+        {"type": "function", "function": {
+            "name": "home_status",
+            "description": "Get the current on/off state of the smart-home devices.",
+            "parameters": {"type": "object", "properties": {
+                "device": {"type": "string", "description": "one device; omit for all"}}}}},
+    ]
+
 
 def _tool_set_volume(args, raw_request):
     if not _can_control_devices(raw_request):
@@ -1151,8 +1171,42 @@ def _tool_get_presence(args, raw_request):
     return ("I can see " + ", ".join(names) + ".") if names else "I don't see anyone right now."
 
 
+def _tool_home_control(args, raw_request):
+    if not _can_control_devices(raw_request):
+        return "Sorry — you're not authorized to control devices."
+    if REQUIRE_PRESENCE_FOR_CONTROL and not _authorized_person_present():
+        return "I don't see anyone authorized in the room, so I can't change that right now."
+    action = str(args.get("action", "")).lower()
+    entity = ha.resolve_entity(str(args.get("device", "")))
+    if entity is None:
+        allowed = ", ".join(e.partition(".")[2].replace("_", " ") for e in ha.HA_ALLOWED_ENTITIES)
+        return f"I'm not sure which device you mean. I can control: {allowed or 'nothing yet — the allowlist is empty'}."
+    if not ha.turn(entity, action):
+        return "I couldn't reach Home Assistant to do that."
+    _audit(raw_request, "device.home_assistant", f"{action} {entity} (tool)")
+    nice = entity.partition(".")[2].replace("_", " ")
+    return f"Okay — {nice} {'toggled' if action == 'toggle' else action}."
+
+
+def _tool_home_status(args, raw_request):
+    if not _can_control_devices(raw_request):
+        return "Sorry — you're not authorized to view device states."
+    device = str(args.get("device") or "").strip()
+    entities = [ha.resolve_entity(device)] if device else list(ha.HA_ALLOWED_ENTITIES)
+    if not entities or entities[0] is None:
+        return "I'm not sure which device you mean."
+    parts = []
+    for ent in entities:
+        st = ha.get_state(ent)
+        if st:
+            name = (st.get("attributes") or {}).get("friendly_name") or ent.partition(".")[2].replace("_", " ")
+            parts.append(f"{name} is {st.get('state')}")
+    return ("; ".join(parts) + ".") if parts else "I couldn't reach Home Assistant."
+
+
 _TOOLS = {"set_volume": _tool_set_volume, "create_reminder": _tool_create_reminder,
-          "get_presence": _tool_get_presence}
+          "get_presence": _tool_get_presence,
+          "home_control": _tool_home_control, "home_status": _tool_home_status}
 
 
 def _run_tool_calls(message: Dict[str, Any], raw_request: Request) -> Optional[str]:

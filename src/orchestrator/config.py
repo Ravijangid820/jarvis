@@ -118,6 +118,16 @@ EMBED_MODEL_NAME = os.environ.get("EMBED_MODEL") or _EMBED_CFG.get("model") or "
 # Torch-free ONNX runtime: if this dir holds an exported model (export_embed_onnx.py), it is used
 # instead of sentence-transformers/torch — provided its meta.json model matches EMBED_MODEL_NAME.
 EMBED_ONNX_DIR = _resolve(os.environ.get("EMBED_ONNX_DIR") or _EMBED_CFG.get("onnx_dir") or "models/embed_onnx")
+
+# --- Home Assistant (optional) ----------------------------------------------
+# Feature is OFF unless url + token are set. Token: mint from a dedicated NON-ADMIN HA user; it stays
+# server-side (config/env) and is never exposed to the LLM. allowed_entities is the hard allowlist the
+# tool executor enforces — the model can only ever touch what's listed here.
+_HA_CFG = CONFIG.get("home_assistant") if isinstance(CONFIG.get("home_assistant"), dict) else {}
+HA_URL = (os.environ.get("HA_URL") or _HA_CFG.get("url") or "").rstrip("/")
+HA_TOKEN = os.environ.get("HA_TOKEN") or _HA_CFG.get("token") or ""
+_ha_ents = os.environ.get("HA_ALLOWED_ENTITIES") or _HA_CFG.get("allowed_entities") or []
+HA_ALLOWED_ENTITIES: List[str] = [e.strip() for e in (_ha_ents.split(",") if isinstance(_ha_ents, str) else _ha_ents) if e.strip()]
 EMBED_DOC_PREFIX = _EMBED_CFG.get("doc_prefix", "title: none | text: ")
 EMBED_QUERY_PREFIX = _EMBED_CFG.get("query_prefix", "task: search result | query: ")
 RAG_DISTANCE_THRESHOLD = 0.6  # cosine distance = 1 - similarity; discard > this

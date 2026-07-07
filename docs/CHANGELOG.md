@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## (ha-integration branch) 2026-07-07 — Home Assistant control via allowlisted tools
+
+- New `home_control` / `home_status` LLM tools (offered only when configured): "turn on the kitchen
+  light" → tool call → **code-side** validation → HA REST (`homeassistant.turn_on/off/toggle`).
+- Security: token from a dedicated non-admin HA user, held server-side (env `HA_URL`/`HA_TOKEN` or
+  the `home_assistant` block in jarvis.json); hard **entity allowlist** (`HA_ALLOWED_ENTITIES`); the
+  existing `_can_control_devices` + presence gates + audit log apply; ambiguous device names are
+  refused, never guessed (`ha.resolve_entity`, unit-tested).
+- Admin services board gains a **Home Assistant** row (ping + allowlist size) when configured.
+- New guide: docs/setup/home-assistant.md. 12 new tests (resolver semantics + client payloads).
+
 ## v2.4.0 — 2026-07-07 — torch-free embeddings: ONNX runtime everywhere
 
 The embedder now runs on **onnxruntime + tokenizers** — torch and sentence-transformers are gone from
