@@ -16,12 +16,17 @@ from typing import Any, Dict, List
 # box this resolves to /srv/jarvis, so paths are unchanged.
 BASE_DIR = Path(os.environ.get("JARVIS_HOME") or Path(__file__).resolve().parents[2])
 
-# App version — from the installed package metadata (uv sync installs "jarvis"); "unknown" if not installed.
+# App version. This project is an app, not an installed package (no [build-system] in pyproject —
+# uv treats it as "virtual"), so package metadata usually doesn't exist; read pyproject.toml directly.
 try:
-    from importlib.metadata import version as _pkg_version
-    APP_VERSION = _pkg_version("jarvis")
+    import tomllib
+    APP_VERSION = tomllib.loads((BASE_DIR / "pyproject.toml").read_text())["project"]["version"]
 except Exception:
-    APP_VERSION = "unknown"
+    try:
+        from importlib.metadata import version as _pkg_version
+        APP_VERSION = _pkg_version("jarvis")
+    except Exception:
+        APP_VERSION = "unknown"
 
 # --- Logging ----------------------------------------------------------------
 # Rotating file handler so the log can't grow without bound (5 MB x 3 backups).
