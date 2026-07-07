@@ -46,9 +46,6 @@ models/*
 !models/.keep
 *.gguf
 # Pre-downloaded embedding-model cache (baked into the Docker image). Weights stay out of git; the
-# .keep preserves the dir so the build's "COPY embed-cache/" is always valid.
-embed-cache/*
-!embed-cache/.keep
 *.onnx
 *.bin
 # whisper.cpp — vendored upstream, built from source

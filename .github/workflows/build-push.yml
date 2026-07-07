@@ -7,17 +7,16 @@ name: Build & push images (GHCR)
 #   • jarvis-orchestrator — slim app only (for the two-service split; pairs with the official llama image)
 # Trigger manually (Actions → Run workflow) or by pushing a v* tag → image X.Y.Z + latest.
 #
-# Required once: add a repo secret HF_TOKEN (Settings → Secrets and variables → Actions) — a token that
-# accepts the Gemma license and can read gated repos. Without it the embedding model won't bake in
-# (the LLM still does). See docs/setup/docker.md.
+# No secrets required: the LLM GGUF and the torch-free ONNX embedding bundle are both public,
+# pinned + SHA-256-verified downloads (see docs/setup/docker.md).
 
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Image tag for a manual build (e.g. 2.2.0). Tag pushes derive this automatically."
+        description: "Image tag for a manual/TEST build (e.g. 2.4.0-rc1). Manual builds never move :latest — only releases (v* tag pushes) do."
         required: true
-        default: "latest"
+        default: "test"
   push:
     tags: ["v*"]
 
@@ -34,7 +33,7 @@ jobs:
 
       - name: Free up disk space
         run: |
-          # torch + baked LLM + baked embedding need ~20-30 GB; a runner has ~14 GB free by default.
+          # baked LLM + ONNX embedding bundle need ~10-15 GB during the build; a runner has ~14 GB free.
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/lib/android \
                       /opt/hostedtoolcache /usr/local/share/boost /usr/share/swift || true
           sudo apt-get clean || true
@@ -54,9 +53,15 @@ jobs:
         run: |
           owner="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
           image="ghcr.io/${owner}/jarvis-combined"
-          if [ "${{ github.event_name }}" = "push" ]; then ver="${GITHUB_REF_NAME#v}"; else ver="${{ inputs.tag }}"; fi
-          if [ "${ver}" = "latest" ]; then echo "tags=${image}:latest" >> "$GITHUB_OUTPUT";
-          else echo "tags=${image}:${ver},${image}:latest" >> "$GITHUB_OUTPUT"; fi
+          if [ "${{ github.event_name }}" = "push" ]; then
+            # Release (v* tag): version + latest.
+            ver="${GITHUB_REF_NAME#v}"
+            echo "tags=${image}:${ver},${image}:latest" >> "$GITHUB_OUTPUT"
+          else
+            # Manual/test build (possibly from a branch): ONLY the given tag — never touches :latest,
+            # so running deployments that pull :latest can't receive an untested build.
+            echo "tags=${image}:${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build & push jarvis-combined
         uses: docker/build-push-action@v6
@@ -69,9 +74,6 @@ jobs:
           build-args: |
             LLM_GGUF_URL=https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf
             LLM_GGUF_SHA256=aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223
-            EMBED_MODEL=google/embeddinggemma-300m
-          secrets: |
-            hf_token=${{ secrets.HF_TOKEN }}
 
       - run: echo "Pushed ${{ steps.meta.outputs.tags }}  (single-container all-in-one)" >> "$GITHUB_STEP_SUMMARY"
 
@@ -102,9 +104,15 @@ jobs:
         run: |
           owner="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
           image="ghcr.io/${owner}/jarvis-orchestrator"
-          if [ "${{ github.event_name }}" = "push" ]; then ver="${GITHUB_REF_NAME#v}"; else ver="${{ inputs.tag }}"; fi
-          if [ "${ver}" = "latest" ]; then echo "tags=${image}:latest" >> "$GITHUB_OUTPUT";
-          else echo "tags=${image}:${ver},${image}:latest" >> "$GITHUB_OUTPUT"; fi
+          if [ "${{ github.event_name }}" = "push" ]; then
+            # Release (v* tag): version + latest.
+            ver="${GITHUB_REF_NAME#v}"
+            echo "tags=${image}:${ver},${image}:latest" >> "$GITHUB_OUTPUT"
+          else
+            # Manual/test build (possibly from a branch): ONLY the given tag — never touches :latest,
+            # so running deployments that pull :latest can't receive an untested build.
+            echo "tags=${image}:${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build & push jarvis-orchestrator (slim, no LLM)
         uses: docker/build-push-action@v6
@@ -114,9 +122,5 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
-          build-args: |
-            EMBED_MODEL=google/embeddinggemma-300m
-          secrets: |
-            hf_token=${{ secrets.HF_TOKEN }}
 
       - run: echo "Pushed ${{ steps.meta.outputs.tags }}  (slim orchestrator — needs a llama backend)" >> "$GITHUB_STEP_SUMMARY"

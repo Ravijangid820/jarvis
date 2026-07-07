@@ -110,6 +110,9 @@ MIN_COMPLETION_TOKENS: int = 64         # never squeeze the answer below this
 # prompt prefixes below. embeddinggemma is ASYMMETRIC: documents and queries need distinct prefixes.
 _EMBED_CFG = CONFIG.get("embedding") if isinstance(CONFIG.get("embedding"), dict) else {}
 EMBED_MODEL_NAME = os.environ.get("EMBED_MODEL") or _EMBED_CFG.get("model") or "google/embeddinggemma-300m"
+# Torch-free ONNX runtime: if this dir holds an exported model (export_embed_onnx.py), it is used
+# instead of sentence-transformers/torch — provided its meta.json model matches EMBED_MODEL_NAME.
+EMBED_ONNX_DIR = _resolve(os.environ.get("EMBED_ONNX_DIR") or _EMBED_CFG.get("onnx_dir") or "models/embed_onnx")
 EMBED_DOC_PREFIX = _EMBED_CFG.get("doc_prefix", "title: none | text: ")
 EMBED_QUERY_PREFIX = _EMBED_CFG.get("query_prefix", "task: search result | query: ")
 RAG_DISTANCE_THRESHOLD = 0.6  # cosine distance = 1 - similarity; discard > this

@@ -14,7 +14,8 @@ workflow):
 - `jarvis-orchestrator` (from `Dockerfile.orchestrator`) has **no LLM** — on its own it serves the UI but
   needs a companion `llama` service.
 
-Both bake the embedding model (offline memory, no runtime token) + ship the Gemma license. The
+Both bake the **torch-free ONNX embedding bundle** (offline memory; no token at build OR runtime;
+~2 GB smaller than the torch-based 2.3.x images) + ship the Gemma license. The
 camera/volume agents and voice listener run natively. See [docker.md](docker.md) for how to run each.
 
 > **Tag numbering.** Image tags track the **repo version**: git tag `vX.Y.Z` → image `X.Y.Z` + `latest`

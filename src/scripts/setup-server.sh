@@ -7,7 +7,7 @@
 # Options (env):
 #   JARVIS_USER=jarvis   service user (default jarvis; use `root` for the simple non-hardened mode)
 #   SKIP_TLS=1           don't generate/enable HTTPS (leave it on plain HTTP)
-#   ADMIN_USER, ADMIN_PASS, LLM_GGUF_URL, HF_TOKEN, SKIP_NATIVE, SKIP_MODELS  → passed to setup.sh
+#   ADMIN_USER, ADMIN_PASS, LLM_GGUF_URL, SKIP_NATIVE, SKIP_MODELS  → passed to setup.sh
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO"

@@ -11,7 +11,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from config import (
-    CHROMA_DB_PATH, EMBED_DOC_PREFIX, EMBED_MODEL_NAME, EMBED_QUERY_PREFIX,
+    CHROMA_DB_PATH, EMBED_DOC_PREFIX, EMBED_MODEL_NAME, EMBED_ONNX_DIR, EMBED_QUERY_PREFIX,
     FACT_DEDUP_SIM, FACT_DEDUP_WORD, FACT_EXTRACTION_PROMPT, IDLE_CHECK_INTERVAL,
     IDLE_THRESHOLD_SECONDS, RAG_DISTANCE_THRESHOLD,
     RAG_MAX_RESULTS, VALID_FACT_CATEGORIES, logger,
@@ -41,17 +41,49 @@ def init_embeddings():
     if os.environ.get("JARVIS_NO_EMBED") == "1":
         logger.info("JARVIS_NO_EMBED=1 — embeddings/RAG disabled")
         return
+    # Torch-free fast path: an exported ONNX pipeline (src/scripts/export_embed_onnx.py). Only used
+    # when its meta.json model MATCHES the configured EMBED_MODEL_NAME — a mismatch would silently
+    # produce vectors from a different space. Any failure falls back to sentence-transformers below.
+    onnx_model = None
+    try:
+        meta_path = os.path.join(EMBED_ONNX_DIR, "meta.json")
+        if os.path.isfile(meta_path):
+            with open(meta_path) as f:
+                onnx_meta_model = json.load(f).get("model")
+            if onnx_meta_model == EMBED_MODEL_NAME:
+                from onnx_embed import OnnxEmbedder
+                onnx_model = OnnxEmbedder(EMBED_ONNX_DIR)
+            else:
+                logger.warning("ONNX embed dir %s holds '%s' but EMBED_MODEL is '%s' — ignoring it "
+                               "(re-export or fix EMBED_MODEL)", EMBED_ONNX_DIR, onnx_meta_model, EMBED_MODEL_NAME)
+    except Exception as e:
+        logger.warning("ONNX embedding init failed (%s: %s) — falling back to sentence-transformers",
+                       type(e).__name__, e)
+        onnx_model = None
+
     try:
         # Imported here, not at module top: torch/sentence-transformers are heavy to
         # import (tens of seconds on this CPU), so deferring keeps `import memory` cheap.
         import chromadb
-        from sentence_transformers import SentenceTransformer
         chroma_client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
-        # trust_remote_code=False: never execute code shipped in the model repo (supply-chain RCE
-        # guard). Pin EMBED_MODEL_REVISION=<commit> for a tamper-evident load (else uses the cache).
-        _embed_model = SentenceTransformer(
-            EMBED_MODEL_NAME, trust_remote_code=False,
-            revision=os.environ.get("EMBED_MODEL_REVISION") or None)
+        if onnx_model is not None:
+            _embed_model = onnx_model
+        else:
+            # Legacy torch path — sentence-transformers is NO LONGER a project dependency (the ONNX
+            # bundle is the supported runtime). This only works if someone installed it manually.
+            try:
+                from sentence_transformers import SentenceTransformer
+            except ImportError:
+                raise RuntimeError(
+                    f"no ONNX embedding bundle at {EMBED_ONNX_DIR} — run "
+                    "'bash src/scripts/download_models.sh' to fetch it (no token needed), or export "
+                    "one for a custom model with src/scripts/export_embed_onnx.py"
+                ) from None
+            # trust_remote_code=False: never execute code shipped in the model repo (supply-chain RCE
+            # guard). Pin EMBED_MODEL_REVISION=<commit> for a tamper-evident load (else uses the cache).
+            _embed_model = SentenceTransformer(
+                EMBED_MODEL_NAME, trust_remote_code=False,
+                revision=os.environ.get("EMBED_MODEL_REVISION") or None)
         # Cosine space with normalized vectors (the "jarvis_memory_cos" collection).
         memory_collection = chroma_client.get_or_create_collection(
             name="jarvis_memory_cos", metadata={"hnsw:space": "cosine"}
@@ -62,8 +94,9 @@ def init_embeddings():
         # method was renamed get_sentence_embedding_dimension → get_embedding_dimension; support both
         _dim = (_embed_model.get_embedding_dimension if hasattr(_embed_model, "get_embedding_dimension")
                 else _embed_model.get_sentence_embedding_dimension)()
-        logger.info("Embeddings: %s (dim=%d), collection 'jarvis_memory_cos' has %d vectors",
-                    EMBED_MODEL_NAME, _dim, memory_collection.count())
+        logger.info("Embeddings: %s via %s (dim=%d), collection 'jarvis_memory_cos' has %d vectors",
+                    EMBED_MODEL_NAME, getattr(_embed_model, "runtime", "torch/sentence-transformers"),
+                    _dim, memory_collection.count())
     except Exception as e:
         logger.error("Failed to initialize ChromaDB / embedding model: %s", e)
         _embed_model = None
@@ -88,7 +121,8 @@ def embedding_status() -> Dict[str, Any]:
         count = memory_collection.count()
     except Exception:
         count = None
-    return {"available": True, "model": EMBED_MODEL_NAME, "dim": dim, "count": count}
+    return {"available": True, "model": EMBED_MODEL_NAME, "dim": dim, "count": count,
+            "runtime": getattr(_embed_model, "runtime", "torch")}
 
 
 def _embed_documents(texts: List[str]) -> List[List[float]]:

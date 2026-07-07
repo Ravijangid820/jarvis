@@ -21,8 +21,8 @@ curl --cacert tls/ca.crt https://127.0.0.1:5000/health        # → {"status":"o
 ```
 
 Notes: the LLM (Qwen3.5-2B) downloads by default — set `LLM_GGUF_URL=<url>` only for a *different* model.
-The embedding model is Gemma-gated → `uv run huggingface-cli login` (or `HF_TOKEN=…`) first (or use a
-non-gated `EMBED_MODEL=`). Options: `JARVIS_USER=`, `SKIP_TLS=1`, `ADMIN_USER=`/`ADMIN_PASS=`. Note the
+The embedding downloads as a public, pinned, torch-free ONNX bundle — **no HuggingFace token
+needed**. Options: `JARVIS_USER=`, `SKIP_TLS=1`, `ADMIN_USER=`/`ADMIN_PASS=`. Note the
 **CA fingerprint** the script prints.
 
 Mint the camera's key (under a **non-admin** user — or do it in the web UI, Admin → Keys):

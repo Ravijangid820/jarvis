@@ -8,14 +8,17 @@ message into the new collection so existing history is searchable again.
 
 Run (after deploying the new code, with the orchestrator stopped to avoid races):
     uv run python src/scripts/reembed_memory.py
+
+Torch-free: embeds via the ONNX bundle (models/embed_onnx — download_models.sh fetches it,
+or export your own with export_embed_onnx.py for a custom model).
 """
 import json
 import os
 import sqlite3
+import sys
 from pathlib import Path
 
 import chromadb
-from sentence_transformers import SentenceTransformer
 
 # Portable paths (any checkout, any user): JARVIS_CONFIG > JARVIS_HOME > repo-relative.
 _REPO = Path(os.environ.get("JARVIS_HOME") or Path(__file__).resolve().parents[2])
@@ -25,9 +28,12 @@ CHROMA_PATH = CONFIG["memory"].get("chroma_db_path", "memory/chroma_db")
 DB_PATH = DB_PATH if Path(DB_PATH).is_absolute() else str(_REPO / DB_PATH)
 CHROMA_PATH = CHROMA_PATH if Path(CHROMA_PATH).is_absolute() else str(_REPO / CHROMA_PATH)
 
-EMBED_MODEL_NAME = "google/embeddinggemma-300m"
 EMBED_DOC_PREFIX = "title: none | text: "
 COLLECTION = "jarvis_memory_cos"
+EMBED_ONNX_DIR = Path(os.environ.get("EMBED_ONNX_DIR") or _REPO / "models" / "embed_onnx")
+
+sys.path.insert(0, str(_REPO / "src" / "orchestrator"))
+from onnx_embed import OnnxEmbedder  # noqa: E402  (torch-free runtime)
 
 
 def main() -> None:
@@ -57,7 +63,7 @@ def main() -> None:
         print("Nothing to embed. Done.")
         return
 
-    model = SentenceTransformer(EMBED_MODEL_NAME, trust_remote_code=False)  # no model-repo code exec
+    model = OnnxEmbedder(EMBED_ONNX_DIR)  # onnxruntime + tokenizers — no torch, no remote code
     BATCH = 32
     for start in range(0, len(rows), BATCH):
         batch = rows[start:start + BATCH]

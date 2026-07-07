@@ -43,6 +43,22 @@ RUN set -eu; mkdir -p /out; \
       else echo "WARN: LLM_GGUF_SHA256 not set — skipping integrity check"; fi; \
     else echo "NOTE: no model in ./models and no LLM_GGUF_URL — image ships without a baked default."; fi
 
+# --- Embedding: torch-free ONNX bundle (full ST pipeline in one graph) — public, SHA-256-pinned,
+#     NO HuggingFace token. Converted from the official google weights + verified cosine 1.000000
+#     vs torch (src/scripts/export_embed_onnx.py); hosted on the project owner's HF repo.
+FROM debian:12-slim AS embed
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+ARG EMBED_ONNX_BASE=https://huggingface.co/Ravijangid820/embeddinggemma-300m-onnx/resolve/main
+RUN set -eu; mkdir -p /out; cd /out; \
+    dl() { curl -L --fail --retry 5 --retry-all-errors --retry-delay 5 -C - -o "$1" "${EMBED_ONNX_BASE}/$1" \
+           && echo "$2  $1" | sha256sum -c -; }; \
+    dl model.onnx            39a1f3039ed66e39c5174469dc5ce0417ef57993590170164b18beb8254de2d0; \
+    dl model.onnx.data       1d5fb11500ae836f3a42efc3c7123076416d9e527ae479d19d940a3c784f0035; \
+    dl tokenizer.json        3f797e7e336523ba3845bf09a648fd87c14bf357f26beb091d8284dff48ea27c; \
+    dl tokenizer_config.json 7f4973d11e065de3097b85319ef7c43e143aa7f1df619ebe1056f81b8de97edb; \
+    dl meta.json             b149d450b0bd383a207b3328cb9dd093082077c84eb4e178418a2db0f4f2dccf
+
 # --- Stage 3: runtime = official llama.cpp server + our orchestrator ---
 # LLAMA_IMAGE is the global arg declared at the top of this file (before the first FROM).
 FROM ${LLAMA_IMAGE}
@@ -51,10 +67,9 @@ FROM ${LLAMA_IMAGE}
 # no filename clashes. llama-server stays put; all-in-one.sh runs /app/llama-server on loopback.
 ENV JARVIS_HOME=/app \
     JARVIS_CONFIG=/app/config/jarvis.json \
-    HF_HOME=/app/.cache/huggingface \
     PYTHONUNBUFFERED=1 \
     LLAMA_ARG_HOST=127.0.0.1
-# Runtime libs for torch/onnxruntime + the Piper fetch. (libgomp1 already in the base.)
+# Runtime libs for onnxruntime + the Piper fetch. (libgomp1 already in the base.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl tar gzip libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
@@ -63,22 +78,9 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
-# Bake the embedding model (memory works offline, no runtime token): ./embed-cache, else a build-time
-# HF token secret; else a runtime-download fallback. Same recipe as the orchestrator image.
-ARG EMBED_MODEL=google/embeddinggemma-300m
-COPY embed-cache/ /app/.cache/huggingface/
-RUN --mount=type=secret,id=hf_token \
-    if find /app/.cache/huggingface/hub -maxdepth 1 -name 'models--*' 2>/dev/null | grep -q .; then \
-      echo "Embedding model baked from ./embed-cache."; \
-    elif [ -s /run/secrets/hf_token ]; then \
-      echo "Downloading embedding model ${EMBED_MODEL} at build (retries + resumes)…"; \
-      n=0; ok=0; while [ "$n" -lt 5 ]; do n=$((n + 1)); \
-        if HF_TOKEN="$(cat /run/secrets/hf_token)" EMBED_MODEL="${EMBED_MODEL}" \
-             uv run --no-sync python -c "import os; from sentence_transformers import SentenceTransformer; SentenceTransformer(os.environ['EMBED_MODEL'])"; \
-        then ok=1; break; fi; echo "  attempt $n/5 failed; retrying in 10s…"; sleep 10; done; \
-      [ "$ok" = 1 ] && echo "Embedding model baked from HuggingFace." \
-                    || echo "WARN: embedding bake failed — will fall back to a runtime download."; \
-    else echo "NOTE: embedding not baked (no ./embed-cache, no hf_token secret) — runtime download needed."; fi
+# Torch-free embedding bundle — at /opt so a /app/models bind-mount can never shadow it.
+COPY --from=embed /out /opt/jarvis/embed_onnx
+ENV EMBED_ONNX_DIR=/opt/jarvis/embed_onnx
 COPY src/ ./src/
 COPY config/ ./config/
 COPY licenses/ ./licenses/

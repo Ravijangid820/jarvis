@@ -12,7 +12,7 @@ changes and network/TLS, see [DEPLOY.md](../DEPLOY.md).
 git clone https://github.com/Ravijangid820/jarvis.git /srv/jarvis && cd /srv/jarvis
 sudo bash src/scripts/setup-server.sh
 #   bootstrap + systemd services + local-CA HTTPS, in order.
-#   Options: JARVIS_USER=jarvis (default) · SKIP_TLS=1 · ADMIN_USER=… ADMIN_PASS=… LLM_GGUF_URL=… HF_TOKEN=…
+#   Options: JARVIS_USER=jarvis (default) · SKIP_TLS=1 · ADMIN_USER=… ADMIN_PASS=… LLM_GGUF_URL=…
 curl --cacert tls/ca.crt https://127.0.0.1:5000/health        # verify
 ```
 
@@ -41,8 +41,8 @@ uv run python src/scripts/manage.py create-admin <user> <pass>   # optional — 
 ```
 
 - The **LLM GGUF defaults to the pinned Qwen3.5-2B** (SHA-verified download) — set `LLM_GGUF_URL=<url>`
-  only for a *different* model, or drop the file under `models/`. The embedding model is gated (Gemma
-  license): accept its terms and `uv run huggingface-cli login` (or set `HF_TOKEN`).
+  only for a *different* model, or drop the file under `models/`. The embedding downloads as a public,
+  SHA-256-pinned, **torch-free ONNX bundle** — no HuggingFace token needed.
 - Data paths are repo-relative by default (DB/vectors land under the checkout); absolute paths in
   `jarvis.json` are used as-is. See [SPECS.md](../SPECS.md) for the full config + schema reference.
 

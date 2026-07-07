@@ -10,7 +10,7 @@
 #   SKIP_MODELS=1            skip model downloads (run download_models.sh later)
 #   SKIP_RUN=1              bootstrap only — don't start the services at the end
 #   ADMIN_USER, ADMIN_PASS   admin login to seed (default admin/admin)
-#   LLM_GGUF_URL, HF_TOKEN   passed through to download_models.sh
+#   LLM_GGUF_URL             passed through to download_models.sh (no HF token needed for anything)
 set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO"
@@ -31,10 +31,6 @@ fi
 free_gb="$(df -P -BG "$REPO" 2>/dev/null | awk 'NR==2{gsub(/G/,"",$4);print $4}')"
 { [ -n "$free_gb" ] && [ "$free_gb" -ge 8 ]; } 2>/dev/null && ok "disk: ${free_gb}G free" \
   || warn "low disk (${free_gb:-?}G free) — models + native builds need several GB"
-if [ "${SKIP_MODELS:-}" != 1 ]; then
-  [ -n "${HF_TOKEN:-}" ] && ok "HF_TOKEN set (for the gated embedding model)" \
-    || warn "HF_TOKEN not set — the Gemma embedding model is gated; export HF_TOKEN or run 'uv run huggingface-cli login' first"
-fi
 
 step "Python environment (uv sync --frozen)"
 uv sync --frozen && ok ".venv ready (locked — exact versions from uv.lock)" || { echo "uv sync --frozen failed"; exit 1; }
