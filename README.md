@@ -21,7 +21,7 @@ text-to-speech — running entirely on a 2011-era laptop in a Proxmox LXC. No cl
 - 👤 **Real multi-user auth** — web-login sessions or revocable per-user API keys (hashed at rest), an admin console, and per-user rate limiting — no static master secret.
 - 🛡️ **Hardened by default** — non-root systemd services with strict sandboxing, a strict CSP, parameterized SQL, bounded input, and authorization enforced **in code, never by the LLM** (backed by a multi-round security audit).
 - 📷 **Edge vision (Raspberry Pi)** — optional on-device motion / face / pose / gesture detection that posts only small JSON events — **no video leaves the device**.
-- 🔌 **Device control** — authorized, outbound-only agents (e.g. volume); Home Assistant + model tool-calling on the roadmap.
+- 🔌 **Device control** — authorized, outbound-only agents (e.g. volume) and **Home Assistant** smart-home control via narrow, allowlisted LLM tool-calling (token server-side, entity allowlist, audit-logged).
 - 🧩 **Clean, tested codebase** — an acyclic module graph under pytest + ruff + CI, and a portable installer (run as root **or** a dedicated user, from any checkout path).
 
 ## Demo

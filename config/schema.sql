@@ -146,6 +146,16 @@ CREATE TABLE IF NOT EXISTS face_embeddings (
 );
 CREATE INDEX IF NOT EXISTS idx_face_embeddings_person ON face_embeddings(person_id);
 
+-- Admin-editable runtime settings (key/value). For config that should be changeable from the UI
+-- without an env var or a file edit + restart — e.g. the Home Assistant URL/token/allowlist. Values
+-- are JSON or plain strings. Secrets here (the HA token) sit alongside the password hashes and API
+-- keys already in this DB, which is owner-only and backed up as a sensitive artifact.
+CREATE TABLE IF NOT EXISTS app_settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Liveness for edge devices (camera agents). The agent posts a periodic `heartbeat` event; we keep
 -- only the latest timestamp per device (not in vision_events, to avoid flooding it) so the admin
 -- console can show each camera as active (recent heartbeat) or inactive (stale / never seen).

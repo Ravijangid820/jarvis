@@ -19,6 +19,29 @@ def get_db() -> sqlite3.Connection:
     return conn
 
 
+def get_setting(key: str, default=None):
+    """Read an admin-editable runtime setting from app_settings (see schema.sql)."""
+    conn = get_db()
+    try:
+        row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row is not None else default
+    finally:
+        conn.close()
+
+
+def set_setting(key: str, value: str) -> None:
+    """Upsert an admin-editable runtime setting."""
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP",
+            (key, value))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _safe_exec(conn: sqlite3.Connection, sql: str):
     """Run a best-effort migration statement (e.g. ALTER that may already be applied).
 
