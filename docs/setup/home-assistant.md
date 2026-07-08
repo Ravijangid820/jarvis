@@ -82,7 +82,11 @@ All three appear in the device picker and can be allowlisted. Semantics:
 - **"turn on/off the &lt;automation&gt;"** — enables/disables it (off also **aborts a run in progress**).
 - **"run / trigger / execute the &lt;automation|script|scene&gt;"** — executes its actions NOW.
   Automations run with `skip_condition: false`, so the automation's own guard conditions still apply.
+- **"stop / halt / cancel the &lt;automation|script|device&gt;"** — maps to off (aborts + disables an
+  automation; stops a running script; switches a device off).
 - "run/start the &lt;plain device&gt;" gracefully means "turn it on".
+- Unrecognized phrasings that clearly name an allowlisted device get a **clarifying question** — by
+  design they never fall through to the LLM, which cannot act and must not pretend it did.
 
 Data-leak posture (by construction): payloads to HA are **hardcoded shapes** (`entity_id` only — no
 variables/service-data channel the LLM could inject into); HA's responses are **discarded** (booleans

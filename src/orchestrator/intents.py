@@ -137,6 +137,13 @@ _HOME_OFF_B = re.compile(r"\b(?:turn|switch|power|shut)\s+(?:the\s+|my\s+)?(?P<d
 _HOME_TOGGLE = re.compile(r"\btoggle\s+(?:the\s+|my\s+)?(?P<dev>[\w -]+?)" + _BOUND, re.I)
 _HOME_STATUS = re.compile(r"\b(?:is|are)\s+(?:the\s+|my\s+)?(?P<dev>[\w -]+?)\s+(?:on|off|running)" + _BOUND, re.I)
 _HOME_RUN = re.compile(r"\b(?:run|trigger|execute|activate|launch|start)\s+(?:the\s+|my\s+)?(?P<dev>[\w -]+?)" + _BOUND, re.I)
+_HOME_STOP = re.compile(r"\b(?:stop|halt|kill|cancel)\s+(?:the\s+|my\s+)?(?P<dev>[\w -]+?)" + _BOUND, re.I)
+
+# Any control-ish verb — used by the anti-bluff guard: a message that mentions an allowlisted device
+# AND one of these, but doesn't parse as a clean command, gets a clarification — it must never fall
+# through to the (toolless, streaming) LLM, which bluffs acks like "Done."
+HOME_CONTROL_VERB = re.compile(
+    r"\b(?:turn|switch|power|shut|toggle|run|trigger|execute|activate|launch|start|stop|halt|kill)\b", re.I)
 
 
 def parse_home_command(text: str) -> Optional[Dict[str, str]]:
@@ -145,7 +152,7 @@ def parse_home_command(text: str) -> Optional[Dict[str, str]]:
         return None
     for action, pattern in (("toggle", _HOME_TOGGLE), ("on", _HOME_ON_A), ("on", _HOME_ON_B),
                             ("off", _HOME_OFF_A), ("off", _HOME_OFF_B), ("status", _HOME_STATUS),
-                            ("run", _HOME_RUN)):
+                            ("run", _HOME_RUN), ("off", _HOME_STOP)):
         m = pattern.search(text)
         if m:
             dev = m.group("dev").strip()

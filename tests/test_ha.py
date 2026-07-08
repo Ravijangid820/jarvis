@@ -298,3 +298,40 @@ def test_parse_run_phrasings():
     assert p("run the movie night automation") == {"action": "run", "device": "movie night automation"}
     assert p("trigger movie night") == {"action": "run", "device": "movie night"}
     assert p("execute the reset script please") == {"action": "run", "device": "reset script"}
+
+
+# --- "stop X" + the anti-bluff guard ------------------------------------------
+
+def test_stop_maps_to_off_end_to_end(monkeypatch):
+    import main
+    actions = []
+    monkeypatch.setattr(ha, "HA_URL", "http://ha.test:8123")
+    monkeypatch.setattr(ha, "HA_TOKEN", "tok")
+    monkeypatch.setattr(ha, "HA_ALLOWED_ENTITIES", ["automation.morning", "switch.desk_fan"])
+    monkeypatch.setattr(ha, "turn", lambda e, a: actions.append((a, e)) or True)
+    monkeypatch.setattr(main, "_can_control_devices", lambda r: True)
+    monkeypatch.setattr(main, "REQUIRE_PRESENCE_FOR_CONTROL", False)
+    monkeypatch.setattr(main, "_audit", lambda *a, **k: None)
+    main._LAST_HOME_ENTITY.clear()
+
+    reply = main._handle_home_command("stop morning automation", None, "s1")
+    assert "morning off" in reply.lower()
+    # homeassistant.turn_off on an automation aborts a run in progress AND disables it
+    assert actions[-1] == ("off", "automation.morning")
+    assert "fan off" in main._handle_home_command("stop the fan", None, "s1").lower()
+
+
+def test_antibluff_guard_asks_instead_of_reaching_the_llm(monkeypatch):
+    """Device named + control verb, but unparseable phrasing -> a clarification, NOT None
+    (None would fall through to the toolless streaming LLM, which bluffs acks)."""
+    import main
+    monkeypatch.setattr(ha, "HA_URL", "http://ha.test:8123")
+    monkeypatch.setattr(ha, "HA_TOKEN", "tok")
+    monkeypatch.setattr(ha, "HA_ALLOWED_ENTITIES", ["automation.morning"])
+    reply = main._handle_home_command("morning automation stop please now thanks", None, "s1")
+    assert reply is not None and "morning" in reply.lower()
+
+    # ordinary sentences (no allowlisted device) still reach the LLM untouched
+    assert main._handle_home_command("stop telling me jokes", None, "s1") is None
+    # device named but NO control verb (just chatting about it) -> LLM is fine
+    assert main._handle_home_command("the morning automation is my favorite", None, "s1") is None

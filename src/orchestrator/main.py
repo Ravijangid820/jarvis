@@ -39,7 +39,7 @@ from pydantic import BaseModel, Field, field_validator
 import chat
 import memory
 from auth import hash_password, hash_token, verify_password
-from intents import is_gesture_volume, parse_home_command, parse_reminder, parse_volume
+from intents import HOME_CONTROL_VERB, is_gesture_volume, parse_home_command, parse_reminder, parse_volume
 from budget import is_default_session
 from config import (ADMIN_MAX_INPUT, ALLOWED_ORIGINS, APP_VERSION, BASE_DIR, CHROMA_DB_PATH,
                     COMPLETION_RESERVE_DEFAULT, CONFIG, HA_TOKEN_FROM_ENV, HA_URL_FROM_ENV,
@@ -1143,9 +1143,22 @@ def _handle_home_command(user_text: str, raw_request: Request, session_id: str) 
     ("turn my life around") are never hijacked. "it"/"that" refers to the session's last device."""
     if not ha.configured():
         return None
+    def clarify_or_none():
+        # Anti-bluff guard: the message names an allowlisted device AND uses a control verb, but we
+        # couldn't extract a clean (action, device) — ASK instead of returning None: None falls
+        # through to the streaming LLM, which has no tools and invents acks ("Done.") while doing
+        # nothing. Ordinary sentences (no device match / no control verb) still reach the LLM.
+        if HOME_CONTROL_VERB.search(user_text):
+            hinted = ha.resolve_entity(user_text)      # fuzzy match over the whole utterance
+            if hinted is not None:
+                nice = hinted.partition(".")[2].replace("_", " ")
+                return (f"I think you want me to control {nice} — try \"turn on/off {nice}\", "
+                        f"\"run {nice}\", or \"stop {nice}\".")
+        return None
+
     cmd = parse_home_command(user_text)
     if cmd is None:
-        return None
+        return clarify_or_none()
     if cmd["device"].lower() in _HOME_PRONOUNS:
         last = _LAST_HOME_ENTITY.get(session_id)
         entity = last[0] if last and (time.monotonic() - last[1]) < _LAST_HOME_TTL else None
@@ -1157,7 +1170,7 @@ def _handle_home_command(user_text: str, raw_request: Request, session_id: str) 
     else:
         entity = ha.resolve_entity(cmd["device"])
     if entity is None:
-        return None                       # not one of our devices — let the LLM answer
+        return clarify_or_none()          # device-y + control verb → ask; else the LLM answers
     if not _can_control_devices(raw_request):
         return "Sorry — you're not authorized to control devices."
     if REQUIRE_PRESENCE_FOR_CONTROL and not _authorized_person_present():

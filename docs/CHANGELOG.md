@@ -16,6 +16,10 @@ Field-testing the HA feature as a user surfaced five defects, each fixed with a 
   with no referent ASKS instead of falling through to a bluffing LLM.
 - **Mid-sentence commands** ("…turn on the fan, i am feeling hot") — device phrases end at clause
   boundaries, not end-of-string.
+- **`stop/halt/cancel the X`** maps to off (aborts + disables an automation, stops a script/device).
+- **Anti-bluff guard**: a message that names an allowlisted device with a control verb but doesn't
+  parse cleanly now gets a clarifying question — it can no longer fall through to the toolless
+  streaming LLM (which answered "Done." while doing nothing).
 - **`run` action**: "run/trigger/execute the X" executes automations (`automation.trigger` with
   `skip_condition: false`), scripts, and scenes; "start the fan" maps to on. Hardcoded payloads
   (no LLM-injectable fields), responses discarded — nothing to leak either direction.
