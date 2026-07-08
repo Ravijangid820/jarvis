@@ -18,6 +18,9 @@ All notable changes to this project are documented in this file.
   server-side (new `app_settings` DB table + `get_setting`/`set_setting`), never returned to the client
   or the AI. Env still wins and shows the UI read-only. `ha.configure()` makes settings runtime-mutable.
 - New guide: docs/setup/home-assistant.md. 12 new tests (resolver semantics + client payloads).
+- Validated end-to-end on the box (2026-07-07): HA on the box's LAN, real token, live device toggle.
+  Known networking limitation (the box can't *initiate* to off-LAN / Tailscale-only devices — a subnet
+  router is inbound-only) filed in FUTURE_IDEAS → Networking (fix: put the box on Tailscale).
 
 ## v2.4.0 — 2026-07-07 — torch-free embeddings: ONNX runtime everywhere
 
