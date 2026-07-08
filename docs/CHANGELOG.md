@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file.
 
 ---
 
-## (ha-integration branch) 2026-07-07 — Home Assistant control via allowlisted tools
+## v2.5.0 — 2026-07-08 — Home Assistant control (allowlisted tools + Smart Home admin UI)
 
 - New `home_control` / `home_status` LLM tools (offered only when configured): "turn on the kitchen
   light" → tool call → **code-side** validation → HA REST (`homeassistant.turn_on/off/toggle`).

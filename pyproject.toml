@@ -1,6 +1,6 @@
 [project]
 name = "jarvis"
-version = "2.4.0"
+version = "2.5.0"
 description = "Jarvis AI Orchestrator"
 readme = "README.md"
 license = "Apache-2.0"
