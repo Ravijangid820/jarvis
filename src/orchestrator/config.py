@@ -128,6 +128,11 @@ HA_URL = (os.environ.get("HA_URL") or _HA_CFG.get("url") or "").rstrip("/")
 HA_TOKEN = os.environ.get("HA_TOKEN") or _HA_CFG.get("token") or ""
 _ha_ents = os.environ.get("HA_ALLOWED_ENTITIES") or _HA_CFG.get("allowed_entities") or []
 HA_ALLOWED_ENTITIES: List[str] = [e.strip() for e in (_ha_ents.split(",") if isinstance(_ha_ents, str) else _ha_ents) if e.strip()]
+# When HA is set via ENVIRONMENT, the admin UI shows it read-only (env wins over the DB-stored,
+# UI-managed settings). Set via jarvis.json or the UI → editable in the UI.
+HA_URL_FROM_ENV = bool(os.environ.get("HA_URL"))
+HA_TOKEN_FROM_ENV = bool(os.environ.get("HA_TOKEN"))
+HA_ENTITIES_FROM_ENV = bool(os.environ.get("HA_ALLOWED_ENTITIES"))
 EMBED_DOC_PREFIX = _EMBED_CFG.get("doc_prefix", "title: none | text: ")
 EMBED_QUERY_PREFIX = _EMBED_CFG.get("query_prefix", "task: search result | query: ")
 RAG_DISTANCE_THRESHOLD = 0.6  # cosine distance = 1 - similarity; discard > this

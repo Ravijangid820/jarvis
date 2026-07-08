@@ -107,3 +107,61 @@ def test_network_failure_is_failsoft(monkeypatch):
 def test_unconfigured_is_off():
     # module was imported with no HA env/config -> feature off
     assert ha.configured() in (False,) if not (ha.HA_URL and ha.HA_TOKEN) else True
+
+
+# --- configure(): runtime settings applied by the admin UI ---------------------
+
+def test_configure_applies_live_values(monkeypatch):
+    monkeypatch.setattr(ha, "HA_URL", "")
+    monkeypatch.setattr(ha, "HA_TOKEN", "")
+    monkeypatch.setattr(ha, "HA_ALLOWED_ENTITIES", [])
+    ha.configure(url="http://ha.local:8123/", token="tok", allowed=["light.kitchen", " ", ""])
+    assert ha.HA_URL == "http://ha.local:8123"      # trailing slash stripped
+    assert ha.configured() is True
+    assert ha.HA_ALLOWED_ENTITIES == ["light.kitchen"]   # blanks dropped
+    # a None arg leaves that field untouched
+    ha.configure(allowed=["switch.fan"])
+    assert ha.HA_URL == "http://ha.local:8123" and ha.HA_ALLOWED_ENTITIES == ["switch.fan"]
+
+
+def test_list_entities_filters_to_controllable(monkeypatch):
+    states = [
+        {"entity_id": "light.kitchen", "state": "on", "attributes": {"friendly_name": "Kitchen"}},
+        {"entity_id": "sensor.temperature", "state": "21", "attributes": {}},   # not controllable
+        {"entity_id": "switch.fan", "state": "off", "attributes": {}},
+    ]
+    monkeypatch.setattr(ha, "_request", lambda *a, **k: states)
+    monkeypatch.setattr(ha, "HA_ALLOWED_ENTITIES", ["light.kitchen"])
+    ents = ha.list_entities()
+    ids = [e["entity_id"] for e in ents]
+    assert "sensor.temperature" not in ids            # sensors excluded
+    assert {"light.kitchen", "switch.fan"} == set(ids)
+    kitchen = next(e for e in ents if e["entity_id"] == "light.kitchen")
+    assert kitchen["name"] == "Kitchen" and kitchen["allowed"] is True
+
+
+def test_list_entities_empty_on_failure(monkeypatch):
+    monkeypatch.setattr(ha, "_request", lambda *a, **k: None)
+    assert ha.list_entities() == []
+
+
+def test_test_connection_requires_both(monkeypatch):
+    monkeypatch.setattr(ha, "HA_URL", "")
+    monkeypatch.setattr(ha, "HA_TOKEN", "")
+    ok, detail = ha.test_connection("", "")
+    assert ok is False and "required" in detail.lower()
+
+
+def test_settings_store_roundtrip(tmp_path, monkeypatch):
+    # get_setting/set_setting against a throwaway DB
+    import config
+    import db
+    dbfile = tmp_path / "s.db"
+    monkeypatch.setattr(config, "DB_PATH", str(dbfile))
+    monkeypatch.setattr(db, "DB_PATH", str(dbfile))
+    db.init_db()
+    assert db.get_setting("ha_url", "fallback") == "fallback"
+    db.set_setting("ha_url", "http://x:8123")
+    assert db.get_setting("ha_url") == "http://x:8123"
+    db.set_setting("ha_url", "http://y:8123")           # upsert
+    assert db.get_setting("ha_url") == "http://y:8123"

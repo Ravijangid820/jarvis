@@ -714,6 +714,8 @@ html[data-theme="ember"]    body { filter: hue-rotate(-156deg) saturate(1.2); }
 .adm-tab.active { color: var(--holo-cyan); border-bottom-color: var(--holo-cyan); text-shadow: 0 0 10px var(--holo-cyan-glow); }
 .adm-tab-badge { font-size: 0.68rem; background: rgba(103,199,235,0.14); color: var(--holo-cyan); padding: 1px 7px; border-radius: 8px; min-width: 18px; text-align: center; }
 .adm-tab.active .adm-tab-badge { background: rgba(103,199,235,0.25); }
+.adm-pill { font-size: 0.72rem; padding: 2px 10px; border-radius: 10px; background: rgba(255,120,120,0.14); color: #ff9b9b; border: 1px solid rgba(255,120,120,0.3); }
+.adm-pill.ok { background: rgba(120,235,150,0.14); color: #8fe6a5; border-color: rgba(120,235,150,0.3); }
 
 .adm-hint { font-size: 0.75rem; color: rgba(103,199,235,0.6); margin-bottom: 16px; line-height: 1.6; }
 .adm-hint code { font-family: var(--font-data); font-size: 0.74rem; color: var(--stark-gold); }

@@ -14,12 +14,34 @@ errors return False/None and the caller words a friendly reply.
 """
 import json
 import re
+import urllib.error
 import urllib.request
 from typing import Any, Dict, List, Optional
 
 from config import HA_ALLOWED_ENTITIES, HA_TOKEN, HA_URL, logger
 
 _TIMEOUT = 5  # seconds — a LAN call; never let a dead HA hang a chat turn
+
+# Entity domains the generic homeassistant.turn_on/off/toggle services can drive — the set the UI
+# device-picker offers and the model can control. (Read-only sensors etc. are excluded.)
+CONTROLLABLE_DOMAINS = ("light", "switch", "input_boolean", "fan", "cover", "scene", "script",
+                        "media_player", "climate", "automation")
+
+# HA_URL / HA_TOKEN / HA_ALLOWED_ENTITIES start from config (env or jarvis.json) and are the LIVE
+# values the functions below read. configure() reassigns them so the settings can change at runtime
+# (loaded from the DB at startup, updated by the admin UI) without a restart.
+
+
+def configure(url: Optional[str] = None, token: Optional[str] = None,
+              allowed: Optional[List[str]] = None) -> None:
+    """Update the live HA settings. Only non-None args are applied."""
+    global HA_URL, HA_TOKEN, HA_ALLOWED_ENTITIES
+    if url is not None:
+        HA_URL = url.rstrip("/")
+    if token is not None:
+        HA_TOKEN = token
+    if allowed is not None:
+        HA_ALLOWED_ENTITIES = [e.strip() for e in allowed if e and e.strip()]
 
 
 def configured() -> bool:
@@ -49,6 +71,49 @@ def ping() -> bool:
 def get_state(entity_id: str) -> Optional[Dict[str, Any]]:
     """State object for one entity: {'state': 'on', 'attributes': {'friendly_name': ...}, ...}"""
     return _request("GET", f"/api/states/{entity_id}")
+
+
+def test_connection(url: Optional[str], token: Optional[str]) -> tuple:
+    """Probe /api/ with the given creds (falling back to the live ones), WITHOUT mutating state —
+    lets the admin UI validate a URL/token before saving. Returns (ok: bool, detail: str)."""
+    url = (url or HA_URL or "").rstrip("/")
+    token = token or HA_TOKEN
+    if not url or not token:
+        return False, "URL and token are both required."
+    req = urllib.request.Request(f"{url}/api/", headers={"Authorization": f"Bearer {token}"})
+    try:
+        with urllib.request.urlopen(req, timeout=_TIMEOUT) as r:
+            json.loads(r.read().decode() or "null")
+        return True, "Connected to Home Assistant."
+    except urllib.error.HTTPError as e:
+        return False, ("Token rejected (check it's a valid long-lived token)." if e.code in (401, 403)
+                       else f"Home Assistant returned HTTP {e.code}.")
+    except Exception as e:
+        return False, f"Could not reach Home Assistant: {e}"
+
+
+def list_entities() -> List[Dict[str, Any]]:
+    """Controllable entities for the UI picker: [{entity_id, name, state, domain, allowed}].
+    Empty list on any failure (unconfigured, unreachable, bad token)."""
+    states = _request("GET", "/api/states")
+    if not isinstance(states, list):
+        return []
+    allowed = set(HA_ALLOWED_ENTITIES)
+    out = []
+    for s in states:
+        eid = (s or {}).get("entity_id", "")
+        domain = eid.partition(".")[0]
+        if domain not in CONTROLLABLE_DOMAINS:
+            continue
+        out.append({
+            "entity_id": eid,
+            "name": (s.get("attributes") or {}).get("friendly_name") or eid,
+            "state": s.get("state"),
+            "domain": domain,
+            "allowed": eid in allowed,
+        })
+    out.sort(key=lambda e: (e["domain"], e["name"].lower()))
+    return out
 
 
 def turn(entity_id: str, action: str) -> bool:

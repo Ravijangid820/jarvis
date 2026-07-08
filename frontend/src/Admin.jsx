@@ -8,6 +8,7 @@ const TABS = [
   { id: "keys", label: "Keys" },
   { id: "faces", label: "Faces" },
   { id: "household", label: "Household" },
+  { id: "smarthome", label: "Smart Home" },
   { id: "system", label: "System" },
 ]
 
@@ -42,6 +43,13 @@ export default function Admin({ token, onExit }) {
   const [gCat, setGCat] = useState("home")
   const [gChatLog, setGChatLog] = useState([])         // admin "global chat" transcript
   const [gChatInput, setGChatInput] = useState("")
+  const [ha, setHa] = useState(null)                   // /admin/home-assistant snapshot
+  const [haUrl, setHaUrl] = useState("")
+  const [haToken, setHaToken] = useState("")           // new token to save (blank = keep stored)
+  const [haDevices, setHaDevices] = useState([])       // entities from HA for the picker
+  const [haAllowed, setHaAllowed] = useState([])       // working allowlist (entity_ids)
+  const [haMsg, setHaMsg] = useState("")
+  const [haBusy, setHaBusy] = useState(false)
   const [audit, setAudit] = useState([])               // audit-log entries
   const [backups, setBackups] = useState([])
   const [backingUp, setBackingUp] = useState(false)
@@ -73,6 +81,40 @@ export default function Admin({ token, onExit }) {
   }
   useEffect(() => { load() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (tab === "system") { loadAudit(); loadBackups() } }, [tab])  // eslint-disable-line react-hooks/exhaustive-deps
+
+  const loadHa = async () => {
+    try {
+      const d = await api("/admin/home-assistant")
+      setHa(d); setHaUrl(d.url || ""); setHaAllowed(d.allowed_entities || []); setHaToken("")
+    } catch (e) { setErr(e.message) }
+  }
+  useEffect(() => { if (tab === "smarthome") loadHa() }, [tab])  // eslint-disable-line react-hooks/exhaustive-deps
+
+  const testHa = async () => {
+    setHaBusy(true); setHaMsg("Testing…")
+    try {
+      const d = await api("/admin/home-assistant/test", "POST", { url: haUrl, token: haToken || undefined })
+      setHaMsg((d.ok ? "✓ " : "✗ ") + d.detail)
+    } catch (e) { setHaMsg("✗ " + e.message) } finally { setHaBusy(false) }
+  }
+  const saveHa = async () => {
+    setHaBusy(true); setHaMsg("Saving…")
+    try {
+      const d = await api("/admin/home-assistant", "PUT", { url: haUrl, token: haToken || undefined, allowed_entities: haAllowed })
+      setHaMsg(d.connected ? "✓ Saved — connected." : "Saved (not reachable — check URL/token).")
+      await loadHa()
+    } catch (e) { setHaMsg("✗ " + e.message) } finally { setHaBusy(false) }
+  }
+  const loadHaDevices = async () => {
+    setHaBusy(true); setHaMsg("")
+    try {
+      const d = await api("/admin/home-assistant/entities")
+      setHaDevices(d.entities || [])
+      if (!(d.entities || []).length) setHaMsg("No devices returned — save a working connection first.")
+    } catch (e) { setHaMsg("✗ " + e.message) } finally { setHaBusy(false) }
+  }
+  const toggleAllowed = (eid) =>
+    setHaAllowed(a => a.includes(eid) ? a.filter(x => x !== eid) : [...a, eid])
   // Refresh status periodically (services, faces, enroll requests) without disrupting form edits.
   useEffect(() => {
     const t = setInterval(async () => {
@@ -660,6 +702,74 @@ export default function Admin({ token, onExit }) {
               {globalFacts.length === 0 && <tr><td colSpan="4" className="adm-empty">No household facts yet — add the home's shared details above.</td></tr>}
             </tbody>
           </table>
+        </div>
+        </>
+      )}
+
+      {tab === "smarthome" && (
+        <>
+        <div className="adm-panel">
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <h2>Home Assistant</h2>
+            <span className={"adm-pill" + (ha?.connected ? " ok" : "")}>
+              {ha == null ? "…" : ha.connected ? "Connected" : ha.configured ? "Not reachable" : "Not configured"}
+            </span>
+          </div>
+          <p className="adm-hint">Control your smart-home devices by chat or voice. Paste your Home
+            Assistant URL and a <b>long-lived access token</b> (create one from a dedicated non-admin HA
+            user → Profile → Security). The token is stored on the server and never shown to the AI —
+            it can only act on the devices you allow below. See <code>docs/setup/home-assistant.md</code>.</p>
+
+          {ha?.env_managed ? (
+            <p className="adm-hint" style={{ opacity: 0.9 }}>⚙️ Configured via environment variables
+              (<code>HA_URL</code>/<code>HA_TOKEN</code>) — edit those to change. URL: <code>{ha.url}</code></p>
+          ) : (
+            <>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "8px 0" }}>
+                <input className="hud-input" placeholder="http://homeassistant.local:8123"
+                  value={haUrl} onChange={e => setHaUrl(e.target.value)} style={{ flex: "1 1 320px" }} />
+                <input className="hud-input" type="password" autoComplete="new-password"
+                  placeholder={ha?.token_set ? "•••••••• (saved — blank to keep)" : "long-lived access token"}
+                  value={haToken} onChange={e => setHaToken(e.target.value)} style={{ flex: "1 1 320px" }} />
+              </div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <button className="hud-btn" onClick={testHa} disabled={haBusy}>Test connection</button>
+                <button className="hud-btn" onClick={saveHa} disabled={haBusy}>Save</button>
+                {haMsg && <span className="adm-hint" style={{ margin: 0 }}>{haMsg}</span>}
+              </div>
+            </>
+          )}
+        </div>
+
+        <div className="adm-panel">
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <h2>Allowed devices <span className="adm-tab-badge">{haAllowed.length}</span></h2>
+            <button className="hud-btn" onClick={loadHaDevices} disabled={haBusy || !ha?.configured}>Load devices from HA</button>
+          </div>
+          <p className="adm-hint">Tick the devices Jarvis may control. Only these can ever be actuated —
+            everything else in your home stays off-limits, even if asked. Click <b>Load devices</b> to pull
+            the list from Home Assistant, then <b>Save</b> on the panel above.</p>
+          {haDevices.length > 0 ? (
+            <table className="adm-table">
+              <thead><tr><th>Allow</th><th>Device</th><th>Entity ID</th><th>Domain</th><th>State</th></tr></thead>
+              <tbody>
+                {haDevices.map(d => (
+                  <tr key={d.entity_id}>
+                    <td><input type="checkbox" checked={haAllowed.includes(d.entity_id)}
+                      onChange={() => toggleAllowed(d.entity_id)} /></td>
+                    <td className="adm-em">{d.name}</td>
+                    <td style={{ opacity: 0.8, fontFamily: "monospace" }}>{d.entity_id}</td>
+                    <td>{d.domain}</td>
+                    <td>{d.state}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : haAllowed.length > 0 ? (
+            <ul className="adm-hint">{haAllowed.map(e => <li key={e}><code>{e}</code></li>)}</ul>
+          ) : (
+            <p className="adm-empty">No devices allowlisted yet — Load devices, tick some, and Save.</p>
+          )}
         </div>
         </>
       )}

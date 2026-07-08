@@ -25,9 +25,19 @@ services board.
    No devices yet? Create a test entity: **Settings → Devices & Services → Helpers → Create helper →
    Toggle** (gives e.g. `input_boolean.test_light`).
 
-## 2. Configure Jarvis
+## 2. Configure Jarvis — the easy way (Admin UI)
+Log in as an admin → **Admin → Smart Home**:
+1. Paste your **HA URL** and the **long-lived token** → **Test connection** (confirms both before saving).
+2. **Save** — the token is stored server-side (in the DB, never shown again or given to the AI).
+3. **Load devices from HA** → tick the devices Jarvis may control → **Save**.
+
+That's it — no restart, no file editing. The tab shows a **Connected** pill and the allowlist count.
+Everything below is the equivalent env/file config (for containers or headless setups).
+
+## 2b. Configure Jarvis — env / file (headless)
 Three values — via env (containers) or the `home_assistant` block in `config/jarvis.json` (native).
-The feature is **off** until url + token are set; env wins over the file.
+The feature is **off** until url + token are set. **Precedence: env > UI/DB > jarvis.json.** When set
+via **env**, the Admin UI shows the config **read-only** (edit the env to change).
 
 | Env | jarvis.json | Example |
 | --- | --- | --- |

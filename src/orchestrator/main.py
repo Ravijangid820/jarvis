@@ -42,17 +42,37 @@ from auth import hash_password, hash_token, verify_password
 from intents import is_gesture_volume, parse_reminder, parse_volume
 from budget import is_default_session
 from config import (ADMIN_MAX_INPUT, ALLOWED_ORIGINS, APP_VERSION, BASE_DIR, CHROMA_DB_PATH,
-                    COMPLETION_RESERVE_DEFAULT, CONFIG, INDEX_HTML, LLM_URL, PIPER_BIN, PIPER_MODEL,
+                    COMPLETION_RESERVE_DEFAULT, CONFIG, HA_TOKEN_FROM_ENV, HA_URL_FROM_ENV,
+                    INDEX_HTML, LLM_URL, PIPER_BIN, PIPER_MODEL,
                     RATE_LIMIT_RPM, REACT_DIST_DIR, REGULAR_MAX_INPUT, REQUIRE_PRESENCE_FOR_CONTROL,
                     STATIC_DIR, VALID_FACT_CATEGORIES, logger)
 import ha
-from db import get_db, init_db
+from db import get_db, get_setting, init_db, set_setting
 from llm import llm_content, request_llm, request_llm_stream, request_llm_tools, synthesize_tts
 
 
 @asynccontextmanager
+def _load_ha_settings():
+    """Apply the DB-stored (admin-UI-managed) Home Assistant settings at startup. Environment vars
+    win — a field set via env stays as config.py resolved it and the UI shows it read-only."""
+    try:
+        url = None if HA_URL_FROM_ENV else get_setting("ha_url")
+        token = None if HA_TOKEN_FROM_ENV else get_setting("ha_token")
+        ents_raw = get_setting("ha_allowed_entities")
+        allowed = None
+        if ents_raw is not None:
+            try:
+                allowed = json.loads(ents_raw)
+            except (ValueError, TypeError):
+                allowed = []
+        ha.configure(url=url, token=token, allowed=allowed)
+    except Exception as e:
+        logger.warning("Could not load Home Assistant settings from DB: %s", e)
+
+
 async def lifespan(app: FastAPI):
     init_db()
+    _load_ha_settings()        # runtime HA config (env > DB), before anything serves
     memory.init_embeddings()   # load the model now (from cache), not at import time
     memory.start_embedding_worker()
     memory.start_memory_worker()
@@ -250,6 +270,12 @@ class CreateUserRequest(BaseModel):
 
 class RoleUpdateRequest(BaseModel):
     role: Literal["user", "admin"]
+
+
+class HAConfigRequest(BaseModel):
+    url: Optional[str] = None
+    token: Optional[str] = None                 # blank/omitted on save = keep the stored token
+    allowed_entities: Optional[List[str]] = None
 
 
 class CreateKeyRequest(BaseModel):
@@ -1673,6 +1699,54 @@ def admin_set_role(user_id: int, req: RoleUpdateRequest, request: Request):
         return {"status": "ok", "role": req.role}
     finally:
         conn.close()
+
+
+@app.get("/admin/home-assistant")
+def admin_ha_get(request: Request):
+    """Current HA config for the admin UI. Never returns the token itself — only whether one is set."""
+    _require_admin(request)
+    return {
+        "configured": ha.configured(),
+        "url": ha.HA_URL,
+        "token_set": bool(ha.HA_TOKEN),
+        "allowed_entities": list(ha.HA_ALLOWED_ENTITIES),
+        "env_managed": HA_URL_FROM_ENV or HA_TOKEN_FROM_ENV,   # set via env → UI is read-only
+        "connected": ha.ping(),
+    }
+
+
+@app.put("/admin/home-assistant")
+def admin_ha_put(req: HAConfigRequest, request: Request):
+    """Save HA config (url/token/allowlist) to the DB and apply it live — no restart."""
+    _require_admin(request)
+    if HA_URL_FROM_ENV or HA_TOKEN_FROM_ENV:
+        raise HTTPException(status_code=409,
+                            detail="Home Assistant is configured via environment variables — edit those instead.")
+    url = (req.url or "").rstrip("/")
+    set_setting("ha_url", url)
+    if req.token:                                   # blank = keep the existing token
+        set_setting("ha_token", req.token)
+    token = get_setting("ha_token") or ""
+    allowed = list(req.allowed_entities if req.allowed_entities is not None else ha.HA_ALLOWED_ENTITIES)
+    set_setting("ha_allowed_entities", json.dumps(allowed))
+    ha.configure(url=url, token=token, allowed=allowed)
+    _audit(request, "ha.config", f"url={url or '(cleared)'} entities={len(allowed)}")
+    return {"status": "ok", "configured": ha.configured(), "connected": ha.ping()}
+
+
+@app.post("/admin/home-assistant/test")
+def admin_ha_test(req: HAConfigRequest, request: Request):
+    """Probe a URL/token (blank token = use the stored one) before saving."""
+    _require_admin(request)
+    ok, detail = ha.test_connection(req.url, req.token or ha.HA_TOKEN)
+    return {"ok": ok, "detail": detail}
+
+
+@app.get("/admin/home-assistant/entities")
+def admin_ha_entities(request: Request):
+    """Controllable HA entities for the device picker (uses the currently-saved connection)."""
+    _require_admin(request)
+    return {"entities": ha.list_entities()}
 
 
 @app.post("/admin/api_keys")
