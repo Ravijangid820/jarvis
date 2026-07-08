@@ -39,7 +39,7 @@ from pydantic import BaseModel, Field, field_validator
 import chat
 import memory
 from auth import hash_password, hash_token, verify_password
-from intents import is_gesture_volume, parse_reminder, parse_volume
+from intents import is_gesture_volume, parse_home_command, parse_reminder, parse_volume
 from budget import is_default_session
 from config import (ADMIN_MAX_INPUT, ALLOWED_ORIGINS, APP_VERSION, BASE_DIR, CHROMA_DB_PATH,
                     COMPLETION_RESERVE_DEFAULT, CONFIG, HA_TOKEN_FROM_ENV, HA_URL_FROM_ENV,
@@ -1118,6 +1118,36 @@ def _handle_volume_command(user_text: str, raw_request: Request) -> Optional[str
     return None
 
 
+def _handle_home_command(user_text: str, raw_request: Request) -> Optional[str]:
+    """Deterministic smart-home fast-path (shared by /inbox and /chat/stream): "turn on the X",
+    "toggle X", "is X on?" — instant, no LLM. Only acts when the device RESOLVES against the HA
+    allowlist; anything else returns None and falls through to the LLM, so ordinary sentences
+    ("turn my life around") are never hijacked."""
+    if not ha.configured():
+        return None
+    cmd = parse_home_command(user_text)
+    if cmd is None:
+        return None
+    entity = ha.resolve_entity(cmd["device"])
+    if entity is None:
+        return None                       # not one of our devices — let the LLM answer
+    if not _can_control_devices(raw_request):
+        return "Sorry — you're not authorized to control devices."
+    if REQUIRE_PRESENCE_FOR_CONTROL and not _authorized_person_present():
+        return "I don't see anyone authorized in the room, so I can't change that right now."
+    nice = entity.partition(".")[2].replace("_", " ")
+    if cmd["action"] == "status":
+        st = ha.get_state(entity)
+        if not st:
+            return "I couldn't reach Home Assistant."
+        name = (st.get("attributes") or {}).get("friendly_name") or nice
+        return f"{name} is {st.get('state')}."
+    if not ha.turn(entity, cmd["action"]):
+        return "I couldn't reach Home Assistant to do that."
+    _audit(raw_request, "device.home_assistant", f"{cmd['action']} {entity} (fast-path)")
+    return f"Okay — {nice} {'toggled' if cmd['action'] == 'toggle' else cmd['action']}."
+
+
 # ---- LLM tool-calling (voice path). Rule fast-paths still run first; this catches phrasings they
 # miss, and is where new actions (e.g. lights) plug in. Single round-trip + templated confirmation. ----
 TOOLS_SPEC = [
@@ -1465,7 +1495,8 @@ def process_input(request: QueryRequest, raw_request: Request):
     user_id, session_id, user_text = _validate_chat(request, raw_request)
 
     # Fast-paths handled directly (instant, offline, no LLM): volume/gesture, then reminders.
-    ack = _handle_volume_command(user_text, raw_request) or _handle_reminder(user_text, raw_request)
+    ack = (_handle_volume_command(user_text, raw_request) or _handle_reminder(user_text, raw_request)
+           or _handle_home_command(user_text, raw_request))
     if ack is not None:
         chat.store_message(session_id, "user", user_text)
         chat.store_message(session_id, "jarvis", ack)
@@ -1507,7 +1538,8 @@ def chat_stream(request: QueryRequest, raw_request: Request):
     user_id, session_id, user_text = _validate_chat(request, raw_request)
 
     # Fast-paths (volume/gesture, reminders) short-circuit the LLM and stream back the ack.
-    ack = _handle_volume_command(user_text, raw_request) or _handle_reminder(user_text, raw_request)
+    ack = (_handle_volume_command(user_text, raw_request) or _handle_reminder(user_text, raw_request)
+           or _handle_home_command(user_text, raw_request))
     if ack is not None:
         def vol_gen():
             chat.store_message(session_id, "user", user_text)

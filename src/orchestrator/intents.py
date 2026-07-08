@@ -120,3 +120,30 @@ def parse_volume(text: str) -> Optional[Dict[str, Any]]:
     if n is not None:                    # "volume 40", "set volume to 40 percent"
         return {"action": "set", "value": max(0, min(n, 100))}
     return None
+
+
+# --- Smart home (Home Assistant) --------------------------------------------
+# "turn on the test light", "switch the desk fan off", "toggle kitchen light",
+# "is the test light on?" → {"action": "on|off|toggle|status", "device": str} or None.
+# The caller only ACTS when the device resolves against the HA allowlist — a non-matching
+# device falls through to the LLM, so ordinary sentences are never hijacked.
+_HOME_ON_A = re.compile(r"\b(?:turn|switch|power)\s+on\s+(?:the\s+|my\s+)?(?P<dev>[\w -]+?)[\s.!?]*$", re.I)
+_HOME_ON_B = re.compile(r"\b(?:turn|switch|power)\s+(?:the\s+|my\s+)?(?P<dev>[\w -]+?)\s+(?:back\s+)?on[\s.!?]*$", re.I)
+_HOME_OFF_A = re.compile(r"\b(?:turn|switch|power|shut)\s+off\s+(?:the\s+|my\s+)?(?P<dev>[\w -]+?)[\s.!?]*$", re.I)
+_HOME_OFF_B = re.compile(r"\b(?:turn|switch|power|shut)\s+(?:the\s+|my\s+)?(?P<dev>[\w -]+?)\s+(?:back\s+)?off[\s.!?]*$", re.I)
+_HOME_TOGGLE = re.compile(r"\btoggle\s+(?:the\s+|my\s+)?(?P<dev>[\w -]+?)[\s.!?]*$", re.I)
+_HOME_STATUS = re.compile(r"\b(?:is|are)\s+(?:the\s+|my\s+)?(?P<dev>[\w -]+?)\s+(?:on|off|running)[\s.!?]*$", re.I)
+
+
+def parse_home_command(text: str) -> Optional[Dict[str, str]]:
+    """Deterministic parse of common smart-home phrasings; None when it isn't one."""
+    if not text or _VOL.search(text):        # audio commands belong to the volume intent
+        return None
+    for action, pattern in (("toggle", _HOME_TOGGLE), ("on", _HOME_ON_A), ("on", _HOME_ON_B),
+                            ("off", _HOME_OFF_A), ("off", _HOME_OFF_B), ("status", _HOME_STATUS)):
+        m = pattern.search(text)
+        if m:
+            dev = m.group("dev").strip()
+            if 0 < len(dev) <= 60:
+                return {"action": action, "device": dev}
+    return None

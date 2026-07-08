@@ -180,3 +180,22 @@ def test_ha_tools_offered_only_when_configured(monkeypatch):
     monkeypatch.setattr(ha, "HA_TOKEN", "tok")
     names = [t["function"]["name"] for t in main._active_tools()]
     assert "home_control" in names and "home_status" in names
+
+
+# --- the deterministic fast-path parser (web chat's reliable route to devices) ---
+
+def test_parse_home_command_phrasings():
+    from intents import parse_home_command as p
+    assert p("turn on the test light") == {"action": "on", "device": "test light"}
+    assert p("i said turn the test light on") == {"action": "on", "device": "test light"}
+    assert p("switch off the desk fan") == {"action": "off", "device": "desk fan"}
+    assert p("toggle kitchen light") == {"action": "toggle", "device": "kitchen light"}
+    assert p("is the test light on?") == {"action": "status", "device": "test light"}
+
+
+def test_parse_home_command_never_hijacks():
+    from intents import parse_home_command as p
+    assert p("turn the volume up") is None          # audio belongs to the volume intent
+    assert p("what is the weather today") is None
+    assert p("turn my life around") is None
+    assert p("") is None
