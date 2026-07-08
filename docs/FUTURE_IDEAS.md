@@ -4,6 +4,27 @@ This is a living document to track upcoming features, architectural shifts, and 
 
 ## Planned Features
 - **Home Assistant / MQTT Integration** (DONE — REST control, 2026-07-07; MQTT events still future): Jarvis controls HA devices via narrow allowlisted tools over HA's REST API (see docs/setup/home-assistant.md). Remaining ideas: MQTT/event push (HA → Jarvis announcements), brightness/color params, sensors as prompt context.
+- **Dynamic intent understanding — de-hardcode device commands** (filed 2026-07-09, after the HA
+  hardening round): today device control rests on hand-written regex fast-paths (`intents.py`) —
+  reliable and instant, but *scripted*: "turn on the fan" works, "it's boiling in here" doesn't, and
+  every new phrasing is a code edit. The plan is a **layered router**, each layer smarter and slower,
+  all feeding the SAME executor (allowlist + `_can_control_devices` + presence + audit — proposal is
+  never authorization, no matter which layer proposed):
+  1. **Regex fast-path** (exists) — exact common phrasings, ~0 ms. Keep as layer 1.
+  2. **Semantic router — reuse the ONNX embedder we already run** (~175 ms/query): embed the user
+     utterance and compare (cosine) against pre-embedded exemplar phrases per intent+entity
+     ("turn on the fan" ≈ "i'm melting in here" ≈ "some air please"). High similarity → act;
+     medium → **confirm** ("Should I turn on the fan?"); low → fall through. No LLM call, no new
+     dependency, generalizes to paraphrases the regexes can't enumerate. Exemplars can even be
+     auto-generated per allowlisted entity ("cool the room" for a fan, "make it dark" for lights).
+  3. **GBNF-constrained tool call** (llama.cpp grammars): a short router call where the 2B model
+     MUST emit schema-valid JSON ({"tool":"none"} | a valid call) — structural validity solves the
+     small-model tool-calling flakiness; `cache_prompt` keeps it ~1–2 s. Run it only when layer 2 is
+     unsure, so the cost is paid rarely.
+  4. **Streaming tool-call support in `/chat/stream`** so the main conversation model can also act
+     mid-chat (today the web chat path is toolless by design — see KNOWN_ISSUES #2).
+  Success criteria: indirect requests act (or ask one good question), zero regressions on the
+  105-test suite, and the anti-bluff guarantee stays (no invented acks, ever).
 - **Custom JARVIS Community Voice**: Currently using the high-quality British male voice (`en_GB-alan`), but a community-trained JARVIS model (`jgkawell/jarvis`) exists. We should eventually train or download a bespoke Marvel JARVIS voice.
 - **Wake-Word Optimization**: Enhance `run_listener.sh` to use a more robust VAD (Voice Activity Detection) pipeline to prevent false positives when listening for the wake word.
 - **Edge / distributed voice (mic + STT on the device)**: Today the mic and whisper STT run **on the server box** (single-box design); the edge devices do vision only. Move audio capture + whisper transcription onto the device that actually has the mic (the Pi/laptop already running the camera agent) — transcribe locally, gate on the wake word, and POST text to `/inbox`, so the **server drops whisper entirely**. Benefits: mic near the user, STT offloaded from the 2011 server, and support for multiple / multi-room mics. Groundwork already in place: `build_native.sh` supports `SKIP_WHISPER=1` so a server without the mic skips the whisper build.
