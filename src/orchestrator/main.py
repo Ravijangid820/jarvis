@@ -1133,6 +1133,10 @@ def _ha_act(entity: str, action: str):
         if entity.partition(".")[0] in ha.RUNNABLE_DOMAINS:
             return ha.run(entity), "ran"
         action = "on"
+    elif action == "stop":
+        if entity.partition(".")[0] in ("automation", "script"):
+            return ha.stop(entity), "stopped"     # aborts the run; automation STAYS enabled
+        action = "off"                            # "stop the fan" = switch it off
     return ha.turn(entity, action), ("toggled" if action == "toggle" else action)
 
 
@@ -1188,7 +1192,11 @@ def _handle_home_command(user_text: str, raw_request: Request, session_id: str) 
         return "I couldn't reach Home Assistant to do that."
     _LAST_HOME_ENTITY[session_id] = (entity, time.monotonic())
     _audit(raw_request, "device.home_assistant", f"{cmd['action']} {entity} (fast-path)")
-    return f"Okay — ran {nice}." if verb == "ran" else f"Okay — {nice} {verb}."
+    if verb == "ran":
+        return f"Okay — ran {nice}."
+    if verb == "stopped":
+        return f"Okay — stopped {nice}."
+    return f"Okay — {nice} {verb}."
 
 
 # ---- LLM tool-calling (voice path). Rule fast-paths still run first; this catches phrasings they
@@ -1221,7 +1229,7 @@ HA_TOOLS = [
         "description": "Control a smart-home device (light, switch, plug) — on/off/toggle — or RUN an automation, script, or scene.",
         "parameters": {"type": "object", "properties": {
             "device": {"type": "string", "description": "which device/automation, e.g. 'kitchen light', 'movie night'"},
-            "action": {"type": "string", "enum": ["on", "off", "toggle", "run"]}},
+            "action": {"type": "string", "enum": ["on", "off", "toggle", "run", "stop"]}},
             "required": ["device", "action"]}}},
     {"type": "function", "function": {
         "name": "home_status",
@@ -1292,7 +1300,11 @@ def _tool_home_control(args, raw_request):
         return "I couldn't reach Home Assistant to do that."
     _audit(raw_request, "device.home_assistant", f"{action} {entity} (tool)")
     nice = entity.partition(".")[2].replace("_", " ")
-    return f"Okay — ran {nice}." if verb == "ran" else f"Okay — {nice} {verb}."
+    if verb == "ran":
+        return f"Okay — ran {nice}."
+    if verb == "stopped":
+        return f"Okay — stopped {nice}."
+    return f"Okay — {nice} {verb}."
 
 
 def _tool_home_status(args, raw_request):

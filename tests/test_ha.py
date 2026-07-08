@@ -302,23 +302,59 @@ def test_parse_run_phrasings():
 
 # --- "stop X" + the anti-bluff guard ------------------------------------------
 
-def test_stop_maps_to_off_end_to_end(monkeypatch):
+def test_stop_vs_disable_semantics(monkeypatch):
+    """"stop" aborts the run but PRESERVES the automation's enabled state; only explicit
+    enable/disable (or turn on/off) changes it. "stop the fan" still just switches it off."""
     import main
     actions = []
     monkeypatch.setattr(ha, "HA_URL", "http://ha.test:8123")
     monkeypatch.setattr(ha, "HA_TOKEN", "tok")
     monkeypatch.setattr(ha, "HA_ALLOWED_ENTITIES", ["automation.morning", "switch.desk_fan"])
     monkeypatch.setattr(ha, "turn", lambda e, a: actions.append((a, e)) or True)
+    monkeypatch.setattr(ha, "stop", lambda e: actions.append(("stop", e)) or True)
     monkeypatch.setattr(main, "_can_control_devices", lambda r: True)
     monkeypatch.setattr(main, "REQUIRE_PRESENCE_FOR_CONTROL", False)
     monkeypatch.setattr(main, "_audit", lambda *a, **k: None)
     main._LAST_HOME_ENTITY.clear()
 
     reply = main._handle_home_command("stop morning automation", None, "s1")
-    assert "morning off" in reply.lower()
-    # homeassistant.turn_off on an automation aborts a run in progress AND disables it
-    assert actions[-1] == ("off", "automation.morning")
+    assert "stopped morning" in reply.lower()
+    assert actions[-1] == ("stop", "automation.morning")     # NOT ("off", ...) — stays enabled
+
+    assert "morning off" in main._handle_home_command("disable the morning automation", None, "s1").lower()
+    assert actions[-1] == ("off", "automation.morning")      # explicit disable -> off
+
+    assert "morning on" in main._handle_home_command("enable morning automation", None, "s1").lower()
+    assert actions[-1] == ("on", "automation.morning")
+
     assert "fan off" in main._handle_home_command("stop the fan", None, "s1").lower()
+    assert actions[-1] == ("off", "switch.desk_fan")          # plain device: stop = off
+
+
+def test_ha_stop_service_sequence(monkeypatch):
+    """automation stop = turn_off(stop_actions) THEN turn_on (re-arm); script stop = script.turn_off."""
+    calls = []
+    def fake_urlopen(req, timeout=None):
+        calls.append((req.full_url, json.loads(req.data.decode())))
+        return _FakeResp({})
+    monkeypatch.setattr(ha, "HA_URL", "http://ha.test:8123")
+    monkeypatch.setattr(ha, "HA_TOKEN", "tok")
+    monkeypatch.setattr(ha.urllib.request, "urlopen", fake_urlopen)
+    assert ha.stop("automation.morning") is True
+    assert calls[-2] == ("http://ha.test:8123/api/services/automation/turn_off",
+                         {"entity_id": "automation.morning", "stop_actions": True})
+    assert calls[-1] == ("http://ha.test:8123/api/services/automation/turn_on",
+                         {"entity_id": "automation.morning"})
+    assert ha.stop("script.reset_all") is True
+    assert calls[-1][0].endswith("/api/services/script/turn_off")
+    assert ha.stop("light.kitchen") is False                  # callers map device-stop to off
+
+
+def test_parse_enable_disable():
+    from intents import parse_home_command as p
+    assert p("enable the morning automation") == {"action": "on", "device": "morning automation"}
+    assert p("disable morning automation") == {"action": "off", "device": "morning automation"}
+    assert p("stop morning automation") == {"action": "stop", "device": "morning automation"}
 
 
 def test_antibluff_guard_asks_instead_of_reaching_the_llm(monkeypatch):

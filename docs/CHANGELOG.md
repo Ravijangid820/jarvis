@@ -16,7 +16,9 @@ Field-testing the HA feature as a user surfaced five defects, each fixed with a 
   with no referent ASKS instead of falling through to a bluffing LLM.
 - **Mid-sentence commands** ("…turn on the fan, i am feeling hot") — device phrases end at clause
   boundaries, not end-of-string.
-- **`stop/halt/cancel the X`** maps to off (aborts + disables an automation, stops a script/device).
+- **`stop/halt/cancel the X`** aborts an automation/script's run in progress while the automation
+  **stays enabled** (turn_off+stop_actions, then re-arm); only explicit **enable/disable** (or turn
+  on/off) changes the armed state. "stop the <device>" = off. New enable/disable/arm/disarm verbs.
 - **Anti-bluff guard**: a message that names an allowlisted device with a control verb but doesn't
   parse cleanly now gets a clarifying question — it can no longer fall through to the toolless
   streaming LLM (which answered "Done." while doing nothing).

@@ -147,6 +147,24 @@ def run(entity_id: str) -> bool:
     return False    # "run" is meaningless for lights/switches — callers map it to turn(entity, "on")
 
 
+def stop(entity_id: str) -> bool:
+    """Abort a RUNNING automation/script WITHOUT changing its enabled state — "stop" must not
+    quietly disarm an automation (only an explicit disable/turn-off should do that).
+    - automation: turn_off (stop_actions aborts the in-flight run) then turn_on to re-arm;
+    - script: script.turn_off stops execution (scripts have no armed state to preserve).
+    Same leak posture as run(): hardcoded payloads, responses discarded."""
+    domain = entity_id.partition(".")[0]
+    if domain == "automation":
+        off_ok = _request("POST", "/api/services/automation/turn_off",
+                          {"entity_id": entity_id, "stop_actions": True}) is not None
+        on_ok = _request("POST", "/api/services/automation/turn_on",
+                         {"entity_id": entity_id}) is not None
+        return off_ok and on_ok
+    if domain == "script":
+        return _request("POST", "/api/services/script/turn_off", {"entity_id": entity_id}) is not None
+    return False    # plain devices: callers map "stop" to turn(entity, "off")
+
+
 def _norm(s: str) -> set:
     return set(re.sub(r"[^a-z0-9]+", " ", s.lower()).split())
 

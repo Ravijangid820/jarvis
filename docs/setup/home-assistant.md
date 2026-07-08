@@ -79,11 +79,12 @@ use HA's `100.x` tailnet IP. See [FUTURE_IDEAS](../FUTURE_IDEAS.md) → Networki
 
 ## Automations, scripts & scenes
 All three appear in the device picker and can be allowlisted. Semantics:
-- **"turn on/off the &lt;automation&gt;"** — enables/disables it (off also **aborts a run in progress**).
+- **"enable / disable the &lt;automation&gt;"** (also turn on/off) — arms/disarms its triggers.
+  Disabling also aborts a run in progress. Only these explicit words change the armed state.
 - **"run / trigger / execute the &lt;automation|script|scene&gt;"** — executes its actions NOW.
   Automations run with `skip_condition: false`, so the automation's own guard conditions still apply.
-- **"stop / halt / cancel the &lt;automation|script|device&gt;"** — maps to off (aborts + disables an
-  automation; stops a running script; switches a device off).
+- **"stop / halt / cancel the &lt;automation|script&gt;"** — aborts the run in progress but the
+  automation **stays enabled** (its schedule/triggers keep working). "stop the &lt;device&gt;" = off.
 - "run/start the &lt;plain device&gt;" gracefully means "turn it on".
 - Unrecognized phrasings that clearly name an allowlisted device get a **clarifying question** — by
   design they never fall through to the LLM, which cannot act and must not pretend it did.
