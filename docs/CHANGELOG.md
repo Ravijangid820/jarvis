@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file.
 
 ---
 
-## 2026-07-08 — HA hardening round (from live user testing) + run automations
+## v2.5.1 — 2026-07-09 — HA hardening round (from live user testing)
 
 Field-testing the HA feature as a user surfaced five defects, each fixed with a regression test:
 - **Tool menu frozen at import** — UI-configured HA never exposed `home_control` to the model
@@ -25,7 +25,10 @@ Field-testing the HA feature as a user surfaced five defects, each fixed with a 
 - **`run` action**: "run/trigger/execute the X" executes automations (`automation.trigger` with
   `skip_condition: false`), scripts, and scenes; "start the fan" maps to on. Hardcoded payloads
   (no LLM-injectable fields), responses discarded — nothing to leak either direction.
-Suite: 100 tests.
+- **Informative, domain-aware replies**: "Okay — the morning automation is disabled. It won't run
+  until you enable it again." instead of "Okay — morning off." — automations speak in
+  enabled/disabled/stopped terms, scripts in ran/stopped, devices in on/off (wording pinned by tests).
+Suite: 105 tests.
 
 ## v2.5.0 — 2026-07-08 — Home Assistant control (allowlisted tools + Smart Home admin UI)
 
