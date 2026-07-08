@@ -1118,17 +1118,33 @@ def _handle_volume_command(user_text: str, raw_request: Request) -> Optional[str
     return None
 
 
-def _handle_home_command(user_text: str, raw_request: Request) -> Optional[str]:
+# Anaphora for the fast-path: "switch it off" → the device this session touched last. In-memory
+# (like presence state); a restart just means naming the device once again.
+_LAST_HOME_ENTITY: Dict[str, Any] = {}   # session_id -> (entity_id, monotonic seconds)
+_HOME_PRONOUNS = {"it", "that", "this", "that one", "them"}
+_LAST_HOME_TTL = 900                     # "it" stays meaningful for 15 minutes
+
+
+def _handle_home_command(user_text: str, raw_request: Request, session_id: str) -> Optional[str]:
     """Deterministic smart-home fast-path (shared by /inbox and /chat/stream): "turn on the X",
     "toggle X", "is X on?" — instant, no LLM. Only acts when the device RESOLVES against the HA
     allowlist; anything else returns None and falls through to the LLM, so ordinary sentences
-    ("turn my life around") are never hijacked."""
+    ("turn my life around") are never hijacked. "it"/"that" refers to the session's last device."""
     if not ha.configured():
         return None
     cmd = parse_home_command(user_text)
     if cmd is None:
         return None
-    entity = ha.resolve_entity(cmd["device"])
+    if cmd["device"].lower() in _HOME_PRONOUNS:
+        last = _LAST_HOME_ENTITY.get(session_id)
+        entity = last[0] if last and (time.monotonic() - last[1]) < _LAST_HOME_TTL else None
+        if entity is None:
+            # A device-shaped command with no referent: ASK — never fall through to the LLM,
+            # which (toolless on the streaming path) would confidently pretend it acted.
+            allowed = ", ".join(e.partition(".")[2].replace("_", " ") for e in ha.HA_ALLOWED_ENTITIES)
+            return f"Which device do you mean? I can control: {allowed or 'nothing yet'}."
+    else:
+        entity = ha.resolve_entity(cmd["device"])
     if entity is None:
         return None                       # not one of our devices — let the LLM answer
     if not _can_control_devices(raw_request):
@@ -1140,10 +1156,12 @@ def _handle_home_command(user_text: str, raw_request: Request) -> Optional[str]:
         st = ha.get_state(entity)
         if not st:
             return "I couldn't reach Home Assistant."
+        _LAST_HOME_ENTITY[session_id] = (entity, time.monotonic())
         name = (st.get("attributes") or {}).get("friendly_name") or nice
         return f"{name} is {st.get('state')}."
     if not ha.turn(entity, cmd["action"]):
         return "I couldn't reach Home Assistant to do that."
+    _LAST_HOME_ENTITY[session_id] = (entity, time.monotonic())
     _audit(raw_request, "device.home_assistant", f"{cmd['action']} {entity} (fast-path)")
     return f"Okay — {nice} {'toggled' if cmd['action'] == 'toggle' else cmd['action']}."
 
@@ -1496,7 +1514,7 @@ def process_input(request: QueryRequest, raw_request: Request):
 
     # Fast-paths handled directly (instant, offline, no LLM): volume/gesture, then reminders.
     ack = (_handle_volume_command(user_text, raw_request) or _handle_reminder(user_text, raw_request)
-           or _handle_home_command(user_text, raw_request))
+           or _handle_home_command(user_text, raw_request, session_id))
     if ack is not None:
         chat.store_message(session_id, "user", user_text)
         chat.store_message(session_id, "jarvis", ack)
@@ -1539,7 +1557,7 @@ def chat_stream(request: QueryRequest, raw_request: Request):
 
     # Fast-paths (volume/gesture, reminders) short-circuit the LLM and stream back the ack.
     ack = (_handle_volume_command(user_text, raw_request) or _handle_reminder(user_text, raw_request)
-           or _handle_home_command(user_text, raw_request))
+           or _handle_home_command(user_text, raw_request, session_id))
     if ack is not None:
         def vol_gen():
             chat.store_message(session_id, "user", user_text)

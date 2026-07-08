@@ -199,3 +199,34 @@ def test_parse_home_command_never_hijacks():
     assert p("what is the weather today") is None
     assert p("turn my life around") is None
     assert p("") is None
+
+
+def test_switch_it_off_uses_last_device(monkeypatch):
+    """The real-conversation regression: 'switch on the fan' then 'switch it off' must act on
+    the fan — and a pronoun with no referent must ASK, not fall through to the LLM."""
+    import main
+    turned = []
+    monkeypatch.setattr(ha, "HA_URL", "http://ha.test:8123")
+    monkeypatch.setattr(ha, "HA_TOKEN", "tok")
+    monkeypatch.setattr(ha, "HA_ALLOWED_ENTITIES", ["input_boolean.test_light", "input_boolean.desk_fan"])
+    monkeypatch.setattr(ha, "turn", lambda e, a: turned.append((e, a)) or True)
+    monkeypatch.setattr(main, "_can_control_devices", lambda r: True)
+    monkeypatch.setattr(main, "REQUIRE_PRESENCE_FOR_CONTROL", False)
+    monkeypatch.setattr(main, "_audit", lambda *a, **k: None)
+    main._LAST_HOME_ENTITY.clear()
+
+    # no referent yet -> asks, does NOT act, does NOT fall through (None would mean LLM)
+    reply = main._handle_home_command("switch it off", None, "s1")
+    assert reply is not None and "which device" in reply.lower() and turned == []
+
+    # name the device -> acts + remembers
+    assert "fan on" in main._handle_home_command("switch on the fan", None, "s1").lower()
+    assert turned == [("input_boolean.desk_fan", "on")]
+
+    # pronoun now resolves to the fan
+    assert "fan off" in main._handle_home_command("switch it off", None, "s1").lower()
+    assert turned[-1] == ("input_boolean.desk_fan", "off")
+
+    # a DIFFERENT session has no referent -> asks again (no cross-session leakage)
+    reply = main._handle_home_command("turn it on", None, "s2")
+    assert reply is not None and "which device" in reply.lower()
