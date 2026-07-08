@@ -270,6 +270,8 @@ Full docs live in **[docs/](docs/README.md)**:
 | [Specs](docs/SPECS.md) | Hardware, models, performance, config reference, DB schema |
 | [Deploy](docs/DEPLOY.md) | Runbook: install_services.sh, migrations, firewall, the admin CLI |
 | [Audit](docs/AUDIT.md) | The multi-round security self-audit and fixes |
+| [Releases](docs/RELEASES.md) | The project iteration by iteration — what each version was about |
+| [Known issues](docs/KNOWN_ISSUES.md) | Open limitations, accepted trade-offs, what release fixed what |
 
 Project meta: **[CONTRIBUTING.md](CONTRIBUTING.md)** (dev setup, tests, conventions) ·
 **[SECURITY.md](SECURITY.md)** (security model, how to report a vulnerability) ·

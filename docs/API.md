@@ -137,6 +137,11 @@ The Windows volume agent (`clients/volume-agent/`) pulls + applies these. The or
 ever enqueues — the agent opens no inbound port. Authorization is enforced server-side, never by
 the LLM.
 
+**LLM tools** (`set_volume`, `create_reminder`, `get_presence`, and — when Home Assistant is
+configured — `home_control`/`home_status`) execute through the same server-side gates: the model
+only *proposes*; `_can_control_devices`, the optional presence gate, the HA entity **allowlist**,
+and the audit log decide. Ambiguous device names are refused, never guessed.
+
 ---
 
 ## Admin  (all require an admin token)
@@ -151,7 +156,11 @@ the LLM.
 | `GET` | `/admin/api_keys` | — | `{ "keys": [{id, key_string(prefix only), user_id, description, device_id, usage_count, last_used_at, created_at}] }` |
 | `DELETE` | `/admin/api_keys/{id}` | — | `{ "status": "ok" }` |
 | `GET` | `/admin/stats` | — | `{ "users": int, "chats": int, "messages": int }` |
-| `GET` | `/admin/services` | — | `{ "services": [{name, status: active\|inactive, detail}] }` — live subsystem health (orchestrator, LLM, embeddings, TTS, + one row per camera agent from `device_heartbeats`). |
+| `GET` | `/admin/services` | — | `{ "services": [{name, status: active\|inactive, detail}] }` — live subsystem health (orchestrator, LLM, embeddings, TTS, **Home Assistant** when configured, + one row per camera agent from `device_heartbeats`). |
+| `GET` | `/admin/home-assistant` | — | `{ configured, url, token_set, allowed_entities, env_managed, connected }` — Smart-Home config for the admin UI. **The token itself is never returned** (only `token_set`). |
+| `PUT` | `/admin/home-assistant` | `{ url, token?, allowed_entities? }` | Save to the DB + apply **live** (no restart). Blank/omitted `token` keeps the stored one. `409` when env-managed. Audited (`ha.config`). |
+| `POST` | `/admin/home-assistant/test` | `{ url?, token? }` | `{ ok, detail }` — probe a URL/token **before** saving (blank token = use stored). |
+| `GET` | `/admin/home-assistant/entities` | — | `{ entities: [{entity_id, name, state, domain, allowed}] }` — controllable devices (lights/switches/…) for the allowlist picker. |
 | `GET` | `/admin/events?limit=N&type=&since_id=` | — | `{ "events": [{id, device_id, type, data, created_at}], "count": int }` (recent camera events, newest first). `type` filters (e.g. `face_seen` for the recognitions feed / verify); `since_id` returns only events newer than an id. |
 
 ---

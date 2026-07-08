@@ -37,7 +37,7 @@ responsive on this box." See [SPECS.md](SPECS.md) for the full hardware/model de
 | **TTS** | Piper (`en_GB-alan-medium`) | local binary | Text → speech (base64 WAV) |
 | **Relational store** | SQLite (WAL) | `memory/jarvis.db` | Users, sessions, message history, API keys, knowledge facts |
 | **Vector store** | ChromaDB (cosine) | `memory/chroma_db` | Semantic long-term recall (RAG) |
-| **Embeddings** | `google/embeddinggemma-300m` (sentence-transformers) | in-process | Document/query vectors for RAG + fact dedup |
+| **Embeddings** | `google/embeddinggemma-300m` (**ONNX Runtime**, torch-free) | in-process | Document/query vectors for RAG + fact dedup |
 | **Frontend** | React 19 + Vite | `frontend/` → `dist/` | Chat UI (served at `/`); admin panel at `/admin` |
 | **Camera agent** | OpenCV YuNet+SFace, opencv-python | the device (`camera/`) | On-device motion/face/pose/gesture → high-level **events** (no imagery); identity feeds per-user authz |
 
@@ -51,12 +51,14 @@ events + pulls its enrolled set; opens no port). See [DEPLOY.md](DEPLOY.md).
 ## Orchestrator module graph
 
 `main.py` was deliberately split into small, single-responsibility modules with an **acyclic**
-import graph (`config → {db, auth, llm} → memory → chat → main`):
+import graph (`config → {db, auth, llm, ha} → memory → chat → main`):
 
 ```
 config.py   configuration, tunables, logging        (no app deps)
-  ├─ db.py      SQLite connection factory + schema init
+  ├─ db.py      SQLite connection factory + schema init + app_settings get/set
   ├─ auth.py    PBKDF2 password hashing
+  ├─ ha.py      Home Assistant REST client + entity-allowlist guardrails (runtime-configurable)
+  ├─ onnx_embed.py  torch-free embedder (onnxruntime + tokenizers; used by memory)
   └─ llm.py     LLM HTTP client (blocking/stream) + Piper TTS
         └─ memory.py   embeddings, ChromaDB, knowledge base, idle fact extraction,
         │              request-activity / in-flight tracking

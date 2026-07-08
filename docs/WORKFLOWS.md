@@ -143,3 +143,30 @@ POST /auth/logout → delete the session row server-side (real revocation)
 
 There is **no master key**. Bootstrap and lockout recovery use the local CLI
 `src/scripts/manage.py` (`create-admin`, `reset-password`, `mint-key`).
+
+
+## 8. Device control & LLM tools  (`main.py` tools, `ha.py`, `intents.py`)
+
+Two paths lead to a device action; **both end at the same code-side gates** — the LLM is never the
+authorization boundary.
+
+1. **Deterministic fast-path**: common phrasings ("volume up", "set a timer for 5 minutes") are
+   parsed by `intents.py` and acted on directly — no LLM round-trip, millisecond acks.
+2. **LLM tool call**: the model is offered a small tool menu (`TOOLS_SPEC`): `set_volume`,
+   `create_reminder`, `get_presence` — plus `home_control` / `home_status` **only when Home
+   Assistant is configured**. `_run_tool_calls` executes the first call in the reply.
+
+Every executing tool passes, in order:
+- `_can_control_devices` (admin, or the per-user flag) → refusal message if not;
+- the optional **presence gate** (`require_presence_for_device_control`: a camera must currently
+  recognize an authorized person);
+- for Home Assistant: `ha.resolve_entity()` maps the model's words ("kitchen light") onto the
+  **entity allowlist** — exact id, else name-word match; a bare domain word ("the switch") only
+  resolves when unique; **ambiguity is refused, never guessed**;
+- the action itself: volume → a validated command **enqueued** for the pull-agent
+  (`device_commands`); HA → `POST /api/services/homeassistant/turn_on|turn_off|toggle` with the
+  server-held token (5 s timeout, fail-soft);
+- the **audit log** (`device.volume`, `device.home_assistant`, …).
+
+HA settings are runtime-mutable: startup loads them from the `app_settings` table (env vars win),
+and the admin **Smart Home** tab saves + applies them live via `ha.configure()` — no restart.

@@ -18,7 +18,7 @@ kernels, so smaller models and tight prompt budgets matter more than usual.
 | Role | Model | Size | Runtime | Notes |
 |---|---|---|---|---|
 | LLM | Qwen3.5-2B-Q4_K_M (GGUF) | ~1.3 GB | llama.cpp `llama-server` | `-c 4096 -t 2 --parallel 1 --reasoning off` |
-| Embeddings | `google/embeddinggemma-300m` | ~1.2 GB | sentence-transformers (in-process) | 768-dim, cosine, asymmetric prefixes |
+| Embeddings | `google/embeddinggemma-300m` | ~1.2 GB | **ONNX Runtime** (in-process, torch-free; full-pipeline export verified cosine 1.0 vs torch) | 768-dim, cosine, asymmetric prefixes |
 | STT | whisper.cpp `base.en` | ~142 MB | whisper-command | built `-DGGML_AVX=ON -DWHISPER_SDL2=ON` |
 | TTS | Piper `en_GB-alan-medium` | ~63 MB | piper binary | ONNX voice |
 
@@ -63,6 +63,11 @@ specific); commit changes to [`config/jarvis.example.json`](../config/jarvis.exa
     "chroma_db_path": "/srv/jarvis/memory/chroma_db",
     "max_context_messages": 100        // ceiling on history pulled before token-budgeting
   },
+  "home_assistant": {                  // optional smart-home control (docs/setup/home-assistant.md)
+    "url": "",                         // e.g. http://192.168.0.120:8123 — empty = feature off
+    "token": "",                       // long-lived token from a dedicated NON-admin HA user
+    "allowed_entities": []             // hard allowlist of entity_ids the LLM tools may touch
+  },
   "system_prompt": "You are Jarvis... /no_think"
 }
 ```
@@ -71,6 +76,10 @@ Tunables that are **constants in code** (not config) live in `src/orchestrator/c
 `COMPLETION_RESERVE_DEFAULT`, `PROMPT_SAFETY_MARGIN`, `KNOWLEDGE_TOKEN_CAP`, `MIN_COMPLETION_TOKENS`,
 `RAG_DISTANCE_THRESHOLD`, `RAG_MAX_RESULTS`, `IDLE_THRESHOLD_SECONDS`, `FACT_DEDUP_SIM`, the embedding
 prefixes, and the Piper paths.
+
+**Home Assistant precedence:** env (`HA_URL`/`HA_TOKEN`/`HA_ALLOWED_ENTITIES`) → admin-UI values
+(stored in the `app_settings` DB table, applied live) → the `home_assistant` block above. Env-set
+fields show read-only in the UI.
 
 ---
 
@@ -92,6 +101,7 @@ safety-net migrations.
 | `persons` | recognizable people | `id`, `name` (unique), `user_id` (→ account for authz), `created_at` |
 | `face_embeddings` | embeddings per person | `id`, `person_id` (→ persons, cascade), `embedding` (JSON), `source` |
 | `enroll_requests` | enroll-from-UI queue | `id`, `device_id`, `name`, `status` (pending/done/failed), `requested_by` |
+| `app_settings` | admin-editable runtime settings (Smart Home url/token/allowlist) | `key` (PK), `value`, `updated_at` |
 
 Long-term recall vectors are **not** in SQLite — they live in ChromaDB (`jarvis_memory_cos`,
 cosine space), keyed by the `conversation_history.id`.

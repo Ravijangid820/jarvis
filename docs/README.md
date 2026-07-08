@@ -46,8 +46,10 @@ machines with independent environments).
 
 | Doc | What's in it |
 |---|---|
+| [RELEASES.md](RELEASES.md) | **Release history** — the project iteration by iteration (v1.0.0 → today), themes + the release process |
+| [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | **Living issue tracker** — open limitations, accepted trade-offs, and what release fixed what |
 | [CHANGELOG.md](CHANGELOG.md) | Dated record of notable changes |
-| [FUTURE_IDEAS.md](FUTURE_IDEAS.md) | Roadmap: tool calling, Home Assistant/MQTT, streaming TTS, … |
+| [FUTURE_IDEAS.md](FUTURE_IDEAS.md) | Roadmap: edge voice, spec decoding, HA extensions, … |
 | [benchmarks/](benchmarks/) | Whisper + LLM benchmark output |
 | [planning/](planning/) | Historical planning notes (implementation plan, walkthrough, tasks) |
 
