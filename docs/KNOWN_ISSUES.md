@@ -17,7 +17,7 @@ today.)
 | 5 | **Single LLM slot** (`--parallel 1`). | Concurrent chats queue behind each other. | Accepted on 8 GB RAM (a second slot costs another KV cache). Split deployment on a bigger host can raise `--parallel`. |
 | 6 | **Images are `linux/amd64` only.** | No ARM (Pi/Apple-silicon-native) images. | Native install works on ARM; ARM image builds are future work. |
 | 7 | **Voice capture + whisper STT run on the server box** — the mic must be attached to the server. | No multi-room / remote mics. | Edge-voice roadmap item: transcribe on the device with the mic, POST text to `/inbox`. |
-| 8 | **HA control is on/off/toggle only** (generic `homeassistant.*` services). | No brightness/color/temperature parameters yet. | Planned extension (FUTURE_IDEAS): `light.turn_on` with parameters, sensors as context, MQTT events. |
+| 8 | **HA control is on/off/toggle/run only** (run = automations/scripts/scenes, since 2026-07-08). | No brightness/color/temperature parameters yet. | Planned extension (FUTURE_IDEAS): `light.turn_on` with parameters, sensors as context, MQTT events. |
 | 9 | **int8 quantization of the ONNX embedder fails** in onnxruntime's quantization preprocessor (shape-inference `AssertionError`). | Embedding bundle ships fp32 (1.2 GB) instead of ~330 MB. | fp32 works and is verified; retry when onnxruntime's quantizer handles the graph. |
 | 10 | **Combined-image cosmetics**: llama prints `warn: LLAMA_ARG_HOST … overwritten by --host` at startup, and the banner's "LLM backend" line shows the split-config URL (`http://llama:8081`) although all-in-one actually talks to loopback. | Confusing log lines; no functional effect. | Cosmetic cleanup queued for a future image release. |
 

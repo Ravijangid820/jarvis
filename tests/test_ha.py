@@ -243,3 +243,58 @@ def test_parse_home_command_with_trailing_context():
     # still no hijacks
     assert p("turn the volume up because it is quiet") is None
     assert p("what should i do, i am feeling hot") is None
+
+
+# --- run(): execute automations/scripts/scenes — leak-proof by construction ---
+
+def test_run_maps_domain_to_service_with_hardcoded_payload(monkeypatch):
+    calls = []
+    def fake_urlopen(req, timeout=None):
+        calls.append((req.full_url, json.loads(req.data.decode())))
+        return _FakeResp({})
+    monkeypatch.setattr(ha, "HA_URL", "http://ha.test:8123")
+    monkeypatch.setattr(ha, "HA_TOKEN", "tok")
+    monkeypatch.setattr(ha.urllib.request, "urlopen", fake_urlopen)
+    assert ha.run("automation.movie_night") is True
+    assert calls[-1] == ("http://ha.test:8123/api/services/automation/trigger",
+                         {"entity_id": "automation.movie_night", "skip_condition": False})
+    assert ha.run("script.reset_all") is True
+    assert calls[-1] == ("http://ha.test:8123/api/services/script/turn_on",
+                         {"entity_id": "script.reset_all"})
+    assert ha.run("scene.evening") is True
+    assert calls[-1][0].endswith("/api/services/scene/turn_on")
+
+
+def test_run_refuses_non_runnable_domains(monkeypatch):
+    monkeypatch.setattr(ha, "HA_URL", "http://ha.test:8123")
+    monkeypatch.setattr(ha, "HA_TOKEN", "tok")
+    assert ha.run("light.kitchen") is False        # no HTTP at all
+
+
+def test_run_via_fast_path_and_start_the_fan_means_on(monkeypatch):
+    import main
+    actions = []
+    monkeypatch.setattr(ha, "HA_URL", "http://ha.test:8123")
+    monkeypatch.setattr(ha, "HA_TOKEN", "tok")
+    monkeypatch.setattr(ha, "HA_ALLOWED_ENTITIES", ["automation.movie_night", "switch.desk_fan"])
+    monkeypatch.setattr(ha, "run", lambda e: actions.append(("run", e)) or True)
+    monkeypatch.setattr(ha, "turn", lambda e, a: actions.append((a, e)) or True)
+    monkeypatch.setattr(main, "_can_control_devices", lambda r: True)
+    monkeypatch.setattr(main, "REQUIRE_PRESENCE_FOR_CONTROL", False)
+    monkeypatch.setattr(main, "_audit", lambda *a, **k: None)
+    main._LAST_HOME_ENTITY.clear()
+
+    reply = main._handle_home_command("run the movie night automation", None, "s1")
+    assert "ran movie night" in reply.lower()
+    assert actions[-1] == ("run", "automation.movie_night")
+
+    reply = main._handle_home_command("start the fan", None, "s1")   # run on a plain device = on
+    assert "fan on" in reply.lower()
+    assert actions[-1] == ("on", "switch.desk_fan")
+
+
+def test_parse_run_phrasings():
+    from intents import parse_home_command as p
+    assert p("run the movie night automation") == {"action": "run", "device": "movie night automation"}
+    assert p("trigger movie night") == {"action": "run", "device": "movie night"}
+    assert p("execute the reset script please") == {"action": "run", "device": "reset script"}

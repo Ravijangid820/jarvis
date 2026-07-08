@@ -4,6 +4,23 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-07-08 — HA hardening round (from live user testing) + run automations
+
+Field-testing the HA feature as a user surfaced five defects, each fixed with a regression test:
+- **Tool menu frozen at import** — UI-configured HA never exposed `home_control` to the model
+  (`_active_tools()` now builds the menu per request).
+- **Streaming web chat has no LLM tools** → the 2B model hallucinated acks ("Fan: ON. Heat level
+  reduced.") — mitigated by a **deterministic home fast-path** on BOTH endpoints
+  (`intents.parse_home_command`), which also sidesteps 2B tool-calling flakiness.
+- **"switch it off"** — per-session last-device memory resolves it/that/this (15-min TTL); a pronoun
+  with no referent ASKS instead of falling through to a bluffing LLM.
+- **Mid-sentence commands** ("…turn on the fan, i am feeling hot") — device phrases end at clause
+  boundaries, not end-of-string.
+- **`run` action**: "run/trigger/execute the X" executes automations (`automation.trigger` with
+  `skip_condition: false`), scripts, and scenes; "start the fan" maps to on. Hardcoded payloads
+  (no LLM-injectable fields), responses discarded — nothing to leak either direction.
+Suite: 100 tests.
+
 ## v2.5.0 — 2026-07-08 — Home Assistant control (allowlisted tools + Smart Home admin UI)
 
 - New `home_control` / `home_status` LLM tools (offered only when configured): "turn on the kitchen

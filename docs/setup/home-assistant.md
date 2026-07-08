@@ -77,6 +77,18 @@ only* — it does **not** let the box reach *out* to a device on another network
 or HA on a different subnet/hotspot). If HA must live off-LAN, put the **box itself** on Tailscale and
 use HA's `100.x` tailnet IP. See [FUTURE_IDEAS](../FUTURE_IDEAS.md) → Networking.
 
+## Automations, scripts & scenes
+All three appear in the device picker and can be allowlisted. Semantics:
+- **"turn on/off the &lt;automation&gt;"** — enables/disables it (off also **aborts a run in progress**).
+- **"run / trigger / execute the &lt;automation|script|scene&gt;"** — executes its actions NOW.
+  Automations run with `skip_condition: false`, so the automation's own guard conditions still apply.
+- "run/start the &lt;plain device&gt;" gracefully means "turn it on".
+
+Data-leak posture (by construction): payloads to HA are **hardcoded shapes** (`entity_id` only — no
+variables/service-data channel the LLM could inject into); HA's responses are **discarded** (booleans
+back), so no HA state flows toward the model beyond the on/off state of *allowlisted* entities via
+`home_status`; the token never appears in logs, API responses, or the UI after saving.
+
 ## Notes
 - Works with any entity the generic `homeassistant.turn_on/off/toggle` services accept: `light.*`,
   `switch.*`, `input_boolean.*`, `fan.*`, scenes, …

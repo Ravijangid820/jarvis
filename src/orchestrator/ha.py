@@ -125,6 +125,28 @@ def turn(entity_id: str, action: str) -> bool:
                     {"entity_id": entity_id}) is not None
 
 
+# Domains whose actions can be EXECUTED on demand ("run the movie night automation").
+RUNNABLE_DOMAINS = ("automation", "script", "scene")
+
+
+def run(entity_id: str) -> bool:
+    """Execute an automation/script/scene NOW. Security posture (data-leak proof by construction):
+    - payload is HARDCODED to the entity_id — no variables/service-data channel exists, so the LLM
+      cannot inject parameters into HA no matter what it emits;
+    - automations run with skip_condition=False: the automation's OWN guard conditions still apply;
+    - HA's response body is discarded (bool out) — no HA state ever flows back toward the model.
+    Callers must have validated entity_id against the allowlist (resolve_entity), as with turn()."""
+    domain = entity_id.partition(".")[0]
+    if domain == "automation":
+        return _request("POST", "/api/services/automation/trigger",
+                        {"entity_id": entity_id, "skip_condition": False}) is not None
+    if domain == "script":
+        return _request("POST", "/api/services/script/turn_on", {"entity_id": entity_id}) is not None
+    if domain == "scene":
+        return _request("POST", "/api/services/scene/turn_on", {"entity_id": entity_id}) is not None
+    return False    # "run" is meaningless for lights/switches — callers map it to turn(entity, "on")
+
+
 def _norm(s: str) -> set:
     return set(re.sub(r"[^a-z0-9]+", " ", s.lower()).split())
 

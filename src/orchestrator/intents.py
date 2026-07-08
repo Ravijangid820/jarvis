@@ -136,6 +136,7 @@ _HOME_OFF_A = re.compile(r"\b(?:turn|switch|power|shut)\s+off\s+(?:the\s+|my\s+)
 _HOME_OFF_B = re.compile(r"\b(?:turn|switch|power|shut)\s+(?:the\s+|my\s+)?(?P<dev>[\w -]+?)\s+(?:back\s+)?off" + _BOUND, re.I)
 _HOME_TOGGLE = re.compile(r"\btoggle\s+(?:the\s+|my\s+)?(?P<dev>[\w -]+?)" + _BOUND, re.I)
 _HOME_STATUS = re.compile(r"\b(?:is|are)\s+(?:the\s+|my\s+)?(?P<dev>[\w -]+?)\s+(?:on|off|running)" + _BOUND, re.I)
+_HOME_RUN = re.compile(r"\b(?:run|trigger|execute|activate|launch|start)\s+(?:the\s+|my\s+)?(?P<dev>[\w -]+?)" + _BOUND, re.I)
 
 
 def parse_home_command(text: str) -> Optional[Dict[str, str]]:
@@ -143,7 +144,8 @@ def parse_home_command(text: str) -> Optional[Dict[str, str]]:
     if not text or _VOL.search(text):        # audio commands belong to the volume intent
         return None
     for action, pattern in (("toggle", _HOME_TOGGLE), ("on", _HOME_ON_A), ("on", _HOME_ON_B),
-                            ("off", _HOME_OFF_A), ("off", _HOME_OFF_B), ("status", _HOME_STATUS)):
+                            ("off", _HOME_OFF_A), ("off", _HOME_OFF_B), ("status", _HOME_STATUS),
+                            ("run", _HOME_RUN)):
         m = pattern.search(text)
         if m:
             dev = m.group("dev").strip()

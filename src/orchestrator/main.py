@@ -1125,6 +1125,17 @@ _HOME_PRONOUNS = {"it", "that", "this", "that one", "them"}
 _LAST_HOME_TTL = 900                     # "it" stays meaningful for 15 minutes
 
 
+def _ha_act(entity: str, action: str):
+    """Execute a validated (allowlisted) action. "run" EXECUTES automations/scripts/scenes via
+    ha.run(); for a plain device, "run/start the fan" gracefully means turn it on. Returns
+    (ok, spoken_verb)."""
+    if action == "run":
+        if entity.partition(".")[0] in ha.RUNNABLE_DOMAINS:
+            return ha.run(entity), "ran"
+        action = "on"
+    return ha.turn(entity, action), ("toggled" if action == "toggle" else action)
+
+
 def _handle_home_command(user_text: str, raw_request: Request, session_id: str) -> Optional[str]:
     """Deterministic smart-home fast-path (shared by /inbox and /chat/stream): "turn on the X",
     "toggle X", "is X on?" — instant, no LLM. Only acts when the device RESOLVES against the HA
@@ -1159,11 +1170,12 @@ def _handle_home_command(user_text: str, raw_request: Request, session_id: str) 
         _LAST_HOME_ENTITY[session_id] = (entity, time.monotonic())
         name = (st.get("attributes") or {}).get("friendly_name") or nice
         return f"{name} is {st.get('state')}."
-    if not ha.turn(entity, cmd["action"]):
+    ok, verb = _ha_act(entity, cmd["action"])
+    if not ok:
         return "I couldn't reach Home Assistant to do that."
     _LAST_HOME_ENTITY[session_id] = (entity, time.monotonic())
     _audit(raw_request, "device.home_assistant", f"{cmd['action']} {entity} (fast-path)")
-    return f"Okay — {nice} {'toggled' if cmd['action'] == 'toggle' else cmd['action']}."
+    return f"Okay — ran {nice}." if verb == "ran" else f"Okay — {nice} {verb}."
 
 
 # ---- LLM tool-calling (voice path). Rule fast-paths still run first; this catches phrasings they
@@ -1193,10 +1205,10 @@ TOOLS_SPEC = [
 HA_TOOLS = [
     {"type": "function", "function": {
         "name": "home_control",
-        "description": "Turn a smart-home device (light, switch, plug) on or off, or toggle it.",
+        "description": "Control a smart-home device (light, switch, plug) — on/off/toggle — or RUN an automation, script, or scene.",
         "parameters": {"type": "object", "properties": {
-            "device": {"type": "string", "description": "which device, e.g. 'kitchen light'"},
-            "action": {"type": "string", "enum": ["on", "off", "toggle"]}},
+            "device": {"type": "string", "description": "which device/automation, e.g. 'kitchen light', 'movie night'"},
+            "action": {"type": "string", "enum": ["on", "off", "toggle", "run"]}},
             "required": ["device", "action"]}}},
     {"type": "function", "function": {
         "name": "home_status",
@@ -1262,11 +1274,12 @@ def _tool_home_control(args, raw_request):
     if entity is None:
         allowed = ", ".join(e.partition(".")[2].replace("_", " ") for e in ha.HA_ALLOWED_ENTITIES)
         return f"I'm not sure which device you mean. I can control: {allowed or 'nothing yet — the allowlist is empty'}."
-    if not ha.turn(entity, action):
+    ok, verb = _ha_act(entity, action)
+    if not ok:
         return "I couldn't reach Home Assistant to do that."
     _audit(raw_request, "device.home_assistant", f"{action} {entity} (tool)")
     nice = entity.partition(".")[2].replace("_", " ")
-    return f"Okay — {nice} {'toggled' if action == 'toggle' else action}."
+    return f"Okay — ran {nice}." if verb == "ran" else f"Okay — {nice} {verb}."
 
 
 def _tool_home_status(args, raw_request):
