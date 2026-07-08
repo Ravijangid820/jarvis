@@ -230,3 +230,16 @@ def test_switch_it_off_uses_last_device(monkeypatch):
     # a DIFFERENT session has no referent -> asks again (no cross-session leakage)
     reply = main._handle_home_command("turn it on", None, "s2")
     assert reply is not None and "which device" in reply.lower()
+
+
+def test_parse_home_command_with_trailing_context():
+    """Real speech wraps commands in context — the device phrase ends at a clause boundary."""
+    from intents import parse_home_command as p
+    assert p("can you please turn on the fan, i am feeling a little hot in here") == {"action": "on", "device": "fan"}
+    assert p("turn the fan on because it is hot") == {"action": "on", "device": "fan"}
+    assert p("switch off the test light since we are leaving") == {"action": "off", "device": "test light"}
+    assert p("turn on the fan please") == {"action": "on", "device": "fan"}
+    assert p("is the fan on right now?") == {"action": "status", "device": "fan"}
+    # still no hijacks
+    assert p("turn the volume up because it is quiet") is None
+    assert p("what should i do, i am feeling hot") is None

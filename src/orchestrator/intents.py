@@ -127,12 +127,15 @@ def parse_volume(text: str) -> Optional[Dict[str, Any]]:
 # "is the test light on?" → {"action": "on|off|toggle|status", "device": str} or None.
 # The caller only ACTS when the device resolves against the HA allowlist — a non-matching
 # device falls through to the LLM, so ordinary sentences are never hijacked.
-_HOME_ON_A = re.compile(r"\b(?:turn|switch|power)\s+on\s+(?:the\s+|my\s+)?(?P<dev>[\w -]+?)[\s.!?]*$", re.I)
-_HOME_ON_B = re.compile(r"\b(?:turn|switch|power)\s+(?:the\s+|my\s+)?(?P<dev>[\w -]+?)\s+(?:back\s+)?on[\s.!?]*$", re.I)
-_HOME_OFF_A = re.compile(r"\b(?:turn|switch|power|shut)\s+off\s+(?:the\s+|my\s+)?(?P<dev>[\w -]+?)[\s.!?]*$", re.I)
-_HOME_OFF_B = re.compile(r"\b(?:turn|switch|power|shut)\s+(?:the\s+|my\s+)?(?P<dev>[\w -]+?)\s+(?:back\s+)?off[\s.!?]*$", re.I)
-_HOME_TOGGLE = re.compile(r"\btoggle\s+(?:the\s+|my\s+)?(?P<dev>[\w -]+?)[\s.!?]*$", re.I)
-_HOME_STATUS = re.compile(r"\b(?:is|are)\s+(?:the\s+|my\s+)?(?P<dev>[\w -]+?)\s+(?:on|off|running)[\s.!?]*$", re.I)
+# The device phrase ends at a CLAUSE boundary, not the end of the sentence — people wrap commands
+# in context ("turn on the fan, i am feeling hot" / "…because it's warm" / "…please").
+_BOUND = r"(?=\s*(?:[,.;:!?]|$)|\s+(?:because|since|cause|so|as|while|please|right\s+now|now|thanks|already|yet|anymore|for\s+me)\b)"
+_HOME_ON_A = re.compile(r"\b(?:turn|switch|power)\s+on\s+(?:the\s+|my\s+)?(?P<dev>[\w -]+?)" + _BOUND, re.I)
+_HOME_ON_B = re.compile(r"\b(?:turn|switch|power)\s+(?:the\s+|my\s+)?(?P<dev>[\w -]+?)\s+(?:back\s+)?on" + _BOUND, re.I)
+_HOME_OFF_A = re.compile(r"\b(?:turn|switch|power|shut)\s+off\s+(?:the\s+|my\s+)?(?P<dev>[\w -]+?)" + _BOUND, re.I)
+_HOME_OFF_B = re.compile(r"\b(?:turn|switch|power|shut)\s+(?:the\s+|my\s+)?(?P<dev>[\w -]+?)\s+(?:back\s+)?off" + _BOUND, re.I)
+_HOME_TOGGLE = re.compile(r"\btoggle\s+(?:the\s+|my\s+)?(?P<dev>[\w -]+?)" + _BOUND, re.I)
+_HOME_STATUS = re.compile(r"\b(?:is|are)\s+(?:the\s+|my\s+)?(?P<dev>[\w -]+?)\s+(?:on|off|running)" + _BOUND, re.I)
 
 
 def parse_home_command(text: str) -> Optional[Dict[str, str]]:
