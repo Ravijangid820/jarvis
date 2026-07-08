@@ -69,6 +69,14 @@ Native: fill the block in `config/jarvis.json` (or put the three vars in `.env`)
   HA answers with your token).
 - Every action lands in **Admin → Audit log** (`device.home_assistant`).
 
+## Networking — Jarvis and HA must be mutually routable
+The Jarvis server must be able to **initiate** connections to HA, so they need to be on the same network
+(or otherwise routable box→HA). Same LAN is simplest — e.g. **HA as a Proxmox OCI container on the
+box's LAN**. ⚠️ A Tailscale **subnet router** that lets you reach the Jarvis UI from afar is *inbound
+only* — it does **not** let the box reach *out* to a device on another network (a Tailscale-only laptop,
+or HA on a different subnet/hotspot). If HA must live off-LAN, put the **box itself** on Tailscale and
+use HA's `100.x` tailnet IP. See [FUTURE_IDEAS](../FUTURE_IDEAS.md) → Networking.
+
 ## Notes
 - Works with any entity the generic `homeassistant.turn_on/off/toggle` services accept: `light.*`,
   `switch.*`, `input_boolean.*`, `fan.*`, scenes, …
