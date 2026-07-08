@@ -220,11 +220,11 @@ def test_switch_it_off_uses_last_device(monkeypatch):
     assert reply is not None and "which device" in reply.lower() and turned == []
 
     # name the device -> acts + remembers
-    assert "fan on" in main._handle_home_command("switch on the fan", None, "s1").lower()
+    assert "fan is now on" in main._handle_home_command("switch on the fan", None, "s1").lower()
     assert turned == [("input_boolean.desk_fan", "on")]
 
     # pronoun now resolves to the fan
-    assert "fan off" in main._handle_home_command("switch it off", None, "s1").lower()
+    assert "fan is now off" in main._handle_home_command("switch it off", None, "s1").lower()
     assert turned[-1] == ("input_boolean.desk_fan", "off")
 
     # a DIFFERENT session has no referent -> asks again (no cross-session leakage)
@@ -285,11 +285,11 @@ def test_run_via_fast_path_and_start_the_fan_means_on(monkeypatch):
     main._LAST_HOME_ENTITY.clear()
 
     reply = main._handle_home_command("run the movie night automation", None, "s1")
-    assert "ran movie night" in reply.lower()
+    assert "running the movie night automation now" in reply.lower()
     assert actions[-1] == ("run", "automation.movie_night")
 
     reply = main._handle_home_command("start the fan", None, "s1")   # run on a plain device = on
-    assert "fan on" in reply.lower()
+    assert "fan is now on" in reply.lower()
     assert actions[-1] == ("on", "switch.desk_fan")
 
 
@@ -318,16 +318,16 @@ def test_stop_vs_disable_semantics(monkeypatch):
     main._LAST_HOME_ENTITY.clear()
 
     reply = main._handle_home_command("stop morning automation", None, "s1")
-    assert "stopped morning" in reply.lower()
+    assert "stopped the morning automation" in reply.lower() and "stays enabled" in reply.lower()
     assert actions[-1] == ("stop", "automation.morning")     # NOT ("off", ...) — stays enabled
 
-    assert "morning off" in main._handle_home_command("disable the morning automation", None, "s1").lower()
+    assert "morning automation is disabled" in main._handle_home_command("disable the morning automation", None, "s1").lower()
     assert actions[-1] == ("off", "automation.morning")      # explicit disable -> off
 
-    assert "morning on" in main._handle_home_command("enable morning automation", None, "s1").lower()
+    assert "morning automation is enabled" in main._handle_home_command("enable morning automation", None, "s1").lower()
     assert actions[-1] == ("on", "automation.morning")
 
-    assert "fan off" in main._handle_home_command("stop the fan", None, "s1").lower()
+    assert "fan is now off" in main._handle_home_command("stop the fan", None, "s1").lower()
     assert actions[-1] == ("off", "switch.desk_fan")          # plain device: stop = off
 
 
@@ -371,3 +371,19 @@ def test_antibluff_guard_asks_instead_of_reaching_the_llm(monkeypatch):
     assert main._handle_home_command("stop telling me jokes", None, "s1") is None
     # device named but NO control verb (just chatting about it) -> LLM is fine
     assert main._handle_home_command("the morning automation is my favorite", None, "s1") is None
+
+
+
+def test_reply_wording_is_domain_aware():
+    """Replies state what actually happened in the entity's own terms."""
+    import main
+    assert main._ha_reply("automation.morning", "off") == \
+        "Okay — the morning automation is disabled. It won't run until you enable it again."
+    assert "stays enabled" in main._ha_reply("automation.morning", "stop")
+    assert main._ha_reply("input_boolean.test_light", "on") == "Okay — the test light is now on."
+    assert main._ha_reply("script.reset_all", "run") == "Okay — I ran the reset all script."
+    assert main._ha_state_phrase("automation.morning", {"state": "off"}) == \
+        "The morning automation is disabled."
+    assert main._ha_state_phrase("input_boolean.test_light",
+                                 {"state": "on", "attributes": {"friendly_name": "Test Light"}}) == \
+        "Test Light is on."

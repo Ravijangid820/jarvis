@@ -1126,18 +1126,64 @@ _LAST_HOME_TTL = 900                     # "it" stays meaningful for 15 minutes
 
 
 def _ha_act(entity: str, action: str):
-    """Execute a validated (allowlisted) action. "run" EXECUTES automations/scripts/scenes via
-    ha.run(); for a plain device, "run/start the fan" gracefully means turn it on. Returns
-    (ok, spoken_verb)."""
+    """Execute a validated (allowlisted) action. "run" EXECUTES automations/scripts/scenes; "stop"
+    aborts them (automation stays enabled). For plain devices run→on and stop→off. Returns
+    (ok, effective_action) — the effective action drives the reply wording."""
     if action == "run":
         if entity.partition(".")[0] in ha.RUNNABLE_DOMAINS:
-            return ha.run(entity), "ran"
+            return ha.run(entity), "run"
         action = "on"
     elif action == "stop":
         if entity.partition(".")[0] in ("automation", "script"):
-            return ha.stop(entity), "stopped"     # aborts the run; automation STAYS enabled
-        action = "off"                            # "stop the fan" = switch it off
-    return ha.turn(entity, action), ("toggled" if action == "toggle" else action)
+            return ha.stop(entity), "stop"
+        action = "off"
+    return ha.turn(entity, action), action
+
+
+def _ha_label(entity: str):
+    """("the morning automation", domain, "morning") — appends the kind for automations/scripts/
+    scenes unless the name already contains it."""
+    domain, _, obj = entity.partition(".")
+    nice = obj.replace("_", " ")
+    kind = domain if domain in ("automation", "script", "scene") else None
+    label = f"the {nice}" if (kind is None or kind in nice.lower()) else f"the {nice} {kind}"
+    return label, domain, nice
+
+
+def _ha_reply(entity: str, action: str) -> str:
+    """A reply that says what actually HAPPENED, in the entity's own terms — 'disabled' for an
+    automation is a different fact than 'off' for a light."""
+    label, domain, _ = _ha_label(entity)
+    if domain == "automation":
+        return {
+            "on": f"Okay — {label} is enabled and will run on its triggers.",
+            "off": f"Okay — {label} is disabled. It won't run until you enable it again.",
+            "stop": f"Okay — I stopped {label}'s current run. It stays enabled for next time.",
+            "run": f"Okay — running {label} now.",
+            "toggle": f"Okay — {label} was toggled.",
+        }[action]
+    if domain == "script":
+        return {
+            "on": f"Okay — I ran {label}.", "run": f"Okay — I ran {label}.",
+            "off": f"Okay — {label} was stopped.", "stop": f"Okay — {label} was stopped.",
+            "toggle": f"Okay — {label} was toggled.",
+        }[action]
+    if domain == "scene":
+        return f"Okay — {label} is applied."
+    verb = {"on": "is now on", "off": "is now off", "toggle": "was toggled"}.get(action, action)
+    return f"Okay — {label} {verb}."
+
+
+def _ha_state_phrase(entity: str, st: dict) -> str:
+    """Status wording in the entity's own terms (automation: enabled/disabled; script: running)."""
+    label, domain, nice = _ha_label(entity)
+    state = st.get("state")
+    if domain == "automation":
+        return f"{label.capitalize()} is {'enabled' if state == 'on' else 'disabled'}."
+    if domain == "script":
+        return f"{label.capitalize()} is {'running right now' if state == 'on' else 'not running'}."
+    name = (st.get("attributes") or {}).get("friendly_name") or nice
+    return f"{name} is {state}."
 
 
 def _handle_home_command(user_text: str, raw_request: Request, session_id: str) -> Optional[str]:
@@ -1179,24 +1225,18 @@ def _handle_home_command(user_text: str, raw_request: Request, session_id: str) 
         return "Sorry — you're not authorized to control devices."
     if REQUIRE_PRESENCE_FOR_CONTROL and not _authorized_person_present():
         return "I don't see anyone authorized in the room, so I can't change that right now."
-    nice = entity.partition(".")[2].replace("_", " ")
     if cmd["action"] == "status":
         st = ha.get_state(entity)
         if not st:
             return "I couldn't reach Home Assistant."
         _LAST_HOME_ENTITY[session_id] = (entity, time.monotonic())
-        name = (st.get("attributes") or {}).get("friendly_name") or nice
-        return f"{name} is {st.get('state')}."
-    ok, verb = _ha_act(entity, cmd["action"])
+        return _ha_state_phrase(entity, st)
+    ok, eff = _ha_act(entity, cmd["action"])
     if not ok:
         return "I couldn't reach Home Assistant to do that."
     _LAST_HOME_ENTITY[session_id] = (entity, time.monotonic())
     _audit(raw_request, "device.home_assistant", f"{cmd['action']} {entity} (fast-path)")
-    if verb == "ran":
-        return f"Okay — ran {nice}."
-    if verb == "stopped":
-        return f"Okay — stopped {nice}."
-    return f"Okay — {nice} {verb}."
+    return _ha_reply(entity, eff)
 
 
 # ---- LLM tool-calling (voice path). Rule fast-paths still run first; this catches phrasings they
@@ -1295,16 +1335,11 @@ def _tool_home_control(args, raw_request):
     if entity is None:
         allowed = ", ".join(e.partition(".")[2].replace("_", " ") for e in ha.HA_ALLOWED_ENTITIES)
         return f"I'm not sure which device you mean. I can control: {allowed or 'nothing yet — the allowlist is empty'}."
-    ok, verb = _ha_act(entity, action)
+    ok, eff = _ha_act(entity, action)
     if not ok:
         return "I couldn't reach Home Assistant to do that."
     _audit(raw_request, "device.home_assistant", f"{action} {entity} (tool)")
-    nice = entity.partition(".")[2].replace("_", " ")
-    if verb == "ran":
-        return f"Okay — ran {nice}."
-    if verb == "stopped":
-        return f"Okay — stopped {nice}."
-    return f"Okay — {nice} {verb}."
+    return _ha_reply(entity, eff)
 
 
 def _tool_home_status(args, raw_request):
@@ -1318,8 +1353,7 @@ def _tool_home_status(args, raw_request):
     for ent in entities:
         st = ha.get_state(ent)
         if st:
-            name = (st.get("attributes") or {}).get("friendly_name") or ent.partition(".")[2].replace("_", " ")
-            parts.append(f"{name} is {st.get('state')}")
+            parts.append(_ha_state_phrase(ent, st).rstrip("."))
     return ("; ".join(parts) + ".") if parts else "I couldn't reach Home Assistant."
 
 

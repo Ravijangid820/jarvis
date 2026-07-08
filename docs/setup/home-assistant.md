@@ -62,8 +62,10 @@ docker run -d --name jarvis --init -p 5000:5000 \
 Native: fill the block in `config/jarvis.json` (or put the three vars in `.env`) and restart.
 
 ## 3. Use it
-- *"Turn on the test light"* → `Okay — test light on.` (watch it flip in HA's dashboard)
+- *"Turn on the test light"* → `Okay — the test light is now on.` (watch it flip in HA's dashboard)
 - *"Is the test light on?"* → `Test Light is on.`
+- *"Stop the morning automation"* → `Okay — I stopped the morning automation's current run. It stays enabled for next time.`
+- *"Disable the morning automation"* → `Okay — the morning automation is disabled. It won't run until you enable it again.`
 - *"Toggle the kitchen light"*, *"turn everything off"* → only allowlisted entities respond.
 - **Admin → System Services** shows `Home Assistant · N entities allowlisted · <url>` (green when
   HA answers with your token).
