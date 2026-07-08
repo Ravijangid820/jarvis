@@ -1139,21 +1139,28 @@ TOOLS_SPEC = [
         "parameters": {"type": "object", "properties": {}}}},
 ]
 
-if ha.configured():
-    TOOLS_SPEC += [
-        {"type": "function", "function": {
-            "name": "home_control",
-            "description": "Turn a smart-home device (light, switch, plug) on or off, or toggle it.",
-            "parameters": {"type": "object", "properties": {
-                "device": {"type": "string", "description": "which device, e.g. 'kitchen light'"},
-                "action": {"type": "string", "enum": ["on", "off", "toggle"]}},
-                "required": ["device", "action"]}}},
-        {"type": "function", "function": {
-            "name": "home_status",
-            "description": "Get the current on/off state of the smart-home devices.",
-            "parameters": {"type": "object", "properties": {
-                "device": {"type": "string", "description": "one device; omit for all"}}}}},
-    ]
+# HA tools are kept SEPARATE and merged per-request by _active_tools(): HA config is runtime-mutable
+# (admin UI / DB), so an import-time `if ha.configured()` would freeze the menu — configuring HA via
+# the UI would never expose the tools to the model (the v2.5.0 bug).
+HA_TOOLS = [
+    {"type": "function", "function": {
+        "name": "home_control",
+        "description": "Turn a smart-home device (light, switch, plug) on or off, or toggle it.",
+        "parameters": {"type": "object", "properties": {
+            "device": {"type": "string", "description": "which device, e.g. 'kitchen light'"},
+            "action": {"type": "string", "enum": ["on", "off", "toggle"]}},
+            "required": ["device", "action"]}}},
+    {"type": "function", "function": {
+        "name": "home_status",
+        "description": "Get the current on/off state of the smart-home devices.",
+        "parameters": {"type": "object", "properties": {
+            "device": {"type": "string", "description": "one device; omit for all"}}}}},
+]
+
+
+def _active_tools():
+    """The tool menu offered to the model on THIS request — reflects live HA config."""
+    return TOOLS_SPEC + (HA_TOOLS if ha.configured() else [])
 
 
 def _tool_set_volume(args, raw_request):
@@ -1474,7 +1481,7 @@ def process_input(request: QueryRequest, raw_request: Request):
     t0 = time.time()
     with memory.Inflight():
         # One call with tools offered: the model either invokes a tool (a command) or just answers.
-        llm_resp = request_llm_tools(messages, TOOLS_SPEC, temperature=request.temperature, n_predict=max_tokens)
+        llm_resp = request_llm_tools(messages, _active_tools(), temperature=request.temperature, n_predict=max_tokens)
     t1 = time.time()
 
     msg = (llm_resp.get("choices") or [{}])[0].get("message", {})

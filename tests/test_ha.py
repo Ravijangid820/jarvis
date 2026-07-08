@@ -165,3 +165,18 @@ def test_settings_store_roundtrip(tmp_path, monkeypatch):
     assert db.get_setting("ha_url") == "http://x:8123"
     db.set_setting("ha_url", "http://y:8123")           # upsert
     assert db.get_setting("ha_url") == "http://y:8123"
+
+
+# --- the v2.5.0 regression: tools must reflect LIVE config, not import-time config ---
+
+def test_ha_tools_offered_only_when_configured(monkeypatch):
+    import main
+    monkeypatch.setattr(ha, "HA_URL", "")
+    monkeypatch.setattr(ha, "HA_TOKEN", "")
+    names = [t["function"]["name"] for t in main._active_tools()]
+    assert "set_volume" in names and "home_control" not in names
+    # configure at RUNTIME (what the admin UI does) -> tools appear on the next request
+    monkeypatch.setattr(ha, "HA_URL", "http://ha.test:8123")
+    monkeypatch.setattr(ha, "HA_TOKEN", "tok")
+    names = [t["function"]["name"] for t in main._active_tools()]
+    assert "home_control" in names and "home_status" in names

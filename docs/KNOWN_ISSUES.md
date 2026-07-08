@@ -33,6 +33,7 @@ today.)
 
 | Issue | Affected | Fixed in |
 |---|---|---|
+| **HA tools invisible to the LLM when configured via the Admin UI** — the tool menu was built at import time, so runtime (UI/DB) config never exposed `home_control`/`home_status`; devices showed in the UI but chat couldn't act | v2.5.0 | **v2.5.1** (menu computed per request via `_active_tools()`) |
 | Admin header shows "Jarvis **vunknown**" (`APP_VERSION` unresolvable — app isn't an installed package) | v2.3.x–v2.4.0 images | **v2.5.0** (reads `pyproject.toml` directly) |
 | Overriding `EMBED_MODEL` + own `HF_TOKEN` at runtime silently failed (offline switch triggered on *any* cached model) | ≤ v2.3.0 images | v2.3.1 |
 | Gated-embedding 401s / `HF_TOKEN` needed for memory | ≤ v2.3.1 | **v2.4.0** (public SHA-pinned ONNX bundle — no token, ever) |
