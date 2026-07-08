@@ -168,5 +168,15 @@ Every executing tool passes, in order:
   server-held token (5 s timeout, fail-soft);
 - the **audit log** (`device.volume`, `device.home_assistant`, …).
 
+Between the regex fast-path and the clarify guard sits the **semantic router** (`intent_router.py`):
+the utterance is embedded (the same ONNX embedder as RAG) and compared by cosine against per-device
+exemplar phrases — generic command templates plus function-class paraphrases ("it is hot in here" for
+a fan). Confident match (≥0.80) → act; plausible (≥0.63) → propose and ask ("Should I turn on the
+fan?" — a per-session pending proposal with a 2-minute TTL consumes the next yes/no); below → normal
+chat. Automations/scripts/scenes are never auto-fired from a fuzzy match (always confirm), an
+ambiguity margin refuses close calls, and the thresholds were calibrated against the real embedder
+(negative ceiling 0.627 vs positive floor 0.656). The exemplar index rebuilds in the background at
+startup and whenever the admin saves the allowlist.
+
 HA settings are runtime-mutable: startup loads them from the `app_settings` table (env vars win),
 and the admin **Smart Home** tab saves + applies them live via `ha.configure()` — no restart.

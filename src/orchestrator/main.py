@@ -20,6 +20,7 @@ import sqlite3
 import secrets
 import tarfile
 import tempfile
+import threading
 import time
 import urllib.request
 from pathlib import Path
@@ -47,6 +48,7 @@ from config import (ADMIN_MAX_INPUT, ALLOWED_ORIGINS, APP_VERSION, BASE_DIR, CHR
                     RATE_LIMIT_RPM, REACT_DIST_DIR, REGULAR_MAX_INPUT, REQUIRE_PRESENCE_FOR_CONTROL,
                     STATIC_DIR, VALID_FACT_CATEGORIES, logger)
 import ha
+import intent_router
 from db import get_db, get_setting, init_db, set_setting
 from llm import llm_content, request_llm, request_llm_stream, request_llm_tools, synthesize_tts
 
@@ -70,10 +72,18 @@ def _load_ha_settings():
         logger.warning("Could not load Home Assistant settings from DB: %s", e)
 
 
+def _rebuild_intent_router():
+    """Embed the router exemplars in the background (startup + whenever the allowlist changes)."""
+    if not (ha.configured() and ha.HA_ALLOWED_ENTITIES and memory.vectors_available()):
+        return
+    threading.Thread(target=intent_router.rebuild, args=(memory.embed_documents,), daemon=True).start()
+
+
 async def lifespan(app: FastAPI):
     init_db()
     _load_ha_settings()        # runtime HA config (env > DB), before anything serves
     memory.init_embeddings()   # load the model now (from cache), not at import time
+    _rebuild_intent_router()   # semantic device-intent index (needs both of the above)
     memory.start_embedding_worker()
     memory.start_memory_worker()
     logger.info("Jarvis Orchestrator started with Auth + Memory Core")
@@ -1124,6 +1134,12 @@ _LAST_HOME_ENTITY: Dict[str, Any] = {}   # session_id -> (entity_id, monotonic s
 _HOME_PRONOUNS = {"it", "that", "this", "that one", "them"}
 _LAST_HOME_TTL = 900                     # "it" stays meaningful for 15 minutes
 
+# Semantic-router proposals awaiting a yes/no ("Should I turn on the fan?"). Per session, short TTL.
+_PENDING_HOME: Dict[str, Any] = {}       # session_id -> (entity_id, action, monotonic seconds)
+_PENDING_TTL = 120
+_YES_RE = re.compile(r"^\s*(yes|yeah|yep|sure|ok|okay|please do|do it|go ahead|go for it)\b", re.I)
+_NO_RE = re.compile(r"^\s*(no|nah|nope|don'?t|do not|cancel|leave it|never mind|nevermind)\b", re.I)
+
 
 def _ha_act(entity: str, action: str):
     """Execute a validated (allowlisted) action. "run" EXECUTES automations/scripts/scenes; "stop"
@@ -1193,6 +1209,52 @@ def _handle_home_command(user_text: str, raw_request: Request, session_id: str) 
     ("turn my life around") are never hijacked. "it"/"that" refers to the session's last device."""
     if not ha.configured():
         return None
+
+    # 0) A semantic proposal awaiting yes/no? ("Should I turn on the fan?")
+    pending = _PENDING_HOME.pop(session_id, None)
+    if pending is not None and (time.monotonic() - pending[2]) < _PENDING_TTL:
+        p_entity, p_action, _ = pending
+        if _YES_RE.match(user_text):
+            if not _can_control_devices(raw_request):
+                return "Sorry — you're not authorized to control devices."
+            if REQUIRE_PRESENCE_FOR_CONTROL and not _authorized_person_present():
+                return "I don't see anyone authorized in the room, so I can't change that right now."
+            ok, eff = _ha_act(p_entity, p_action)
+            if not ok:
+                return "I couldn't reach Home Assistant to do that."
+            _LAST_HOME_ENTITY[session_id] = (p_entity, time.monotonic())
+            _audit(raw_request, "device.home_assistant", f"{p_action} {p_entity} (semantic, confirmed)")
+            return _ha_reply(p_entity, eff)
+        if _NO_RE.match(user_text):
+            return "Okay — leaving it as is."
+        # any other message: drop the proposal silently and process the message normally
+
+    def semantic_route():
+        # 2nd understanding layer: MEANING, not phrasings — embeds the utterance and compares it to
+        # per-device exemplars ("i'm melting in here" ≈ fan on). Costs one query embed (~175 ms);
+        # negligible next to the LLM turn it replaces or precedes.
+        if not intent_router.ready():
+            return None
+        r = intent_router.route(user_text, memory.embed_query)
+        if r is None:
+            return None
+        if not _can_control_devices(raw_request):
+            return None                    # don't tease users who can't control devices anyway
+        label, _, _ = _ha_label(r["entity"])
+        if r["decision"] == "act":
+            if REQUIRE_PRESENCE_FOR_CONTROL and not _authorized_person_present():
+                return "I don't see anyone authorized in the room, so I can't change that right now."
+            ok, eff = _ha_act(r["entity"], r["action"])
+            if not ok:
+                return "I couldn't reach Home Assistant to do that."
+            _LAST_HOME_ENTITY[session_id] = (r["entity"], time.monotonic())
+            _audit(raw_request, "device.home_assistant",
+                   f"{r['action']} {r['entity']} (semantic, {r['score']})")
+            return _ha_reply(r["entity"], eff)
+        _PENDING_HOME[session_id] = (r["entity"], r["action"], time.monotonic())
+        verb = "run" if r["action"] == "run" else f"turn {r['action']}"
+        return f"Should I {verb} {label}?"
+
     def clarify_or_none():
         # Anti-bluff guard: the message names an allowlisted device AND uses a control verb, but we
         # couldn't extract a clean (action, device) — ASK instead of returning None: None falls
@@ -1208,7 +1270,7 @@ def _handle_home_command(user_text: str, raw_request: Request, session_id: str) 
 
     cmd = parse_home_command(user_text)
     if cmd is None:
-        return clarify_or_none()
+        return semantic_route() or clarify_or_none()
     if cmd["device"].lower() in _HOME_PRONOUNS:
         last = _LAST_HOME_ENTITY.get(session_id)
         entity = last[0] if last and (time.monotonic() - last[1]) < _LAST_HOME_TTL else None
@@ -1220,7 +1282,7 @@ def _handle_home_command(user_text: str, raw_request: Request, session_id: str) 
     else:
         entity = ha.resolve_entity(cmd["device"])
     if entity is None:
-        return clarify_or_none()          # device-y + control verb → ask; else the LLM answers
+        return semantic_route() or clarify_or_none()   # meaning first; then the device-y ask; else LLM
     if not _can_control_devices(raw_request):
         return "Sorry — you're not authorized to control devices."
     if REQUIRE_PRESENCE_FOR_CONTROL and not _authorized_person_present():
@@ -1859,6 +1921,7 @@ def admin_ha_put(req: HAConfigRequest, request: Request):
     allowed = list(req.allowed_entities if req.allowed_entities is not None else ha.HA_ALLOWED_ENTITIES)
     set_setting("ha_allowed_entities", json.dumps(allowed))
     ha.configure(url=url, token=token, allowed=allowed)
+    _rebuild_intent_router()
     _audit(request, "ha.config", f"url={url or '(cleared)'} entities={len(allowed)}")
     return {"status": "ok", "configured": ha.configured(), "connected": ha.ping()}
 

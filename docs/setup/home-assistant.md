@@ -64,6 +64,8 @@ Native: fill the block in `config/jarvis.json` (or put the three vars in `.env`)
 ## 3. Use it
 - *"Turn on the test light"* → `Okay — the test light is now on.` (watch it flip in HA's dashboard)
 - *"Is the test light on?"* → `Test Light is on.`
+- *"I'm melting in here"* → `Should I turn on the desk fan?` → *"yes"* → done (the **semantic
+  router**: paraphrases match by meaning; confident ones act directly, plausible ones ask first).
 - *"Stop the morning automation"* → `Okay — I stopped the morning automation's current run. It stays enabled for next time.`
 - *"Disable the morning automation"* → `Okay — the morning automation is disabled. It won't run until you enable it again.`
 - *"Toggle the kitchen light"*, *"turn everything off"* → only allowlisted entities respond.

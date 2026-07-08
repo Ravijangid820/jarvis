@@ -4,6 +4,21 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-07-09 — semantic intent router: Jarvis understands paraphrases
+
+Layer 2 of de-hardcoding device commands (see FUTURE_IDEAS → Dynamic intent understanding):
+- New `intent_router.py`: the utterance is embedded with the SAME ONNX embedder RAG uses and compared
+  (cosine) against auto-generated per-device exemplars — generic command templates + function-class
+  paraphrases (fan → "it is hot in here"; light → "it is dark in here"; heater → "i am freezing").
+- Decisions: ≥0.80 act · ≥0.63 ask ("Should I turn on the desk fan?" — per-session proposal, 2-min
+  TTL, consumed by yes/no) · below → normal chat. Thresholds calibrated on the box against the real
+  embedder (10 negatives max 0.627; paraphrase positives 0.656–0.829).
+- Safety: routines (automation/script/scene) NEVER auto-fire from a fuzzy match — always confirmed;
+  ambiguity margin refuses close calls between entities; every execution passes the same allowlist +
+  authz + presence gates + audit log ("semantic" tag). Router off ⇒ regex + clarify guard unchanged.
+- Index rebuilds in the background at startup and on every Smart Home allowlist save.
+- 13 new tests (mechanics with deterministic fake embeddings + the confirmation flow). Suite: 118.
+
 ## v2.5.1 — 2026-07-09 — HA hardening round (from live user testing)
 
 Field-testing the HA feature as a user surfaced five defects, each fixed with a regression test:

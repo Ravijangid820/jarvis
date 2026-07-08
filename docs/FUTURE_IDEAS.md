@@ -11,7 +11,7 @@ This is a living document to track upcoming features, architectural shifts, and 
   all feeding the SAME executor (allowlist + `_can_control_devices` + presence + audit — proposal is
   never authorization, no matter which layer proposed):
   1. **Regex fast-path** (exists) — exact common phrasings, ~0 ms. Keep as layer 1.
-  2. **Semantic router — reuse the ONNX embedder we already run** (~175 ms/query): embed the user
+  2. **(DONE 2026-07-09)** Semantic router — reuses the ONNX embedder (~175 ms/query): embed the user
      utterance and compare (cosine) against pre-embedded exemplar phrases per intent+entity
      ("turn on the fan" ≈ "i'm melting in here" ≈ "some air please"). High similarity → act;
      medium → **confirm** ("Should I turn on the fan?"); low → fall through. No LLM call, no new

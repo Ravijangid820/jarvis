@@ -135,6 +135,20 @@ def _embed_query(text: str) -> List[List[float]]:
     return [vec[0].tolist()]
 
 
+# Public wrappers for other consumers (the semantic intent router) — same prefixes/normalization as
+# RAG, so similarity thresholds calibrated once hold everywhere. Raise if embeddings are disabled.
+def embed_documents(texts: List[str]) -> List[List[float]]:
+    if _embed_model is None:
+        raise RuntimeError("embeddings unavailable")
+    return _embed_documents(texts)
+
+
+def embed_query(text: str) -> List[List[float]]:
+    if _embed_model is None:
+        raise RuntimeError("embeddings unavailable")
+    return _embed_query(text)
+
+
 # --- Background embedding ---------------------------------------------------
 # Embedding a 300M model on a no-AVX2 CPU is hundreds of ms, so it must NOT run
 # inline in the chat request path. enqueue_embedding() hands off; this worker drains.
