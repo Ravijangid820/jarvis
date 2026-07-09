@@ -769,3 +769,58 @@ html[data-theme="ember"]    body { filter: hue-rotate(-156deg) saturate(1.2); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.001s !important; animation-iteration-count: 1 !important; }
 }
+
+/* ============================================================
+   MOBILE CALIBRATION — phones & small touch screens
+   (An override layer: desktop rules above stay untouched.)
+   ============================================================ */
+
+/* 100vh on mobile hides the composer behind the browser's address bar — dvh tracks the
+   *visible* viewport. Older browsers keep the vh fallback declared above. */
+.login-screen, .app-container, .adm { height: 100dvh; }
+@media (max-width: 768px) { .sidebar { height: 100dvh; } }
+
+/* Touch devices have no hover — message actions must be reachable without one. */
+@media (hover: none) {
+  .msg-actions { display: block; }
+}
+
+@media (max-width: 768px) {
+  /* --- iOS zoom-on-focus: any input under 16px makes Safari zoom the page --- */
+  .input-field, .login-input, .hud-input, .hud-textarea { font-size: 16px; }
+
+  /* --- Chat: reclaim horizontal space --- */
+  .messages-inner { padding: 0 12px; }
+  .input-area { padding: 10px 12px calc(12px + env(safe-area-inset-bottom)); }
+  .input-field { padding: 14px 84px 14px 14px; }
+  .message { gap: 10px; margin-bottom: 20px; }
+  .msg-avatar { width: 30px; height: 30px; font-size: 0.8rem; }
+  .msg-body { padding: 12px 14px; clip-path: none; border-radius: 8px; }
+  .msg-time { display: none; }                      /* timestamps crowd a 390px row */
+  .input-hint { display: none; }                    /* keyboard hints are meaningless on touch */
+  .hud-frame { display: none; }                     /* decorative corners overlap content */
+
+  /* --- Tap targets: 40px+ (Apple/Google guidance) --- */
+  .hud-btn { min-height: 40px; padding: 10px 12px; }
+  .sidebar-toggle { width: 40px; height: 40px; }
+  .login-btn, .login-input { min-height: 46px; }
+
+  /* --- Welcome screen: the wide-tracked title overflows --- */
+  .welcome-title { font-size: 1.3rem; letter-spacing: 0.18em; }
+}
+
+@media (max-width: 768px) {
+  /* --- Admin console --- */
+  .adm { padding: 14px 12px 40px; }
+  .adm-bar { flex-wrap: wrap; gap: 8px; }
+  .adm-title { font-size: 0.95rem; }
+  /* 7 tabs never fit — scroll them horizontally instead of clipping */
+  .adm-tabs { overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch;
+              scrollbar-width: none; }
+  .adm-tabs::-webkit-scrollbar { display: none; }
+  .adm-tab { padding: 12px 12px; font-size: 0.74rem; white-space: nowrap; flex-shrink: 0; }
+  /* wide tables (keys, devices, audit) scroll inside their panel, not the page */
+  .adm-panel { overflow-x: auto; }
+  .adm-panel table { min-width: 560px; }
+  .adm-panel .hud-input { min-height: 42px; }
+}

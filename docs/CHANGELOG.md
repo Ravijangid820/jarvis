@@ -4,6 +4,20 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## 2026-07-09 — web UI: mobile calibration pass
+
+Phone-reported: the UI wasn't calibrated for small/touch screens. A dedicated override layer at the
+end of index.css (desktop rules untouched):
+- **`100dvh`** for the app/login/admin/sidebar heights — the composer no longer hides behind the
+  mobile browser's address bar (the classic `100vh` bug).
+- **16px inputs on ≤768px** — kills iOS Safari's zoom-on-focus (several inputs were 11–14px).
+- Chat: tighter paddings, smaller avatars, square message bubbles, timestamps/keyboard-hints hidden,
+  decorative HUD corner frame off, `safe-area-inset-bottom` for gesture-nav phones.
+- Touch: 40px+ tap targets (buttons, sidebar toggle, login fields); message actions no longer
+  hover-gated on touch devices (`@media (hover: none)`).
+- Admin: the 7 tabs scroll horizontally instead of clipping; wide tables scroll inside their panel
+  (not the page); compact paddings; title bar wraps.
+
 ## 2026-07-09 — semantic intent router: Jarvis understands paraphrases
 
 Layer 2 of de-hardcoding device commands (see FUTURE_IDEAS → Dynamic intent understanding):
