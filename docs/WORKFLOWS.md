@@ -1,5 +1,7 @@
 # Workflows
 
+> Visual companion: **[DIAGRAMS.md](DIAGRAMS.md)** — each workflow below as a flow diagram.
+
 How the moving parts actually behave at runtime. File references point at the orchestrator
 modules under `src/orchestrator/`.
 

@@ -22,6 +22,8 @@ text-to-speech — running entirely on a 2011-era laptop in a Proxmox LXC. No cl
 - 🛡️ **Hardened by default** — non-root systemd services with strict sandboxing, a strict CSP, parameterized SQL, bounded input, and authorization enforced **in code, never by the LLM** (backed by a multi-round security audit).
 - 📷 **Edge vision (Raspberry Pi)** — optional on-device motion / face / pose / gesture detection that posts only small JSON events — **no video leaves the device**.
 - 🔌 **Device control** — authorized, outbound-only agents (e.g. volume) and **Home Assistant** smart-home control via narrow, allowlisted LLM tool-calling (token server-side, entity allowlist, audit-logged).
+- 🗣️ **Understands what you mean** — a layered intent pipeline: instant regex fast-paths, then a **semantic router** ("i'm melting in here" → fan) using the same local embedder as RAG — confident matches act, plausible ones ask first, and nothing ever bypasses code-side authorization.
+- 📱 **Phone-calibrated UI** — responsive from desktop to pocket: dvh-safe viewport, no iOS zoom-on-focus, 40px touch targets, scrollable admin tables, and guaranteed no-overflow containment.
 - 🧩 **Clean, tested codebase** — an acyclic module graph under pytest + ruff + CI, and a portable installer (run as root **or** a dedicated user, from any checkout path).
 
 ## Demo
@@ -264,6 +266,7 @@ Full docs live in **[docs/](docs/README.md)**:
 | Doc | What's in it |
 |---|---|
 | **Setup guides** → [server](docs/setup/server.md) · [Raspberry Pi](docs/setup/camera.md) · [volume agent](docs/setup/volume-agent.md) | Per-component install (root or dedicated user) |
+| [Diagrams](docs/DIAGRAMS.md) | Every flow, visually — system, intent ladder, RAG, HA, deploys |
 | [Architecture](docs/ARCHITECTURE.md) | Components, module graph, design decisions, security model |
 | [Workflows](docs/WORKFLOWS.md) | Chat lifecycle, prompt token-budgeting, RAG, fact extraction, voice loop |
 | [API Reference](docs/API.md) | Every HTTP endpoint, auth, request/response shapes |

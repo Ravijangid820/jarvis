@@ -75,7 +75,9 @@ specific); commit changes to [`config/jarvis.example.json`](../config/jarvis.exa
 Tunables that are **constants in code** (not config) live in `src/orchestrator/config.py`:
 `COMPLETION_RESERVE_DEFAULT`, `PROMPT_SAFETY_MARGIN`, `KNOWLEDGE_TOKEN_CAP`, `MIN_COMPLETION_TOKENS`,
 `RAG_DISTANCE_THRESHOLD`, `RAG_MAX_RESULTS`, `IDLE_THRESHOLD_SECONDS`, `FACT_DEDUP_SIM`, the embedding
-prefixes, and the Piper paths.
+prefixes, and the Piper paths. The semantic intent router's thresholds live in
+`src/orchestrator/intent_router.py` (`ACT_SIM=0.80`, `CONFIRM_SIM=0.63`, `AMBIGUITY_MARGIN=0.04`) —
+calibrated 2026-07-09 against the real embedder on the box (calibration data in the module docstring).
 
 **Home Assistant precedence:** env (`HA_URL`/`HA_TOKEN`/`HA_ALLOWED_ENTITIES`) → admin-UI values
 (stored in the `app_settings` DB table, applied live) → the `home_assistant` block above. Env-set

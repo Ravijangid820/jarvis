@@ -6,6 +6,8 @@ see [CHANGELOG.md](CHANGELOG.md); for published image tags see
 
 | Version | Date | Theme |
 |---|---|---|
+| **v2.6.0** | 2026-07-09 | **Semantic understanding + mobile** — the intent router (meaning, not phrasings) + a phone-calibrated UI |
+| v2.5.1 | 2026-07-09 | HA hardening round — eight live-testing fixes (fast-paths, pronouns, stop/enable semantics, anti-bluff, honest replies) |
 | **v2.5.0** | 2026-07-08 | **Home Assistant** — smart-home control via allowlisted LLM tools + Smart Home admin UI |
 | **v2.4.0** | 2026-07-07 | **Torch-free embeddings** — ONNX runtime everywhere; no HF token; −2 GB images |
 | v2.3.1 | 2026-07-03 | Patch: `.env` everywhere, per-artifact install guides, embedding-override fix |
@@ -46,6 +48,18 @@ sentence-transformers pipeline was exported to a single ONNX graph (verified cos
 token held server-side (from a dedicated non-admin HA user), entity allowlist enforced in code,
 ambiguity refused, every action audited — plus the Smart Home admin tab (URL/token + Test connection +
 a device picker pulled live from HA, saved to the DB, applied without a restart).
+
+**v2.5.1 — harden it like a user.** One live testing session surfaced eight real defects — frozen
+tool menus, a toolless streaming path that let the 2B model *invent* acks, missing pronouns and verbs,
+wrong stop-vs-disable semantics, terse ambiguous replies. Each became a regression test; the last fix
+(the anti-bluff guard) closed the failure *class*, not just the instance.
+
+**v2.6.0 — understand, and fit in a pocket.** The semantic intent router: utterances are embedded with
+the same local ONNX embedder RAG uses and compared against per-device exemplar phrases, so "i'm
+melting in here" turns on the fan — confident matches act, plausible ones ask first, routines always
+confirm, and the thresholds were calibrated against the real embedder on the production box. Plus a
+full mobile calibration of the web UI (dvh viewport, 16px inputs, touch targets, containment). Test
+suite: 74 → 118 across the v2.5–v2.6 arc.
 
 ## How releases work
 - Bump `pyproject.toml` → tag `vX.Y.Z` → GitHub Actions builds `jarvis-combined` +

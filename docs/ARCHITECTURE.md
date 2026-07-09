@@ -1,5 +1,7 @@
 # Architecture
 
+> Visual companion: **[DIAGRAMS.md](DIAGRAMS.md)** renders every flow on this page as a diagram.
+
 Jarvis is a fully self-hosted, offline voice + text assistant. Everything — the LLM, speech-to-text,
 embeddings, memory, and text-to-speech — runs on a single 2011-era laptop in a Proxmox LXC. No cloud.
 
@@ -51,7 +53,7 @@ events + pulls its enrolled set; opens no port). See [DEPLOY.md](DEPLOY.md).
 ## Orchestrator module graph
 
 `main.py` was deliberately split into small, single-responsibility modules with an **acyclic**
-import graph (`config → {db, auth, llm, ha} → memory → chat → main`):
+import graph (`config → {db, auth, llm, ha} → memory → {chat, intent_router} → main`):
 
 ```
 config.py   configuration, tunables, logging        (no app deps)
@@ -60,6 +62,8 @@ config.py   configuration, tunables, logging        (no app deps)
   ├─ ha.py      Home Assistant REST client + entity-allowlist guardrails (runtime-configurable)
   ├─ onnx_embed.py  torch-free embedder (onnxruntime + tokenizers; used by memory)
   └─ llm.py     LLM HTTP client (blocking/stream) + Piper TTS
+        └─ intent_router.py  semantic device-intent router (embeds utterances vs per-device
+                             exemplars via memory's embedder; calibrated act/confirm thresholds)
         └─ memory.py   embeddings, ChromaDB, knowledge base, idle fact extraction,
         │              request-activity / in-flight tracking
               └─ chat.py    sessions, message persistence, context-window prompt assembly

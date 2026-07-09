@@ -35,6 +35,7 @@ machines with independent environments).
 
 | Doc | What's in it |
 |---|---|
+| [DIAGRAMS.md](DIAGRAMS.md) | **Every flow as a diagram** — system, intent ladder, chat lifecycle, RAG, HA verbs, auth gates, deploys (GitHub-rendered mermaid) |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Components, the orchestrator module graph, design decisions, security model |
 | [WORKFLOWS.md](WORKFLOWS.md) | Runtime flows: chat request lifecycle, prompt token-budgeting, RAG, fact extraction, the voice loop, auth |
 | [API.md](API.md) | Full HTTP endpoint reference (auth, chat, sessions, knowledge, admin, camera/vision events, device control) |
