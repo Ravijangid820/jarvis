@@ -831,3 +831,30 @@ html[data-theme="ember"]    body { filter: hue-rotate(-156deg) saturate(1.2); }
   .chat-reactor-bg svg { width: min(72vw, 300px); height: min(72vw, 300px); }
   .chat-reactor-bg { filter: drop-shadow(0 0 20px var(--holo-cyan-glow)); }
 }
+
+/* ============================================================
+   VIEWPORT CONTAINMENT — nothing may exceed the visible screen
+   (kills the phantom right/bottom pan space on phones)
+   ============================================================ */
+html { height: 100%; overflow: hidden; }
+/* 100vw includes scrollbar/pinch gutters; 100vh overshoots the mobile visual viewport. */
+body { width: 100%; height: 100vh; height: 100dvh; }
+#root { width: 100%; height: 100%; overflow: hidden; }
+.app-container { width: 100%; }
+/* Flex children default to min-width:auto — a too-wide row (top-bar, a long unbroken string)
+   silently widens the whole layout past the screen. Force them shrinkable + wrap long content. */
+.main-area { min-width: 0; }
+.top-bar { min-width: 0; overflow: hidden; }
+.messages { overflow-x: hidden; }
+.msg-content { overflow-wrap: anywhere; }
+
+@media (max-width: 768px) {
+  /* Top bar: 7 items never fit at desktop spacing — compact + drop the nonessentials */
+  .top-bar { gap: 8px; padding: 0 10px; }
+  .top-title { font-size: 0.78rem; letter-spacing: 0.08em; white-space: nowrap; }
+  .top-speed { display: none; }               /* tok/s readout — desktop nicety */
+  .cmd-btn { display: none; }                 /* ⌘K palette hint — keyboard-only concept */
+}
+@media (max-width: 480px) {
+  .top-model { display: none; }               /* model badge — visible in Admin instead */
+}
