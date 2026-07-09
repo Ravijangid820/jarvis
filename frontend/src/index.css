@@ -824,3 +824,10 @@ html[data-theme="ember"]    body { filter: hue-rotate(-156deg) saturate(1.2); }
   .adm-panel table { min-width: 560px; }
   .adm-panel .hud-input { min-height: 42px; }
 }
+
+@media (max-width: 768px) {
+  /* Ambient arc reactor: the 560px SVG is wider than a phone screen — scale it to the
+     viewport (72vw, capped) so it reads as a background emblem again, not a wall. */
+  .chat-reactor-bg svg { width: min(72vw, 300px); height: min(72vw, 300px); }
+  .chat-reactor-bg { filter: drop-shadow(0 0 20px var(--holo-cyan-glow)); }
+}
