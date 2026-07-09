@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## v2.6.0 — 2026-07-09 — semantic understanding + a UI that fits in your pocket
+
+Two threads, detailed in the dated sections below:
+- **Semantic intent router** — device commands understood by MEANING ("i'm melting in here" → fan),
+  using the RAG ONNX embedder; calibrated live; confident → acts, plausible → asks, routines always
+  confirmed; same allowlist/authz/audit as every layer.
+- **Mobile calibration** — dvh viewport (no hidden composer), 16px inputs (no iOS zoom), 40px touch
+  targets, scrollable admin tabs/tables, viewport-scaled arc reactor, adaptive top-bar, and a
+  containment layer guaranteeing nothing exceeds the visible screen.
+
 ## 2026-07-09 — web UI: mobile calibration pass
 
 Phone-reported: the UI wasn't calibrated for small/touch screens. A dedicated override layer at the
