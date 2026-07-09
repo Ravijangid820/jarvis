@@ -50,4 +50,14 @@ This is a living document to track upcoming features, architectural shifts, and 
 
 ## Networking / Infrastructure
 *(operator-facing symptoms of these live in [KNOWN_ISSUES.md](KNOWN_ISSUES.md))*
+- **Friendly name for the UI via local DNS (Pi-hole or router DNS)** (filed 2026-07-09): today the UI
+  is reached by IP (`https://192.168.0.101:5000`); the TLS cert already carries `DNS:jarvis` +
+  `DNS:jarvis.local` SANs, and laptops can use a hosts-file entry now. For every device (phones
+  included) WITHOUT touching the tight `:5000` firewall: run a local DNS resolver — **Pi-hole as
+  another Proxmox container** fits the pattern — mapping e.g. `jarvis.home → 192.168.0.101`, and set
+  it as the tailnet's split-DNS server so remote devices resolve it too (reachability still flows
+  through the subnet router; DNS only names things, it never touches traffic). Add the chosen name to
+  the cert via `TLS_HOSTS=... setup_tls.sh`. **Decision note on reverse proxies:** considered and NOT
+  needed here — one service, already HTTPS-direct, firewall already provides a single ingress; a proxy
+  would add a component/attack surface with no benefit until the box hosts multiple web apps.
 - **Box outbound reachability to off-LAN devices — put the box on Tailscale** (KNOWN LIMITATION, hit 2026-07-07 during HA testing): the box is reachable *inbound* from anywhere via a Tailscale **subnet router** (the LAN gateway `192.168.0.100` advertises `192.168.0.0/24` into the tailnet and SNATs, so a remote laptop can open the Jarvis UI). But the box itself is **not a tailnet node** — it only has its LAN `eth0` — so it can *reply* to inbound connections yet **cannot initiate outbound** to a device on another network (a Tailscale-only laptop, or HA/camera agents on a different subnet/hotspot). Concretely: box `192.168.0.101` could not reach HA on a laptop that was on a mobile hotspot (`172.28.29.0/24`); **resolved by running HA on the box's LAN instead** (the production topology anyway). Future fix so the box can reach edge devices wherever they live (HA, cameras, volume/voice agents on other networks — also relevant to the edge-voice roadmap): install Tailscale in the LXC (`/dev/net/tun`, or userspace mode) so the box gets a real tailnet interface; then target the device's `100.x` tailnet IP. Alternative without making the box a node: a static `100.64.0.0/10 via <subnet-router-LAN-IP>` route on the box **plus** the subnet router configured to forward LAN→tailnet and Tailscale ACLs allowing it (fiddlier). The subnet-router path is inbound-only *by design* (return traffic rides NAT state), so one of these is required for box-initiated outbound.
