@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useId, useMemo, memo } from 'react'
 import './index.css'
 import Admin from './Admin'
 
-const API = ""
+const API = import.meta.env.VITE_API_URL || ""
 
 // Arc reactor — Mark I "PROOF THAT TONY STARK HAS A HEART" style: a brushed-steel ring with engraved
 // text, alternating copper wound coils + blue-glow panels, a bolt ring, and a layered blue core.
@@ -970,7 +970,7 @@ function App() {
   // Admin console lives at /admin within the SPA (so it inherits HUD styling + theme).
   if (window.location.pathname === "/admin") {
     if (role !== "admin") { window.location.href = "/"; return null }
-    return <Admin token={token} onExit={() => { window.location.href = "/" }} />
+    return <Admin token={token} onExit={() => { window.location.href = "/" }} apiBase={API} />
   }
 
   return (

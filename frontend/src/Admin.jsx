@@ -14,7 +14,7 @@ const TABS = [
 
 const KNOWLEDGE_CATEGORIES = ["home", "household", "rooms", "devices", "people", "location", "other"]
 
-export default function Admin({ token, onExit }) {
+export default function Admin({ token, onExit, apiBase = "" }) {
   const [tab, setTab] = useState("overview")
   const [stats, setStats] = useState({})
   const [users, setUsers] = useState([])
@@ -58,7 +58,7 @@ export default function Admin({ token, onExit }) {
   const api = async (path, method = "GET", body) => {
     const opts = { method, headers: { Authorization: "Bearer " + token } }
     if (body) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body) }
-    const r = await fetch(path, opts)
+    const r = await fetch(apiBase + path, opts)
     if (!r.ok) {
       if (r.status === 401 || r.status === 403) { onExit(); return {} }
       const d = await r.json().catch(() => ({}))
@@ -142,7 +142,7 @@ export default function Admin({ token, onExit }) {
     const ctrl = new AbortController()
     const stream = async () => {
       try {
-        const res = await fetch(`/faces/enroll-preview-stream?request_id=${activeReqId}`,
+        const res = await fetch(`${apiBase}/faces/enroll-preview-stream?request_id=${activeReqId}`,
           { headers: { Authorization: "Bearer " + token }, signal: ctrl.signal })
         if (!res.ok || !res.body) return
         const reader = res.body.getReader(), dec = new TextDecoder()
@@ -285,7 +285,7 @@ export default function Admin({ token, onExit }) {
   }
   const downloadBackup = async (name) => {
     try {
-      const res = await fetch("/admin/backups/" + encodeURIComponent(name), { headers: { Authorization: "Bearer " + token } })
+      const res = await fetch(apiBase + "/admin/backups/" + encodeURIComponent(name), { headers: { Authorization: "Bearer " + token } })
       if (!res.ok) throw new Error("Download failed")
       const url = URL.createObjectURL(await res.blob())
       const a = document.createElement("a"); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove()
