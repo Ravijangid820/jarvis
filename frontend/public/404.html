@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>J.A.R.V.I.S</title>
+    <script>
+      // GitHub Pages SPA redirect: preserve the path as a query parameter so
+      // index.html can restore it via History API. Based on the spa-github-pages
+      // technique (MIT). Without this, direct links to /admin or deep routes 404.
+      var pathSegmentsToKeep = 1; // keep '/jarvis' prefix
+      var l = window.location;
+      l.replace(
+        l.protocol + '//' + l.hostname + (l.port ? ':' + l.port : '') +
+        l.pathname.split('/').slice(0, 1 + pathSegmentsToKeep).join('/') + '/?/' +
+        l.pathname.slice(1).split('/').slice(pathSegmentsToKeep).join('/').replace(/&/g, '~and~') +
+        (l.search ? '&' + l.search.slice(1).replace(/&/g, '~and~') : '') +
+        l.hash
+      );
+    </script>
+  </head>
+  <body></body>
+</html>
