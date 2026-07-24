@@ -11,7 +11,7 @@ name: Deploy frontend to GitHub Pages
 
 on:
   push:
-    branches: [main, github-pages-deploy]
+    branches: [main, production-setup, github-pages-deploy]
   workflow_dispatch:      # manual trigger from Actions tab
 
 permissions:

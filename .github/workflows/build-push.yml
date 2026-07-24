@@ -18,6 +18,7 @@ on:
         required: true
         default: "test"
   push:
+    branches: ["main", "production-setup"]
     tags: ["v*"]
 
 permissions:

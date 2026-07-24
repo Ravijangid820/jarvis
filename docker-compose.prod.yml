@@ -1,0 +1,57 @@
+# Jarvis — Production Compose Stack (Split Backend).
+#
+# Dedicated stack for the orchestrator + LLM inference engine.
+# Designed for production deployments where container interconnectivity,
+# CORS origins, and credentials are configured dynamically via environment variables.
+#
+# Usage:
+#   1. Copy template:  cp .env.prod.example .env.prod
+#   2. Edit variables: nano .env.prod
+#   3. Run container:  docker compose --env-file .env.prod -f docker-compose.prod.yml up -d
+#
+
+services:
+  # --- LLM: Upstream llama.cpp server ---
+  llama:
+    image: ${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server}
+    command: >
+      -m /models/${LLM_MODEL:-Qwen3.5-2B-Q4_K_M.gguf}
+      -c ${LLM_CTX:-4096}
+      -t ${LLAMA_THREADS:-4}
+      --host 0.0.0.0 --port 8081 --parallel 1
+    volumes:
+      - ${MODELS_DIR:-./models}:/models:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+
+  # --- Orchestrator: App API + RAG + Auth + TTS ---
+  orchestrator:
+    image: ${ORCH_IMAGE:-ghcr.io/ravijangid820/jarvis-orchestrator:latest}
+    depends_on:
+      llama:
+        condition: service_healthy
+    environment:
+      - JARVIS_FAST_BRAIN_URL=${JARVIS_FAST_BRAIN_URL:-http://llama:8081/v1/chat/completions}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:5000}
+      - EMBED_MODEL=${EMBED_MODEL:-google/embeddinggemma-300m}
+      - HA_URL=${HA_URL:-}
+      - HA_TOKEN=${HA_TOKEN:-}
+      - HA_ALLOWED_ENTITIES=${HA_ALLOWED_ENTITIES:-}
+      - ADMIN_USER=${ADMIN_USER:-admin}
+      - ADMIN_PASS=${ADMIN_PASS:-admin}
+      - HOST_PORT=${HOST_PORT:-5000}
+    ports:
+      - "${HOST_PORT:-5000}:5000"
+    volumes:
+      - ${CONFIG_DIR:-./config}:/app/config
+      - ${TLS_DIR:-./tls}:/app/tls:ro
+      - jarvis-prod-data:/app/memory
+    restart: unless-stopped
+
+volumes:
+  jarvis-prod-data:
