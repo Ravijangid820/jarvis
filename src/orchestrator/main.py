@@ -182,11 +182,13 @@ def _apply_security_headers(response: Response, cache: str = "no-store") -> Resp
 @app.middleware("http")
 async def security_middleware(request: Request, call_next):
     path = request.url.path
-    if (request.method == "OPTIONS" or path in ["/health", "/", "/admin", "/auth/login", "/favicon.svg", "/ca.crt"]
-            or path.startswith("/static/") or path.startswith("/assets/")):
+    if (request.method == "OPTIONS" 
+            or path in ["/health", "/", "/admin", "/auth/login", "/favicon.svg", "/ca.crt"]
+            or path.endswith("/favicon.svg") or path.endswith("/ca.crt")
+            or "/static/" in path or "/assets/" in path):
         resp = await call_next(request)
         # Vite emits content-hashed bundles under /assets — safe to cache forever.
-        if path.startswith("/assets/"):
+        if "/assets/" in path:
             return _apply_security_headers(resp, "public, max-age=31536000, immutable")
         return _apply_security_headers(resp)
 
