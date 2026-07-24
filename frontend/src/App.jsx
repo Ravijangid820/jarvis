@@ -385,11 +385,13 @@ function App() {
 
   // --- Initialization ---
   useEffect(() => {
+    checkHealth()
+    const healthInterval = setInterval(checkHealth, 10000)
     if (token) {
-      checkHealth()
       loadSessions()
       loadHistory("default")
     }
+    return () => clearInterval(healthInterval)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run on auth change only
   }, [token])
 
@@ -596,7 +598,11 @@ function App() {
       setUsername("")
       setPassword("")
     } catch (e) {
-      setLoginError(e.message)
+      if (e.message.includes("Failed to fetch") || e.name === "TypeError") {
+        setLoginError("Backend server is offline or unreachable. Verify your backend container status.")
+      } else {
+        setLoginError(e.message)
+      }
     } finally {
       setLoginStatus("Initialize")
     }
@@ -958,6 +964,18 @@ function App() {
         <div className="login-box">
           <ArcReactor size={64} className="login-reactor" />
           <div className="login-label">System Authorization</div>
+          <div style={{
+            fontSize: "0.75rem", letterSpacing: "1px", margin: "-6px 0 12px 0", textTransform: "uppercase",
+            color: isOnline ? "var(--active-green, #4ade80)" : "var(--alert-orange, #f97316)",
+            display: "flex", alignItems: "center", justifyContent: "center", gap: "6px"
+          }}>
+            <span style={{
+              width: "6px", height: "6px", borderRadius: "50%",
+              backgroundColor: isOnline ? "var(--active-green, #4ade80)" : "var(--alert-orange, #f97316)",
+              boxShadow: isOnline ? "0 0 8px #4ade80" : "0 0 8px #f97316"
+            }} />
+            <span>{isOnline ? "Backend Container Online" : "Backend Standby / Offline"}</span>
+          </div>
           <input className="login-input" value={username} onChange={e=>setUsername(e.target.value)} placeholder="Identifier" />
           <input className="login-input" type="password" value={password} onChange={e=>setPassword(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')doLogin()}} placeholder="Access Code" />
           <button className="login-btn" onClick={doLogin}>{loginStatus}</button>
