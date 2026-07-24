@@ -45,7 +45,6 @@ jobs:
         working-directory: frontend
         env:
           VITE_BASE_PATH: /jarvis/
-          VITE_DEMO_MODE: "true"
           # Uncomment and set when the backend is publicly reachable:
           # VITE_API_URL: https://api.ravi-mk42.me
         run: npm run build

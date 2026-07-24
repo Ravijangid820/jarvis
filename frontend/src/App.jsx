@@ -3,7 +3,6 @@ import './index.css'
 import Admin from './Admin'
 
 const API = import.meta.env.VITE_API_URL || ""
-const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === "true"
 
 // Arc reactor — Mark I "PROOF THAT TONY STARK HAS A HEART" style: a brushed-steel ring with engraved
 // text, alternating copper wound coils + blue-glow panels, a bolt ring, and a layered blue core.
@@ -953,7 +952,7 @@ function App() {
     )
   }
 
-  if (!token && !DEMO_MODE) {
+  if (!token) {
     return (
       <div className="login-overlay" style={{display: 'flex'}}>
         <div className="login-box">
@@ -991,20 +990,7 @@ function App() {
           ))}
         </div>
       )}
-      {DEMO_MODE && (
-        <div style={{
-          position: "fixed", top: 0, left: 0, right: 0, zIndex: 999,
-          background: "linear-gradient(135deg, rgba(103,199,235,0.15), rgba(30,60,90,0.2))",
-          backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)",
-          borderBottom: "1px solid rgba(103,199,235,0.3)",
-          padding: "8px 16px", display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
-          fontFamily: "'Rajdhani', sans-serif", fontSize: "0.85rem", letterSpacing: "1px", color: "var(--holo-cyan, #67c7eb)"
-        }}>
-          <span style={{ opacity: 0.7 }}>◆</span>
-          <span><strong>DEMO MODE</strong> — UI showcase only · backend not connected · <a href="https://github.com/Ravijangid820/jarvis" target="_blank" rel="noopener noreferrer" style={{ color: "inherit", textDecoration: "underline" }}>View source on GitHub</a></span>
-          <span style={{ opacity: 0.7 }}>◆</span>
-        </div>
-      )}
+
       {/* Ambient parallax particle field — three drifting layers for depth. */}
       <div className="ambient-particles" aria-hidden="true">
         <span className="pfield p1" /><span className="pfield p2" /><span className="pfield p3" />
