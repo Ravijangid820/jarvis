@@ -12,6 +12,9 @@ name: Deploy frontend to GitHub Pages
 on:
   push:
     branches: [main, production-setup, github-pages-deploy]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/deploy-pages.yml'
   workflow_dispatch:      # manual trigger from Actions tab
 
 permissions:

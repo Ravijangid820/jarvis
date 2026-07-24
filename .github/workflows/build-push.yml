@@ -1,14 +1,9 @@
 name: Build & push images (GHCR)
 
-# Builds Jarvis' images on GitHub's runners (fast network — no big upload from your laptop) and pushes
-# them to GitHub Container Registry. We do NOT compile llama.cpp: the combined image is built ON the
-# official ghcr.io/ggml-org/llama.cpp:server image. Two images are published:
-#   • jarvis-combined     — self-contained single container (official llama + orchestrator + models)
-#   • jarvis-orchestrator — slim app only (for the two-service split; pairs with the official llama image)
-# Trigger manually (Actions → Run workflow) or by pushing a v* tag → image X.Y.Z + latest.
-#
-# No secrets required: the LLM GGUF and the torch-free ONNX embedding bundle are both public,
-# pinned + SHA-256-verified downloads (see docs/setup/docker.md).
+# Optimized CI/CD Workflow:
+# Uses path-filtering and GitHub Actions Docker layer caching (type=gha)
+# so container images are ONLY rebuilt when their relevant source files change,
+# and unchanged Docker build layers are reused instantly in ~5 seconds.
 
 on:
   workflow_dispatch:
@@ -18,7 +13,7 @@ on:
         required: true
         default: "test"
   push:
-    branches: ["main", "production-setup"]
+    branches: ["production-setup"]
     tags: ["v*"]
 
 permissions:
@@ -26,15 +21,51 @@ permissions:
   packages: write
 
 jobs:
-  # ---- jarvis-combined: single self-contained container, built ON the official llama image ----
+  # ---- Detect changed paths to skip unnecessary container builds ----
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      combined: ${{ steps.filter.outputs.combined }}
+      orchestrator: ${{ steps.filter.outputs.orchestrator }}
+      llama: ${{ steps.filter.outputs.llama }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            combined:
+              - 'Dockerfile.combined'
+              - 'src/**'
+              - 'config/**'
+              - 'pyproject.toml'
+              - 'uv.lock'
+            orchestrator:
+              - 'Dockerfile.orchestrator'
+              - 'src/**'
+              - 'config/**'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - 'docker/**'
+            llama:
+              - 'Dockerfile.llama'
+              - 'models/**'
+            frontend:
+              - 'Dockerfile.frontend'
+              - 'frontend/**'
+              - 'docker/nginx.conf'
+
+  # ---- jarvis-combined: single self-contained container ----
   build-combined:
+    needs: changes
+    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') || needs.changes.outputs.combined == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Free up disk space
         run: |
-          # baked LLM + ONNX embedding bundle need ~10-15 GB during the build; a runner has ~14 GB free.
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/lib/android \
                       /opt/hostedtoolcache /usr/local/share/boost /usr/share/swift || true
           sudo apt-get clean || true
@@ -55,12 +86,9 @@ jobs:
           owner="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
           image="ghcr.io/${owner}/jarvis-combined"
           if [ "${{ github.event_name }}" = "push" ]; then
-            # Release (v* tag): version + latest.
             ver="${GITHUB_REF_NAME#v}"
             echo "tags=${image}:${ver},${image}:latest" >> "$GITHUB_OUTPUT"
           else
-            # Manual/test build (possibly from a branch): ONLY the given tag — never touches :latest,
-            # so running deployments that pull :latest can't receive an untested build.
             echo "tags=${image}:${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
           fi
 
@@ -71,6 +99,8 @@ jobs:
           file: Dockerfile.combined
           push: true
           tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
           build-args: |
             LLM_GGUF_URL=https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf
@@ -78,8 +108,10 @@ jobs:
 
       - run: echo "Pushed ${{ steps.meta.outputs.tags }}  (single-container all-in-one)" >> "$GITHUB_STEP_SUMMARY"
 
-  # ---- jarvis-orchestrator: slim app image for the two-service split ----
+  # ---- jarvis-orchestrator: pure backend API image ----
   build-orchestrator:
+    needs: changes
+    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') || needs.changes.outputs.orchestrator == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -106,28 +138,29 @@ jobs:
           owner="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
           image="ghcr.io/${owner}/jarvis-orchestrator"
           if [ "${{ github.event_name }}" = "push" ]; then
-            # Release (v* tag): version + latest.
             ver="${GITHUB_REF_NAME#v}"
             echo "tags=${image}:${ver},${image}:latest" >> "$GITHUB_OUTPUT"
           else
-            # Manual/test build (possibly from a branch): ONLY the given tag — never touches :latest,
-            # so running deployments that pull :latest can't receive an untested build.
             echo "tags=${image}:${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build & push jarvis-orchestrator (slim, no LLM)
+      - name: Build & push jarvis-orchestrator
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile.orchestrator
           push: true
           tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
 
-      - run: echo "Pushed ${{ steps.meta.outputs.tags }}  (slim orchestrator — needs a llama backend)" >> "$GITHUB_STEP_SUMMARY"
+      - run: echo "Pushed ${{ steps.meta.outputs.tags }}  (pure backend API orchestrator)" >> "$GITHUB_STEP_SUMMARY"
 
   # ---- jarvis-llama: pre-baked LLM inference engine image ----
   build-llama:
+    needs: changes
+    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') || needs.changes.outputs.llama == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -167,6 +200,8 @@ jobs:
           file: Dockerfile.llama
           push: true
           tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
           build-args: |
             LLM_GGUF_URL=https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf
@@ -176,6 +211,8 @@ jobs:
 
   # ---- jarvis-frontend: standalone Nginx container image ----
   build-frontend:
+    needs: changes
+    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') || needs.changes.outputs.frontend == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -208,8 +245,8 @@ jobs:
           file: Dockerfile.frontend
           push: true
           tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
 
       - run: echo "Pushed ${{ steps.meta.outputs.tags }}  (standalone Nginx web server)" >> "$GITHUB_STEP_SUMMARY"
-
-
