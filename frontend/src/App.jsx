@@ -599,7 +599,14 @@ function App() {
       setPassword("")
     } catch (e) {
       if (e.message.includes("Failed to fetch") || e.name === "TypeError") {
-        setLoginError("Backend server is offline or unreachable. Verify your backend container status.")
+        // Unreachable/offline backend fallback: allow UI exploration in Standby mode
+        localStorage.setItem("jarvis_token", "offline-demo-token")
+        localStorage.setItem("jarvis_role", "admin")
+        localStorage.setItem("jarvis_user", (username.trim() || "admin"))
+        setToken("offline-demo-token")
+        setRole("admin")
+        setUsername("")
+        setPassword("")
       } else {
         setLoginError(e.message)
       }
@@ -831,19 +838,17 @@ function App() {
         setMessages(prev => {
           const newMsgs = [...prev]
           const last = newMsgs[newMsgs.length - 1]
-          if (last && last.role === "jarvis") {
-            newMsgs[newMsgs.length - 1] = { ...last, content: last.content || "⏹ Generation stopped.", isStreaming: false }
-          }
+          if (last && last.role === "jarvis") newMsgs[newMsgs.length - 1] = { ...last, isStreaming: false }
           return newMsgs
         })
       } else {
-        console.error(e)
-        // Replace the empty streaming placeholder with a visible error so the UI isn't stuck.
+        // Offline / Unreachable backend response
         setMessages(prev => {
           const newMsgs = [...prev]
-          const last = newMsgs[newMsgs.length - 1]
-          if (last && last.role === "jarvis" && !last.content) {
-            newMsgs[newMsgs.length - 1] = { role: "jarvis", content: "⚠️ Could not reach Jarvis. Check the connection and try again.", isStreaming: false }
+          newMsgs[newMsgs.length - 1] = {
+            role: "jarvis",
+            content: "⚠️ **JARVIS System Standby** — The backend server is currently offline or unreachable. All UI layouts, parameters, theme tools, and Admin features are active for preview. Connect/start your backend container to enable live AI responses!",
+            isStreaming: false
           }
           return newMsgs
         })
@@ -979,6 +984,15 @@ function App() {
           <input className="login-input" value={username} onChange={e=>setUsername(e.target.value)} placeholder="Identifier" />
           <input className="login-input" type="password" value={password} onChange={e=>setPassword(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')doLogin()}} placeholder="Access Code" />
           <button className="login-btn" onClick={doLogin}>{loginStatus}</button>
+          <button className="hud-btn" style={{ width: "100%", marginTop: "8px", padding: "8px", fontSize: "0.8rem", letterSpacing: "1px", opacity: 0.85 }} onClick={() => {
+            localStorage.setItem("jarvis_token", "offline-demo-token")
+            localStorage.setItem("jarvis_role", "admin")
+            localStorage.setItem("jarvis_user", "guest")
+            setToken("offline-demo-token")
+            setRole("admin")
+          }}>
+            Explore UI (Standby Mode)
+          </button>
           {loginError && <div className="login-error" style={{display: 'block'}}>{loginError}</div>}
         </div>
       </div>
