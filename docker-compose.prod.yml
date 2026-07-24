@@ -1,7 +1,7 @@
-# Jarvis — Production Compose Stack (Pure Backend Microservices Split).
+# Jarvis — Production Compose Stack (3-Microservice Tier).
 #
-# Dedicated stack for the orchestrator backend + pre-baked llama inference engine.
-# Zero model downloads or build steps required on the host server.
+# Flexible stack supporting both CDN-backed public deployments and
+# 100% offline self-hosted 3-container setups.
 #
 # Usage:
 #   1. Copy template:  cp .env.prod.example .env.prod
@@ -10,7 +10,7 @@
 #
 
 services:
-  # --- LLM: Dedicated Pre-Baked Inference Engine Container ---
+  # --- 1. LLM: Dedicated Pre-Baked Inference Engine Container ---
   llama:
     image: ${LLAMA_IMAGE:-ghcr.io/ravijangid820/jarvis-llama:latest}
     healthcheck:
@@ -21,7 +21,7 @@ services:
       start_period: 60s
     restart: unless-stopped
 
-  # --- Orchestrator: Pure Python API + RAG + Auth + TTS ---
+  # --- 2. Orchestrator: Pure Python API + RAG + Auth + TTS ---
   orchestrator:
     image: ${ORCH_IMAGE:-ghcr.io/ravijangid820/jarvis-orchestrator:latest}
     depends_on:
@@ -44,6 +44,16 @@ services:
       - ${TLS_DIR:-./tls}:/app/tls:ro
       - jarvis-prod-data:/app/memory
     restart: unless-stopped
+
+  # --- 3. Frontend: Optional Nginx Web Server (For 100% offline self-hosting) ---
+  # Enable if you want a local Nginx web server instead of CDN (GitHub/Cloudflare Pages)
+  # frontend:
+  #   image: ${FRONTEND_IMAGE:-ghcr.io/ravijangid820/jarvis-frontend:latest}
+  #   ports:
+  #     - "${FRONTEND_PORT:-80}:80"
+  #   depends_on:
+  #     - orchestrator
+  #   restart: unless-stopped
 
 volumes:
   jarvis-prod-data:
