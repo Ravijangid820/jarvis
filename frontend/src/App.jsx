@@ -3,6 +3,7 @@ import './index.css'
 import Admin from './Admin'
 
 const API = import.meta.env.VITE_API_URL || ""
+const BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "")
 
 // Arc reactor — Mark I "PROOF THAT TONY STARK HAS A HEART" style: a brushed-steel ring with engraved
 // text, alternating copper wound coils + blue-glow panels, a bolt ring, and a layered blue core.
@@ -892,7 +893,7 @@ function App() {
       { tag: "IN", label: "Focus message input", run: () => inputRef.current?.focus() },
       { tag: "VOX", label: `JARVIS voice: ${sound ? "on" : "off"} — toggle (greeting + spoken replies)`, run: () => setSound(s => !s) },
       { tag: "FX", label: `Reduce effects: ${perfMode ? "on" : "off"} — toggle (smoother scroll)`, run: () => setPerfMode(p => !p) },
-      ...(role === "admin" ? [{ tag: "ADM", label: "Open admin console", run: () => { window.location.href = "/admin" } }] : []),
+      ...(role === "admin" ? [{ tag: "ADM", label: "Open admin console", run: () => { window.location.href = `${BASE}/admin` } }] : []),
       { tag: "OUT", label: "Disconnect", run: () => doLogout() },
       ...sessions.map(s => ({ tag: "GO", label: `Go to: ${s.title}`, run: () => loadHistory(s.id) })),
     ]
@@ -1000,9 +1001,11 @@ function App() {
   }
 
   // Admin console lives at /admin within the SPA (so it inherits HUD styling + theme).
-  if (window.location.pathname === "/admin") {
-    if (role !== "admin") { window.location.href = "/"; return null }
-    return <Admin token={token} onExit={() => { window.location.href = "/" }} apiBase={API} />
+  const isAppAdminPath = window.location.pathname.endsWith("/admin") || window.location.pathname.endsWith("/admin/")
+  if (isAppAdminPath) {
+    const homeUrl = BASE ? `${BASE}/` : "/"
+    if (role !== "admin") { window.location.href = homeUrl; return null }
+    return <Admin token={token} onExit={() => { window.location.href = homeUrl }} apiBase={API} />
   }
 
   return (
@@ -1109,7 +1112,7 @@ function App() {
             <div className="hud-label">Access Control</div>
             <div className="panel-row">
               <button className="hud-btn" onClick={doLogout}>Disconnect</button>
-              {role === "admin" && <button className="hud-btn warn" onClick={() => window.location.href='/admin'}>Admin</button>}
+              {role === "admin" && <button className="hud-btn warn" onClick={() => window.location.href = `${BASE}/admin`}>Admin</button>}
             </div>
           </div>
 
