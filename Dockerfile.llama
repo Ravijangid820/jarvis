@@ -1,0 +1,33 @@
+# syntax=docker/dockerfile:1
+# PRE-BAKED LLM INFERENCE ENGINE IMAGE (jarvis-llama)
+#
+# Built ON TOP OF the official upstream ghcr.io/ggml-org/llama.cpp:server image.
+# Downloads and bakes the verified Qwen3.5-2B-Q4_K_M.gguf model directly inside
+# the container image so it runs out-of-the-box with ZERO host model downloads.
+
+ARG LLAMA_IMAGE=ghcr.io/ggml-org/llama.cpp:server
+
+# --- Stage 1: Resolve / download the default model weights ---
+FROM debian:12-slim AS model
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+ARG LLM_GGUF_URL=https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf
+ARG LLM_GGUF_SHA256=aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223
+ARG DEFAULT_MODEL=Qwen3.5-2B-Q4_K_M.gguf
+COPY models/ /staged/
+RUN set -eu; mkdir -p /out; \
+    existing="$(find /staged -name "$DEFAULT_MODEL" -type f | head -n1 || true)"; \
+    [ -z "$existing" ] && existing="$(find /staged -name '*.gguf' -type f | sort | head -n1 || true)"; \
+    if [ -n "$existing" ]; then echo "Baking model from build context: $existing"; cp "$existing" /out/; \
+    elif [ -n "$LLM_GGUF_URL" ]; then \
+      echo "Downloading LLM model from LLM_GGUF_URL..."; \
+      curl -L --fail --retry 5 --retry-all-errors --retry-delay 5 -C - -o "/out/$DEFAULT_MODEL" "$LLM_GGUF_URL"; \
+      if [ -n "$LLM_GGUF_SHA256" ]; then echo "${LLM_GGUF_SHA256}  /out/$DEFAULT_MODEL" | sha256sum -c -; fi; \
+    fi
+
+# --- Stage 2: Pre-baked llama-server runtime image ---
+FROM ${LLAMA_IMAGE}
+COPY --from=model /out/ /models/
+EXPOSE 8081
+ENTRYPOINT ["/app/llama-server"]
+CMD ["-m", "/models/Qwen3.5-2B-Q4_K_M.gguf", "-c", "4096", "-t", "4", "--host", "0.0.0.0", "--port", "8081", "--parallel", "1"]

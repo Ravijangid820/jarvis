@@ -1,24 +1,11 @@
 # syntax=docker/dockerfile:1
-# SLIM ORCHESTRATOR image for the two-image (production) split: FastAPI API + built React UI +
-# embeddings (memory) + Piper TTS. It does NOT contain llama-server or the LLM GGUF — those live in a
-# separate `llama` service (the official ghcr.io/ggml-org/llama.cpp:server image). The orchestrator
-# reaches the LLM over the network at http://llama:8081 (from config/jarvis.docker.json). This is the
-# default two-service `docker-compose.yml`.
+# PURE BACKEND ORCHESTRATOR image: FastAPI API + embeddings (memory) + Piper TTS.
+# Dedicated backend microservice for production deployments paired with an external LLM
+# container (jarvis-llama) and Edge CDN frontend (GitHub Pages / Cloudflare Pages).
 #
-# Published as ghcr.io/<owner>/jarvis-orchestrator. For a single self-contained container instead, see
-# Dockerfile.combined (jarvis-combined).
+# Published as ghcr.io/<owner>/jarvis-orchestrator.
 
-# --- Stage 1: build the React frontend ---
-FROM node:20-slim AS web
-WORKDIR /web
-COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci
-COPY frontend/ ./
-RUN npm run build
-
-# --- Embedding: torch-free ONNX bundle (full ST pipeline in one graph) — public, SHA-256-pinned,
-#     NO HuggingFace token. Converted from the official google weights + verified cosine 1.000000
-#     vs torch (src/scripts/export_embed_onnx.py); hosted on the project owner's HF repo.
+# --- Stage 1: Torch-free ONNX embedding bundle (full ST pipeline in one graph) ---
 FROM debian:12-slim AS embed
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
@@ -32,7 +19,7 @@ RUN set -eu; mkdir -p /out; cd /out; \
     dl tokenizer_config.json 7f4973d11e065de3097b85319ef7c43e143aa7f1df619ebe1056f81b8de97edb; \
     dl meta.json             b149d450b0bd383a207b3328cb9dd093082077c84eb4e178418a2db0f4f2dccf
 
-# --- Stage 3: Python runtime (orchestrator) ---
+# --- Stage 2: Python runtime (orchestrator) ---
 FROM python:3.13-slim AS app
 ENV JARVIS_HOME=/app \
     JARVIS_CONFIG=/app/config/jarvis.json \
@@ -49,11 +36,10 @@ RUN uv sync --frozen --no-dev
 # Torch-free embedding bundle — at /opt so a /app/models bind-mount can never shadow it.
 COPY --from=embed /out /opt/jarvis/embed_onnx
 ENV EMBED_ONNX_DIR=/opt/jarvis/embed_onnx
-# App + config + license notices + built UI.
+# App + config + license notices.
 COPY src/ ./src/
 COPY config/ ./config/
 COPY licenses/ ./licenses/
-COPY --from=web /web/dist ./frontend/dist
 # Piper TTS (normalize CRLF from Windows checkouts first).
 RUN sed -i 's/\r$//' src/scripts/*.sh; \
     bash src/scripts/piper_setup.sh || echo "WARN: piper_setup failed — TTS will be unavailable until fixed"
