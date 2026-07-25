@@ -207,7 +207,7 @@ function renderMessageContent(content) {
     <>
       {thinkText && (
         <details className="think-box" open={!content.includes("</think>")}>
-          <summary className="think-header">💭 Thought process</summary>
+          <summary className="think-header">💡 Reasoning</summary>
           <div className="think-body">{parseMd(thinkText)}</div>
         </details>
       )}
@@ -218,19 +218,43 @@ function renderMessageContent(content) {
 
 // One chat message. memo()'d so streaming a token re-renders only the LAST message
 // instead of re-parsing every message's markdown each token (that was the scroll jank).
-const MessageItem = memo(function MessageItem({ role, content, isStreaming }) {
+const MessageItem = memo(function MessageItem({ role, content, isStreaming, index, modelName, onAction }) {
+  const [editing, setEditing] = useState(false)
+  const [editText, setEditText] = useState(content)
+
+  useEffect(() => {
+    if (!editing) setEditText(content)
+  }, [content, editing])
+
+  const handleSaveEdit = () => {
+    setEditing(false)
+    if (onAction && editText.trim() !== content.trim()) {
+      onAction("edit", index, editText.trim())
+    }
+  }
+
   return (
-    <div className="message">
-      <div className={`msg-avatar ${role}`}>{role === 'user' ? 'U' : 'J'}</div>
+    <div className={`message ${role}`}>
+      {role === 'jarvis' && <div className="msg-avatar jarvis">J</div>}
       <div className={`msg-body ${isStreaming ? 'streaming' : ''}`}>
         <div className="msg-head">
           <span className={`msg-sender ${role}`}>{role === 'user' ? 'You' : 'Jarvis'}</span>
-          <div className="msg-actions">
-            <button className="copy-btn" onClick={(e) => copyText(content, e)}>Copy</button>
-          </div>
         </div>
         <div className="msg-content">
-          {isStreaming && content === "" ? (
+          {editing ? (
+            <div className="edit-box">
+              <textarea
+                className="edit-textarea"
+                value={editText}
+                onChange={e => setEditText(e.target.value)}
+                rows="3"
+              />
+              <div className="edit-actions">
+                <button className="edit-btn save" onClick={handleSaveEdit}>Save & Submit</button>
+                <button className="edit-btn cancel" onClick={() => setEditing(false)}>Cancel</button>
+              </div>
+            </div>
+          ) : isStreaming && content === "" ? (
             <div className="typing-indicator" style={{margin:0}}>
               <div className="typing-dots" style={{padding:'5px 10px'}}>
                 <div className="typing-dot"></div><div className="typing-dot"></div><div className="typing-dot"></div>
@@ -243,6 +267,36 @@ const MessageItem = memo(function MessageItem({ role, content, isStreaming }) {
             </>
           )}
         </div>
+
+        {!isStreaming && !editing && content && (
+          <div className="turn-footer">
+            {role === 'jarvis' && (
+              <div className="model-badge">
+                <span className="model-badge-icon">📦</span>
+                <span>{modelName || "Qwen3.5 2B Q4_K_M"}</span>
+              </div>
+            )}
+            <div className="turn-actions">
+              <button className="turn-btn" onClick={(e) => copyText(content, e)} title="Copy">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+              </button>
+              <button className="turn-btn" onClick={() => setEditing(true)} title="Edit">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+              </button>
+              {role === 'jarvis' && (
+                <button className="turn-btn" onClick={() => onAction && onAction("regenerate", index)} title="Regenerate">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+                </button>
+              )}
+              <button className="turn-btn" onClick={() => onAction && onAction("branch", index)} title="Branch session from here">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg>
+              </button>
+              <button className="turn-btn delete" onClick={() => onAction && onAction("delete", index)} title="Delete message">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -330,7 +384,7 @@ function App() {
   const [paletteIndex, setPaletteIndex] = useState(0)
 
   // Theme switcher + synthesized UI sound (both persisted, sound off by default).
-  const [theme, setTheme] = useState(() => localStorage.getItem("jarvis_theme") || "stark")
+  const [theme, setTheme] = useState(() => localStorage.getItem("jarvis_theme") || "clean")
   const [sound, setSound] = useState(() => localStorage.getItem("jarvis_sound") === "1")
   const [perfMode, setPerfMode] = useState(() => localStorage.getItem("jarvis_perf") === "1")
   const audioCtxRef = useRef(null)
@@ -723,6 +777,35 @@ function App() {
       if (sid === currentSessionId) loadHistory("default")
       loadSessions()
     } catch { /* ignore */ }
+  }
+
+  const handleMessageAction = async (action, idx, newText) => {
+    if (action === "delete") {
+      setMessages(prev => prev.filter((_, i) => i !== idx))
+    } else if (action === "branch") {
+      const branchMsgs = messages.slice(0, idx + 1)
+      await createSession()
+      setMessages(branchMsgs)
+    } else if (action === "regenerate") {
+      let promptText = ""
+      for (let i = idx - 1; i >= 0; i--) {
+        if (messages[i].role === "user") {
+          promptText = messages[i].content
+          break
+        }
+      }
+      if (promptText) {
+        setMessages(prev => prev.slice(0, idx))
+        send(promptText)
+      }
+    } else if (action === "edit") {
+      if (messages[idx]?.role === "user") {
+        setMessages(prev => prev.slice(0, idx))
+        send(newText)
+      } else {
+        setMessages(prev => prev.map((m, i) => i === idx ? { ...m, content: newText } : m))
+      }
+    }
   }
 
   // Abort the in-flight stream. Closing the connection also lets the server stop
@@ -1316,7 +1399,7 @@ function App() {
             )}
             
             {messages.map((m, i) => (
-              <MessageItem key={i} role={m.role} content={m.content} isStreaming={m.isStreaming} />
+              <MessageItem key={i} index={i} role={m.role} content={m.content} isStreaming={m.isStreaming} modelName={modelName} onAction={handleMessageAction} />
             ))}
             <div ref={messagesEndRef} />
           </div>

@@ -187,11 +187,11 @@ button, input, textarea { font-family: inherit; outline: none; }
 .message { display: flex; gap: 15px; margin-bottom: 30px; animation: hologramIn 0.4s cubic-bezier(0.16, 1, 0.3, 1); }
 @keyframes hologramIn { from { opacity: 0; transform: translateY(20px); filter: brightness(2) blur(4px); } to { opacity: 1; transform: translateY(0); filter: brightness(1) blur(0); } }
 
-.msg-avatar { width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; font-size: 1rem; font-weight: 700; flex-shrink: 0; clip-path: polygon(25% 0%, 75% 0%, 100% 25%, 100% 75%, 75% 100%, 25% 100%, 0% 75%, 0% 25%); border: 1px solid; }
+.msg-avatar { width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; font-size: 1rem; font-weight: 700; flex-shrink: 0; border-radius: 12px; border: 1px solid; }
 .msg-avatar.user { border-color: rgba(103, 199, 235, 0.3); color: rgba(103, 199, 235, 0.6); background: rgba(103, 199, 235, 0.05); }
 .msg-avatar.jarvis { border-color: var(--holo-cyan); color: var(--bg-void); background: var(--holo-cyan); box-shadow: 0 0 15px var(--holo-cyan); }
 
-.msg-body { flex: 1; min-width: 0; background: rgba(103, 199, 235, 0.02); border: 1px solid rgba(103, 199, 235, 0.1); padding: 15px 20px; clip-path: var(--clip-angle); position: relative; }
+.msg-body { flex: 1; min-width: 0; background: rgba(103, 199, 235, 0.02); border: 1px solid rgba(103, 199, 235, 0.1); padding: 15px 20px; border-radius: 16px; position: relative; }
 .message:hover .msg-body { border-color: rgba(103, 199, 235, 0.3); background: rgba(103, 199, 235, 0.04); }
 
 .msg-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; border-bottom: 1px solid rgba(103, 199, 235, 0.1); padding-bottom: 8px; }
@@ -202,17 +202,17 @@ button, input, textarea { font-family: inherit; outline: none; }
 
 .msg-actions { display: none; }
 .message:hover .msg-actions { display: block; }
-.copy-btn { background: rgba(103, 199, 235, 0.1); border: 1px solid var(--holo-cyan); color: var(--holo-cyan); font-family: var(--font-data); font-size: 0.6rem; padding: 2px 6px; cursor: pointer; text-transform: uppercase; transition: 0.2s; clip-path: var(--clip-angle-sm); }
+.copy-btn { background: rgba(103, 199, 235, 0.1); border: 1px solid var(--holo-cyan); color: var(--holo-cyan); font-family: var(--font-data); font-size: 0.6rem; padding: 2px 6px; cursor: pointer; text-transform: uppercase; transition: 0.2s; border-radius: 4px; }
 .copy-btn:hover { background: var(--holo-cyan); color: var(--bg-void); }
 
 .msg-content { font-size: 0.95rem; line-height: 1.6; color: #d0effc; font-family: system-ui, sans-serif; }
 .msg-content p { margin-bottom: 10px; }
-.msg-content code { font-family: var(--font-data); font-size: 0.85rem; background: rgba(103, 199, 235, 0.1); color: var(--holo-cyan); padding: 2px 6px; border-radius: 3px; }
-.msg-content pre { font-family: var(--font-data); font-size: 0.85rem; background: #010810; border: 1px solid rgba(103, 199, 235, 0.3); padding: 15px; margin: 15px 0; overflow-x: auto; clip-path: var(--clip-angle-sm); }
+.msg-content code { font-family: var(--font-data); font-size: 0.85rem; background: rgba(103, 199, 235, 0.1); color: var(--holo-cyan); padding: 2px 6px; border-radius: 4px; }
+.msg-content pre { font-family: var(--font-data); font-size: 0.85rem; background: #010810; border: 1px solid rgba(103, 199, 235, 0.3); padding: 15px; margin: 15px 0; overflow-x: auto; border-radius: 8px; }
 
 /* Typing Indicator */
 .typing-indicator { display: flex; gap: 15px; margin-bottom: 30px; }
-.typing-dots { display: flex; align-items: center; gap: 6px; background: rgba(103, 199, 235, 0.05); padding: 10px 20px; border: 1px solid rgba(103, 199, 235, 0.2); clip-path: var(--clip-angle-sm); }
+.typing-dots { display: flex; align-items: center; gap: 6px; background: rgba(103, 199, 235, 0.05); padding: 10px 20px; border: 1px solid rgba(103, 199, 235, 0.2); border-radius: 16px; }
 .typing-dot { width: 6px; height: 6px; background: var(--holo-cyan); box-shadow: 0 0 8px var(--holo-cyan); animation: bounce 1.4s infinite; }
 .typing-dot:nth-child(2) { animation-delay: 0.2s; }
 .typing-dot:nth-child(3) { animation-delay: 0.4s; }
@@ -934,4 +934,174 @@ html[data-theme="clean"] .send-btn {
 .think-body {
   padding: 10px 14px; border-top: 1px solid rgba(161, 161, 170, 0.15);
   font-family: inherit; line-height: 1.5; color: #d4d4d8; background: rgba(0, 0, 0, 0.2);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Llama Chat UI Components (Model Badge, Turn Footer, Action Buttons)       */
+/* -------------------------------------------------------------------------- */
+.turn-footer {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+.message.user .turn-footer {
+  align-items: flex-end;
+}
+.model-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  color: #a1a1aa;
+  font-family: inherit;
+  font-weight: 500;
+}
+.model-badge-icon {
+  font-size: 0.85rem;
+}
+.turn-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0.65;
+  transition: opacity 0.2s;
+}
+.message:hover .turn-actions {
+  opacity: 1;
+}
+.turn-btn {
+  background: transparent;
+  border: none;
+  color: #a1a1aa;
+  padding: 5px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+.turn-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #f4f4f5;
+}
+.turn-btn.delete:hover {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+
+/* Inline Edit Box */
+.edit-box {
+  width: 100%;
+  margin: 8px 0;
+}
+.edit-textarea {
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid #3b82f6;
+  color: inherit;
+  font-family: inherit;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  resize: vertical;
+}
+.edit-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  justify-content: flex-end;
+}
+.edit-btn {
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.edit-btn.save {
+  background: #3b82f6;
+  border: 1px solid #3b82f6;
+  color: #fff;
+}
+.edit-btn.save:hover {
+  background: #2563eb;
+}
+.edit-btn.cancel {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #a1a1aa;
+}
+.edit-btn.cancel:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #fff;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Remove Pixelated Style & Apply Llama UI Layout in Clean Theme             */
+/* -------------------------------------------------------------------------- */
+html[data-theme="clean"] * {
+  clip-path: none !important;
+}
+html[data-theme="clean"] .message.user {
+  justify-content: flex-end;
+}
+html[data-theme="clean"] .message.user .msg-body {
+  background: #27272a !important;
+  border: none !important;
+  border-radius: 20px !important;
+  padding: 12px 18px !important;
+  color: #f4f4f5 !important;
+  max-width: 75%;
+  box-shadow: none !important;
+}
+html[data-theme="clean"] .message.user .msg-head {
+  display: none !important;
+}
+html[data-theme="clean"] .message.jarvis {
+  justify-content: flex-start;
+}
+html[data-theme="clean"] .message.jarvis .msg-avatar {
+  display: none !important;
+}
+html[data-theme="clean"] .message.jarvis .msg-body {
+  background: transparent !important;
+  border: none !important;
+  padding: 6px 0 !important;
+  color: #f4f4f5 !important;
+  box-shadow: none !important;
+}
+html[data-theme="clean"] .message.jarvis .msg-head {
+  display: none !important;
+}
+html[data-theme="clean"] .model-badge {
+  background: #27272a !important;
+  border: none !important;
+  color: #a1a1aa !important;
+}
+html[data-theme="clean"] .input-wrap {
+  border-radius: 24px !important;
+  background: #27272a !important;
+  border: 1px solid #3f3f46 !important;
+}
+html[data-theme="clean"] .input-wrap::before,
+html[data-theme="clean"] .input-wrap::after {
+  display: none !important;
+}
+html[data-theme="clean"] .send-btn {
+  border-radius: 16px !important;
+}
+html[data-theme="clean"] .sug-btn,
+html[data-theme="clean"] .theme-chip,
+html[data-theme="clean"] .new-session-btn,
+html[data-theme="clean"] .cmd-btn {
+  border-radius: 10px !important;
 }
