@@ -74,7 +74,11 @@ RATE_LIMIT_RPM: int = CONFIG["orchestrator"]["rate_limit_requests_per_minute"]
 # Opt-in: require a recognized, authorized person physically present (per the cameras) before any
 # device control runs — even for an otherwise-authorized caller. Off by default.
 REQUIRE_PRESENCE_FOR_CONTROL: bool = bool(CONFIG["orchestrator"].get("require_presence_for_device_control", False))
-ALLOWED_ORIGINS: List[str] = CONFIG["orchestrator"].get("allowed_origins", [])
+_env_origins = os.environ.get("ALLOWED_ORIGINS")
+if _env_origins:
+    ALLOWED_ORIGINS: List[str] = [x.strip() for x in _env_origins.split(",") if x.strip()]
+else:
+    ALLOWED_ORIGINS: List[str] = CONFIG["orchestrator"].get("allowed_origins", [])
 def _resolve(p: str) -> str:
     """Absolute paths pass through; relative ones resolve against BASE_DIR (so a fresh
     checkout keeps its data under the repo, while the deployed absolute paths are unchanged)."""

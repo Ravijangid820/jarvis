@@ -93,12 +93,14 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Jarvis Orchestrator", docs_url=None, redoc_url=None, lifespan=lifespan)
 
-# CORS: the SPA + admin panel are served same-origin; default to no cross-origin (most secure).
+# CORS: allow cross-origin requests from configured ALLOWED_ORIGINS (or "*" if empty)
+cors_origins = ALLOWED_ORIGINS if ALLOWED_ORIGINS else ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_methods=["POST", "GET", "PUT", "DELETE"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_origins=cors_origins,
+    allow_credentials=True if cors_origins != ["*"] else False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Default device a spoken volume command targets (the Windows volume agent's device id). Matches
