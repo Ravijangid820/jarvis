@@ -1,10 +1,37 @@
 """SQLite access: connection factory + schema initialization."""
+import logging
 import os
 import sqlite3
 from pathlib import Path
 
-from auth import hash_token
+from auth import hash_password, hash_token
 from config import DB_PATH, SCHEMA_PATH
+
+logger = logging.getLogger("jarvis")
+
+
+def _seed_initial_admin(conn: sqlite3.Connection):
+    """Industry-standard bootstrapping: automatically seed an initial admin account if users table is empty."""
+    try:
+        row = conn.execute("SELECT COUNT(*) AS cnt FROM users").fetchone()
+        if row and row["cnt"] == 0:
+            admin_user = os.environ.get("ADMIN_USER", "admin")
+            admin_pass = os.environ.get("ADMIN_PASS")
+            if not admin_pass:
+                admin_pass = "admin"
+                logger.warning(
+                    "No ADMIN_PASS env var set! Seeding default initial admin account ('%s' / '%s'). "
+                    "Set ADMIN_PASS in your environment or change password via /admin UI for security!",
+                    admin_user, admin_pass
+                )
+            else:
+                logger.info("Seeding initial admin account ('%s') from environment variables.", admin_user)
+            conn.execute(
+                "INSERT INTO users (username, password_hash, role, can_control_devices) VALUES (?, ?, 'admin', 1)",
+                (admin_user, hash_password(admin_pass))
+            )
+    except Exception as e:
+        logger.warning("Failed to check/seed initial admin account: %s", e)
 
 
 def get_db() -> sqlite3.Connection:
@@ -109,6 +136,7 @@ def init_db():
             "DROP TABLE IF EXISTS semantic_facts",
         ):
             _safe_exec(conn, stmt)
+        _seed_initial_admin(conn)
         conn.commit()
     finally:
         conn.close()
