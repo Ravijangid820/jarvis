@@ -276,13 +276,8 @@ button, input, textarea { font-family: inherit; outline: none; }
   -webkit-backdrop-filter: blur(10px);
 }
 
-/* Internal glowing borders for the HUD Bracket */
-.input-wrap::before {
-  content: ""; position: absolute; top: 0; left: 0; width: 40px; height: 3px; background: var(--holo-cyan); box-shadow: 0 0 10px var(--holo-cyan);
-}
-.input-wrap::after {
-  content: ""; position: absolute; bottom: 0; right: 0; width: 40px; height: 3px; background: var(--holo-cyan); box-shadow: 0 0 10px var(--holo-cyan);
-}
+/* Removed out-of-sync corner lines for smooth UI */
+.input-wrap::before, .input-wrap::after { display: none !important; }
 
 .input-field {
   width: 100%;
@@ -334,8 +329,7 @@ button, input, textarea { font-family: inherit; outline: none; }
 /* --- Login Overlay --- */
 .login-overlay { position: fixed; inset: 0; background: var(--bg-glass-heavy); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); z-index: 9999; display: flex; align-items: center; justify-content: center; }
 .login-box { background: rgba(4, 10, 16, 0.9); border: 1px solid rgba(103, 199, 235, 0.3); padding: 50px 40px; text-align: center; clip-path: var(--clip-angle); width: 100%; max-width: 400px; position: relative; box-shadow: 0 0 50px rgba(0,0,0,0.8), inset 0 0 30px rgba(103, 199, 235, 0.05); }
-.login-box::before { content: ""; position: absolute; top: 0; left: 0; width: 50px; height: 3px; background: var(--holo-cyan); }
-.login-box::after { content: ""; position: absolute; bottom: 0; right: 0; width: 50px; height: 3px; background: var(--holo-cyan); }
+.login-box::before, .login-box::after { display: none !important; }
 
 .login-reactor { margin-bottom: 25px; }
 .login-label { font-size: 1.1rem; font-weight: 700; color: var(--holo-cyan); text-transform: uppercase; letter-spacing: 0.25em; margin-bottom: 30px; text-shadow: 0 0 10px var(--holo-cyan-glow); }
@@ -430,7 +424,6 @@ button, input, textarea { font-family: inherit; outline: none; }
   border-color: var(--holo-cyan);
   box-shadow: 0 0 40px rgba(103,199,235,0.22), inset 0 0 25px rgba(103,199,235,0.07);
 }
-.input-wrap:focus-within::before, .input-wrap:focus-within::after { width: 75px; transition: width 0.4s; }
 .send-btn.stop { animation: stopPulse 1.2s ease-in-out infinite; }
 @keyframes stopPulse { 0%,100% { box-shadow: 0 0 0 rgba(229,32,32,0); } 50% { box-shadow: 0 0 16px var(--action-red); } }
 
