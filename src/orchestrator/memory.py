@@ -11,7 +11,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from config import (
-    CHROMA_DB_PATH, EMBED_DOC_PREFIX, EMBED_MODEL_NAME, EMBED_ONNX_DIR, EMBED_QUERY_PREFIX,
+    BASE_DIR, CHROMA_DB_PATH, EMBED_DOC_PREFIX, EMBED_MODEL_NAME, EMBED_ONNX_DIR, EMBED_QUERY_PREFIX,
     FACT_DEDUP_SIM, FACT_DEDUP_WORD, FACT_EXTRACTION_PROMPT, IDLE_CHECK_INTERVAL,
     IDLE_THRESHOLD_SECONDS, RAG_DISTANCE_THRESHOLD,
     RAG_MAX_RESULTS, VALID_FACT_CATEGORIES, logger,
@@ -47,6 +47,16 @@ def init_embeddings():
     onnx_model = None
     try:
         meta_path = os.path.join(EMBED_ONNX_DIR, "meta.json")
+        if not os.path.isfile(meta_path) and os.environ.get("JARVIS_AUTO_DOWNLOAD_MODELS", "1") != "0":
+            logger.info("ONNX embedding bundle not found at %s. Auto-downloading via download_models.sh...", EMBED_ONNX_DIR)
+            try:
+                import subprocess
+                script_path = BASE_DIR / "src" / "scripts" / "download_models.sh"
+                if script_path.exists():
+                    subprocess.run(["bash", str(script_path)], check=True)
+            except Exception as e:
+                logger.warning("Auto-download of embedding model failed: %s", e)
+
         if os.path.isfile(meta_path):
             with open(meta_path) as f:
                 onnx_meta_model = json.load(f).get("model")
