@@ -66,7 +66,10 @@ CONFIG = load_config()
 # --- Frequently used values -------------------------------------------------
 # Env override (JARVIS_FAST_BRAIN_URL) wins over the config file — used by the all-in-one container to
 # point the orchestrator at a local llama-server (127.0.0.1) instead of the compose 'llama' hostname.
-LLM_URL: str = os.environ.get("JARVIS_FAST_BRAIN_URL") or CONFIG["llm"]["fast_brain_url"]
+_llm_url_raw: str = os.environ.get("JARVIS_FAST_BRAIN_URL") or CONFIG["llm"]["fast_brain_url"]
+LLM_URL: str = _llm_url_raw.rstrip("/")
+if not LLM_URL.endswith("/v1/chat/completions"):
+    LLM_URL += "/v1/chat/completions"
 REQUEST_TIMEOUT: int = CONFIG["llm"]["request_timeout_seconds"]
 TEMPERATURE: float = CONFIG["llm"]["default_temperature"]
 MAX_INPUT_LENGTH: int = CONFIG["orchestrator"]["max_input_length"]
