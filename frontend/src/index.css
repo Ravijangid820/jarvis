@@ -858,3 +858,80 @@ body { width: 100%; height: 100vh; height: 100dvh; }
 @media (max-width: 480px) {
   .top-model { display: none; }               /* model badge — visible in Admin instead */
 }
+
+/* -------------------------------------------------------------------------- */
+/* Llama Clean Theme (Modern, Soothing Dark AI Chat Studio)                  */
+/* -------------------------------------------------------------------------- */
+html[data-theme="clean"] body {
+  background: #18181b !important;
+  color: #f4f4f5 !important;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
+  filter: none !important;
+}
+html[data-theme="clean"] .sidebar,
+html[data-theme="clean"] .top-bar,
+html[data-theme="clean"] .input-area {
+  background: #27272a !important;
+  border-color: #3f3f46 !important;
+  box-shadow: none !important;
+}
+html[data-theme="clean"] .hud-panel,
+html[data-theme="clean"] .welcome-screen,
+html[data-theme="clean"] .history-item {
+  background: #27272a !important;
+  border-color: #3f3f46 !important;
+  box-shadow: none !important;
+}
+html[data-theme="clean"] .message .msg-body {
+  background: #27272a !important;
+  border-color: #3f3f46 !important;
+  box-shadow: none !important;
+}
+html[data-theme="clean"] .message .msg-body:hover {
+  border-color: #52525b !important;
+}
+html[data-theme="clean"] .ambient-particles,
+html[data-theme="clean"] .chat-reactor-bg {
+  display: none !important;
+}
+html[data-theme="clean"] .input-wrap {
+  background: #18181b !important;
+  border-color: #52525b !important;
+  box-shadow: none !important;
+}
+html[data-theme="clean"] .input-field {
+  color: #f4f4f5 !important;
+  font-family: inherit !important;
+}
+html[data-theme="clean"] .send-btn {
+  background: #3b82f6 !important;
+  border-color: #3b82f6 !important;
+  color: #ffffff !important;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Deep Reasoning Controls & Accordion (<think> Mode)                        */
+/* -------------------------------------------------------------------------- */
+.reasoning-pill {
+  display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; margin-left: 12px;
+  background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 12px; color: inherit; font-size: 0.72rem; cursor: pointer; transition: all 0.2s;
+}
+.reasoning-pill:hover { background: rgba(255, 255, 255, 0.1); border-color: rgba(255, 255, 255, 0.3); }
+.reasoning-pill.active { background: rgba(161, 161, 170, 0.2); border-color: #a1a1aa; font-weight: 600; }
+
+.think-box {
+  margin-bottom: 12px; border: 1px solid rgba(161, 161, 170, 0.25);
+  border-radius: 8px; background: rgba(0, 0, 0, 0.15); overflow: hidden;
+  font-size: 0.86rem; color: #a1a1aa; transition: all 0.2s;
+}
+.think-header {
+  padding: 8px 12px; background: rgba(255, 255, 255, 0.03); cursor: pointer;
+  font-weight: 600; user-select: none; list-style: none; display: flex; align-items: center; gap: 6px;
+}
+.think-header::-webkit-details-marker { display: none; }
+.think-header:hover { background: rgba(255, 255, 255, 0.06); color: #e4e4e7; }
+.think-body {
+  padding: 10px 14px; border-top: 1px solid rgba(161, 161, 170, 0.15);
+  font-family: inherit; line-height: 1.5; color: #d4d4d8; background: rgba(0, 0, 0, 0.2);
+}

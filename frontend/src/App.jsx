@@ -165,32 +165,55 @@ function renderInline(text) {
 // Block markdown: fenced code, #/##/### headings, -/* and 1. lists, paragraphs.
 function renderMessageContent(content) {
   if (!content) return null
-  return content.split(/(```[\s\S]*?```)/g).map((part, idx) => {
-    if (part.startsWith("```") && part.endsWith("```")) {
-      const code = part.slice(3, -3).replace(/^\w+\n/, "")
-      return <pre key={idx}><code>{code}</code></pre>
-    }
-    const blocks = []
-    let list = null
-    const flush = () => {
-      if (!list) return
-      const Tag = list.type
-      blocks.push(<Tag key={blocks.length} className="md-list">{list.items.map((it, i) => <li key={i}>{renderInline(it)}</li>)}</Tag>)
-      list = null
-    }
-    part.split("\n").forEach(line => {
-      const h = line.match(/^(#{1,3})\s+(.*)$/)
-      const ul = line.match(/^\s*[-*]\s+(.*)$/)
-      const ol = line.match(/^\s*\d+\.\s+(.*)$/)
-      if (h) { flush(); blocks.push(<div key={blocks.length} className={`md-h md-h${h[1].length}`}>{renderInline(h[2])}</div>) }
-      else if (ul) { if (!list || list.type !== "ul") { flush(); list = { type: "ul", items: [] } } list.items.push(ul[1]) }
-      else if (ol) { if (!list || list.type !== "ol") { flush(); list = { type: "ol", items: [] } } list.items.push(ol[1]) }
-      else if (line.trim() === "") { flush(); blocks.push(<div key={blocks.length} className="md-gap" />) }
-      else { flush(); blocks.push(<div key={blocks.length} className="md-line">{renderInline(line)}</div>) }
+  let thinkText = null
+  let mainText = content
+  const thinkMatch = content.match(/<think>([\s\S]*?)(?:<\/think>|$)/i)
+  if (thinkMatch) {
+    thinkText = thinkMatch[1].trim()
+    mainText = content.replace(/<think>[\s\S]*?(?:<\/think>|$)/i, "").trim()
+  }
+
+  const parseMd = (str) => {
+    if (!str) return null
+    return str.split(/(```[\s\S]*?```)/g).map((part, idx) => {
+      if (part.startsWith("```") && part.endsWith("```")) {
+        const code = part.slice(3, -3).replace(/^\w+\n/, "")
+        return <pre key={idx}><code>{code}</code></pre>
+      }
+      const blocks = []
+      let list = null
+      const flush = () => {
+        if (!list) return
+        const Tag = list.type
+        blocks.push(<Tag key={blocks.length} className="md-list">{list.items.map((it, i) => <li key={i}>{renderInline(it)}</li>)}</Tag>)
+        list = null
+      }
+      part.split("\n").forEach(line => {
+        const h = line.match(/^(#{1,3})\s+(.*)$/)
+        const ul = line.match(/^\s*[-*]\s+(.*)$/)
+        const ol = line.match(/^\s*\d+\.\s+(.*)$/)
+        if (h) { flush(); blocks.push(<div key={blocks.length} className={`md-h md-h${h[1].length}`}>{renderInline(h[2])}</div>) }
+        else if (ul) { if (!list || list.type !== "ul") { flush(); list = { type: "ul", items: [] } } list.items.push(ul[1]) }
+        else if (ol) { if (!list || list.type !== "ol") { flush(); list = { type: "ol", items: [] } } list.items.push(ol[1]) }
+        else if (line.trim() === "") { flush(); blocks.push(<div key={blocks.length} className="md-gap" />) }
+        else { flush(); blocks.push(<div key={blocks.length} className="md-line">{renderInline(line)}</div>) }
+      })
+      flush()
+      return <span key={idx}>{blocks}</span>
     })
-    flush()
-    return <span key={idx}>{blocks}</span>
-  })
+  }
+
+  return (
+    <>
+      {thinkText && (
+        <details className="think-box" open={!content.includes("</think>")}>
+          <summary className="think-header">💭 Thought process</summary>
+          <div className="think-body">{parseMd(thinkText)}</div>
+        </details>
+      )}
+      {parseMd(mainText)}
+    </>
+  )
 }
 
 // One chat message. memo()'d so streaming a token re-renders only the LAST message
@@ -284,6 +307,7 @@ function App() {
   const [nPredict, setNPredict] = useState(2048)   // backend clamps this to fit the 4096-token context
   const [seed, setSeed] = useState(-1)
   const [sysPrompt, setSysPrompt] = useState("")
+  const [reasoning, setReasoning] = useState(() => localStorage.getItem("jarvis_reasoning") === "true")
 
   // Cinematic boot sequence — shown once per browser session, click to skip.
   const [booting, setBooting] = useState(() => !sessionStorage.getItem("jarvis_booted"))
@@ -526,6 +550,7 @@ function App() {
     localStorage.setItem("jarvis_theme", theme)
   }, [theme])
   useEffect(() => { localStorage.setItem("jarvis_sound", sound ? "1" : "0") }, [sound])
+  useEffect(() => { localStorage.setItem("jarvis_reasoning", reasoning ? "true" : "false") }, [reasoning])
   // Type out the JARVIS greeting on the welcome screen (empty chat), one character at a time.
   useEffect(() => {
     if (messages.length !== 0) return
@@ -742,7 +767,8 @@ function App() {
       n_predict: Number.isFinite(nPredict) ? nPredict : undefined,
       seed: Number.isFinite(seed) ? seed : undefined,
       voice_feedback: false,   // the client streams TTS per-sentence (below); no whole-reply synth
-      system_prompt: sysPrompt || undefined
+      system_prompt: sysPrompt || undefined,
+      reasoning: reasoning
     }
 
     const controller = new AbortController()
@@ -1128,6 +1154,7 @@ function App() {
                   { id: "cyberpunk", name: "Cyberpunk", color: "#ff4dd2" },
                   { id: "emerald", name: "Emerald", color: "#2fe6a0" },
                   { id: "ember", name: "Ember", color: "#ffae42" },
+                  { id: "clean", name: "Llama Clean", color: "#a1a1aa" },
                 ].map(t => (
                   <button key={t.id} className={`theme-chip ${theme === t.id ? "active" : ""}`} onClick={() => setTheme(t.id)}>
                     <span className="theme-dot" style={{ background: t.color }} />
@@ -1209,6 +1236,10 @@ function App() {
                   <label>JARVIS Voice</label>
                   <input type="checkbox" className="hud-toggle" checked={sound} onChange={e => setSound(e.target.checked)} />
                 </div>
+                <div className="toggle-row" style={{marginTop: '6px'}}>
+                  <label>🧠 Deep Reasoning</label>
+                  <input type="checkbox" className="hud-toggle" checked={reasoning} onChange={e => setReasoning(e.target.checked)} />
+                </div>
                 <div style={{marginTop: '8px'}}>
                   <span className="field-label">System Prompt Override</span>
                   <textarea className="hud-textarea" rows="3" value={sysPrompt} onChange={e => setSysPrompt(e.target.value)} placeholder="Leave blank for default..."></textarea>
@@ -1247,6 +1278,9 @@ function App() {
           <button className="sidebar-toggle" onClick={toggleSidebar} aria-label="Toggle menu" title="Toggle sidebar">☰</button>
           <span className="top-title">{currentTitle}</span>
           <span className="top-model">{modelName}</span>
+          <button className={`reasoning-pill ${reasoning ? 'active' : ''}`} onClick={() => setReasoning(r => !r)} title="Toggle Deep Reasoning (<think> mode)">
+            🧠 {reasoning ? 'Reasoning ON' : 'Reasoning OFF'}
+          </button>
           <span className="top-speed">{speed}</span>
           <div className="top-spacer"></div>
           <button className="cmd-btn" onClick={() => { setPaletteQuery(""); setPaletteIndex(0); setPaletteOpen(true) }}

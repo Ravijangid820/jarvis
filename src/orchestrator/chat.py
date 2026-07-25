@@ -137,7 +137,8 @@ def delete_session(session_id: str, user_id: int):
 
 # --- Prompt assembly --------------------------------------------------------
 def build_messages(session_id: str, user_id: int, user_text: str, custom_sys_prompt: Optional[str] = None,
-                   completion_reserve: int = COMPLETION_RESERVE_DEFAULT) -> List[Dict[str, str]]:
+                   completion_reserve: int = COMPLETION_RESERVE_DEFAULT,
+                   reasoning: Optional[bool] = None) -> List[Dict[str, str]]:
     """Assemble the prompt within the model's context window.
 
     Layout: [single system message] + [recent history…] + [current turn]. The system message holds
@@ -149,10 +150,11 @@ def build_messages(session_id: str, user_id: int, user_text: str, custom_sys_pro
     """
     sys_prompt = custom_sys_prompt if custom_sys_prompt else SYSTEM_PROMPT
     # Reasoning toggle (Qwen "/no_think"): True strips the token (thinking on), False ensures it
-    # (thinking off), None leaves the prompt untouched. Lets users flip it from config alone.
-    if REASONING is True:
+    # (thinking off), None leaves the prompt untouched. Lets users flip it from config or UI alone.
+    active_reasoning = reasoning if reasoning is not None else REASONING
+    if active_reasoning is True:
         sys_prompt = sys_prompt.replace("/no_think", "").strip()
-    elif REASONING is False and "/no_think" not in sys_prompt:
+    elif active_reasoning is False and "/no_think" not in sys_prompt:
         sys_prompt = (sys_prompt + " /no_think").strip()
     system_parts = [sys_prompt]
 

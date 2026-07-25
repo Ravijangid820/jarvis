@@ -265,6 +265,7 @@ class QueryRequest(BaseModel):
     seed: Optional[int] = None
     system_prompt: Optional[str] = Field(default=None, max_length=2000)
     voice_feedback: bool = False
+    reasoning: Optional[bool] = None
 
 
 class SessionRenameRequest(BaseModel):
@@ -1662,7 +1663,7 @@ def process_input(request: QueryRequest, raw_request: Request):
     existing = chat.get_recent_context(session_id)
     needs_title = (len(existing) == 0) and not is_default_session(session_id)
     completion_reserve = request.n_predict if (request.n_predict and request.n_predict > 0) else COMPLETION_RESERVE_DEFAULT
-    messages = chat.build_messages(session_id, user_id, user_text, request.system_prompt, completion_reserve=completion_reserve)
+    messages = chat.build_messages(session_id, user_id, user_text, request.system_prompt, completion_reserve=completion_reserve, reasoning=request.reasoning)
     max_tokens = chat.clamp_completion_for(messages, request.n_predict)
 
     t0 = time.time()
@@ -1712,7 +1713,7 @@ def chat_stream(request: QueryRequest, raw_request: Request):
     existing = chat.get_recent_context(session_id)
     needs_title = (len(existing) == 0) and not is_default_session(session_id)
     completion_reserve = request.n_predict if (request.n_predict and request.n_predict > 0) else COMPLETION_RESERVE_DEFAULT
-    messages = chat.build_messages(session_id, user_id, user_text, request.system_prompt, completion_reserve=completion_reserve)
+    messages = chat.build_messages(session_id, user_id, user_text, request.system_prompt, completion_reserve=completion_reserve, reasoning=request.reasoning)
     max_tokens = chat.clamp_completion_for(messages, request.n_predict)
 
     def event_generator():
