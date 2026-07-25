@@ -1147,10 +1147,6 @@ function App() {
         </div>
       )}
 
-      {/* Ambient parallax particle field — three drifting layers for depth. */}
-      <div className="ambient-particles" aria-hidden="true">
-        <span className="pfield p1" /><span className="pfield p2" /><span className="pfield p3" />
-      </div>
       <div className={`sidebar-overlay ${sidebarOpen ? 'visible' : ''}`} onClick={() => setSidebarOpen(false)}></div>
 
       {paletteOpen && (() => {

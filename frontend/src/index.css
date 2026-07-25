@@ -45,23 +45,9 @@ body {
   height: 100vh; width: 100vw;
 }
 
-/* --- Animated Hex & Scanline Background --- */
-body::before {
-  content: ""; position: fixed; inset: 0;
-  background-image: 
-    linear-gradient(rgba(103, 199, 235, 0.05) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(103, 199, 235, 0.05) 1px, transparent 1px);
-  background-size: 40px 40px;
-  background-position: center center;
-  z-index: -2;
-  opacity: 0.3;
-}
-body::after {
-  content: ""; position: fixed; inset: 0;
-  background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(103, 199, 235, 0.02) 2px, rgba(103, 199, 235, 0.02) 4px);
-  z-index: -1; pointer-events: none;
-  /* Static: animating background-position here repainted the full viewport every frame,
-     which made scrolling (and everything) feel laggy. The scanlines look the same still. */
+/* --- Clean Background (Removed pixelated grids and scanlines) --- */
+body::before, body::after {
+  display: none !important;
 }
 
 /* --- Global Elements --- */
@@ -331,37 +317,8 @@ button, input, textarea { font-family: inherit; outline: none; }
 }
 
 /* --- Ambient parallax particle field (depth) --- */
-.ambient-particles { position: fixed; inset: 0; z-index: -1; pointer-events: none; overflow: hidden; }
-/* Static by default: the motes used to drift (translateY), which continuously changed the
-   backdrop behind the frosted-glass panels and forced them to re-blur every frame (the scroll
-   lag). Static = the panels blur once and cache it. ("Reduce effects" removes them entirely.) */
-.pfield {
-  position: absolute; left: 0; top: 0; width: 100%; height: 100%;
-  background-repeat: repeat;
-}
-/* Each layer: a few glowing motes tiled, drifting up at its own speed → parallax. */
-.pfield.p1 {
-  background-image:
-    radial-gradient(1.5px 1.5px at 30px 40px, rgba(103,199,235,0.55), transparent),
-    radial-gradient(1.5px 1.5px at 140px 120px, rgba(103,199,235,0.40), transparent),
-    radial-gradient(2px 2px at 90px 200px, rgba(255,214,107,0.30), transparent);
-  background-size: 220px 260px;
-}
-.pfield.p2 {
-  background-image:
-    radial-gradient(1px 1px at 60px 80px, rgba(103,199,235,0.45), transparent),
-    radial-gradient(1px 1px at 180px 30px, rgba(103,199,235,0.30), transparent);
-  background-size: 320px 340px;
-  opacity: 0.7;
-}
-.pfield.p3 {
-  background-image:
-    radial-gradient(2.5px 2.5px at 200px 260px, rgba(103,199,235,0.30), transparent),
-    radial-gradient(1px 1px at 40px 160px, rgba(255,214,107,0.22), transparent);
-  background-size: 480px 520px;
-  opacity: 0.5;
-  filter: blur(0.4px);
-}
+/* --- Ambient particles removed (no pixelated dots) --- */
+.ambient-particles, .pfield { display: none !important; }
 ::selection { background: rgba(103,199,235,0.35); color: #eaffff; }
 
 /* Animated HUD frame with corner brackets */
