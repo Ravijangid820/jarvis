@@ -56,7 +56,11 @@ def _seed_device_key(username, device_id):
 
 @pytest.fixture(scope="module")
 def client():
-    with TestClient(main.app) as c:   # runs lifespan → init_db on the temp DB
+    with TestClient(main.app) as c:   # runs lifespan -> init_db on the temp DB
+        conn = sqlite3.connect(_DB)
+        conn.execute("DELETE FROM users")
+        conn.commit()
+        conn.close()
         _seed_user("tony", "pw-admin", "admin")
         _seed_user("pepper", "pw-user", "user")
         yield c
