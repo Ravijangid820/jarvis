@@ -49,7 +49,7 @@ jobs:
         env:
           VITE_BASE_PATH: /jarvis/
           # Uncomment and set when the backend is publicly reachable:
-          # VITE_API_URL: https://api.ravi-mk42.me
+          VITE_API_URL: https://api.ravi-mk42.me
         run: npm run build
 
       - name: Upload Pages artifact
