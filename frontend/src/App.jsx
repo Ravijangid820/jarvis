@@ -1131,10 +1131,6 @@ function App() {
 
   return (
     <div className={`app-container ${processing ? 'thinking' : ''}`}>
-      <div className="hud-frame" aria-hidden="true">
-        <span className="hud-corner tl" /><span className="hud-corner tr" />
-        <span className="hud-corner bl" /><span className="hud-corner br" />
-      </div>
       {dueReminders.length > 0 && (
         <div style={{ position: "fixed", top: 12, right: 12, zIndex: 1000, display: "flex", flexDirection: "column", gap: 8, maxWidth: 360 }}>
           {dueReminders.map(r => (

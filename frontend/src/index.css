@@ -30,12 +30,52 @@
   --font-hud: system-ui, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   --font-data: 'JetBrains Mono', monospace;
   
-  --clip-angle: polygon(12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%, 0 12px);
-  --clip-angle-sm: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
-  --clip-angle-rev: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 12px 100%, 0 calc(100% - 12px));
+  --clip-angle: none;
+  --clip-angle-sm: none;
+  --clip-angle-rev: none;
 }
 
-* { margin: 0; padding: 0; box-sizing: border-box; }
+* { margin: 0; padding: 0; box-sizing: border-box; clip-path: none !important; }
+
+/* ============================================================
+   GLOBAL UI SMOOTHING (Modern Rounded Corners & Fluid Transitions)
+   ============================================================ */
+button, input, textarea, select {
+  border-radius: 12px;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.sidebar {
+  border-radius: 0 20px 20px 0;
+  box-shadow: 5px 0 25px rgba(0, 0, 0, 0.4);
+}
+.hud-panel, .welcome-screen, .welcome-box, .login-box, .palette {
+  border-radius: 20px !important;
+  box-shadow: 0 10px 35px rgba(0, 0, 0, 0.5) !important;
+}
+.msg-body {
+  border-radius: 18px !important;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+.input-wrap {
+  border-radius: 24px !important;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+.sug-btn {
+  border-radius: 16px !important;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+.hud-btn, .new-session-btn, .login-btn, .cmd-btn, .theme-chip, .hist-btn {
+  border-radius: 12px !important;
+}
+.top-model, .mode-badge, .reasoning-pill {
+  border-radius: 999px !important;
+}
+.hud-input, .hud-textarea, .login-input, .palette-input {
+  border-radius: 12px !important;
+}
+.error-toast {
+  border-radius: 999px !important;
+}
 
 body {
   font-family: var(--font-hud);
