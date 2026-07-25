@@ -8,7 +8,7 @@ import memory
 from budget import clamp_completion, estimate_message_tokens, fit_history, truncate_to_tokens
 from config import (COMPLETION_RESERVE_DEFAULT, KNOWLEDGE_TOKEN_CAP, MAX_CONTEXT_MESSAGES,
                     MAX_CONTEXT_TOKENS, MIN_COMPLETION_TOKENS, PROMPT_SAFETY_MARGIN,
-                    REASONING, SYSTEM_PROMPT)
+                    REASONING, SYSTEM_PROMPT, JARVIS_MODE, logger)
 from db import get_db
 
 
@@ -71,15 +71,34 @@ def get_sessions(user_id: int) -> List[Dict[str, Any]]:
         conn.close()
 
 
+def reset_demo_session(keep_session_id: str, user_id: int):
+    """In Demo mode, wipe older sessions and their RAG embeddings for this user so history remains ephemeral to the current test session."""
+    if JARVIS_MODE != "demo":
+        return
+    conn = get_db()
+    try:
+        conn.execute("DELETE FROM conversation_history WHERE session_id IN (SELECT id FROM chat_sessions WHERE id != ? AND user_id = ?)", (keep_session_id, user_id))
+        conn.execute("DELETE FROM chat_sessions WHERE id != ? AND user_id = ?", (keep_session_id, user_id))
+        conn.commit()
+    finally:
+        conn.close()
+    try:
+        if memory.vectors_available() and memory.memory_collection is not None:
+            memory.memory_collection.delete(where={"$and": [{"user_id": user_id}, {"session_id": {"$ne": keep_session_id}}]})
+    except Exception as e:
+        logger.warning("Demo mode RAG cleanup failed: %s", e)
+
+
 def create_session(title: str, user_id: int) -> str:
     session_id = str(uuid.uuid4())
     conn = get_db()
     try:
         conn.execute("INSERT INTO chat_sessions (id, title, user_id) VALUES (?, ?, ?)", (session_id, title, user_id))
         conn.commit()
-        return session_id
     finally:
         conn.close()
+    reset_demo_session(session_id, user_id)
+    return session_id
 
 
 def resolve_session(session_id: Optional[str], user_id: int) -> str:
@@ -95,7 +114,9 @@ def resolve_session(session_id: Optional[str], user_id: int) -> str:
                 conn.commit()
         finally:
             conn.close()
+        reset_demo_session(sid, user_id)
         return sid
+    reset_demo_session(session_id, user_id)
     return session_id
 
 

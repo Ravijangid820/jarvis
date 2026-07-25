@@ -207,8 +207,18 @@ function renderMessageContent(content) {
     <>
       {thinkText && (
         <details className="think-box" open={!content.includes("</think>")}>
-          <summary className="think-header">💡 Reasoning</summary>
-          <div className="think-body">{parseMd(thinkText)}</div>
+          <summary className="think-header">
+            {!content.includes("</think>") ? (
+              <span className="think-header-content"><span className="think-pulse">🧠</span> <span>Thinking Process (Live Steps)...</span></span>
+            ) : (
+              <span className="think-header-content"><span className="think-icon">💡</span> <span>Thought Process & Reasoning Steps</span></span>
+            )}
+          </summary>
+          <div className="think-body">
+            <div className="think-steps-container">
+              {parseMd(thinkText)}
+            </div>
+          </div>
         </details>
       )}
       {parseMd(mainText)}
@@ -336,6 +346,7 @@ function App() {
   // Server Status
   const [isOnline, setIsOnline] = useState(false)
   const [modelName, setModelName] = useState("—")
+  const [appMode, setAppMode] = useState("production")
   const [uplink, setUplink] = useState("N/A")
 
   // Sidebar: `open` drives the mobile slide-in drawer; `collapsed` hides it on desktop.
@@ -645,6 +656,7 @@ function App() {
         const data = await res.json()
         setIsOnline(true)
         setModelName(data.model || "active")
+        if (data.mode) setAppMode(data.mode)
         setUplink("Stable")
       } else {
         setIsOnline(false)
@@ -1361,6 +1373,11 @@ function App() {
           <button className="sidebar-toggle" onClick={toggleSidebar} aria-label="Toggle menu" title="Toggle sidebar">☰</button>
           <span className="top-title">{currentTitle}</span>
           <span className="top-model">{modelName}</span>
+          {appMode !== "production" && (
+            <span className={`mode-badge mode-${appMode}`}>
+              {appMode === "demo" ? "🧪 Demo" : "🛠️ Dev"}
+            </span>
+          )}
           <button className={`reasoning-pill ${reasoning ? 'active' : ''}`} onClick={() => setReasoning(r => !r)} title="Toggle Deep Reasoning (<think> mode)">
             🧠 {reasoning ? 'Reasoning ON' : 'Reasoning OFF'}
           </button>

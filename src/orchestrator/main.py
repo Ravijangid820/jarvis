@@ -46,7 +46,7 @@ from config import (ADMIN_MAX_INPUT, ALLOWED_ORIGINS, APP_VERSION, BASE_DIR, CHR
                     COMPLETION_RESERVE_DEFAULT, CONFIG, HA_TOKEN_FROM_ENV, HA_URL_FROM_ENV,
                     INDEX_HTML, LLM_URL, PIPER_BIN, PIPER_MODEL,
                     RATE_LIMIT_RPM, REACT_DIST_DIR, REGULAR_MAX_INPUT, REQUIRE_PRESENCE_FOR_CONTROL,
-                    STATIC_DIR, VALID_FACT_CATEGORIES, logger)
+                    STATIC_DIR, VALID_FACT_CATEGORIES, JARVIS_MODE, logger)
 import ha
 import intent_router
 from db import get_db, get_setting, init_db, set_setting
@@ -460,12 +460,12 @@ def get_session_history(session_id: str, request: Request):
 
 @app.get("/health")
 def health_check() -> Dict[str, str]:
-    return {"status": "ok", "model": "qwen3.5-2b"}
+    return {"status": "ok", "model": "qwen3.5-2b", "mode": JARVIS_MODE}
 
 
 def _system_stats() -> Dict[str, Any]:
     """Live host telemetry for the UI diagnostics panel. Dependency-free (/proc + os)."""
-    stats: Dict[str, Any] = {}
+    stats: Dict[str, Any] = {"mode": JARVIS_MODE}
     try:
         load1 = os.getloadavg()[0]
         cpus = os.cpu_count() or 1
@@ -1116,6 +1116,8 @@ def _handle_volume_command(user_text: str, raw_request: Request) -> Optional[str
     ack; otherwise None (→ caller falls through to the LLM). Shared by /inbox and /chat/stream."""
     vol = parse_volume(user_text)
     is_gesture = vol is None and is_gesture_volume(user_text)
+    if (vol is not None or is_gesture) and JARVIS_MODE == "demo":
+        return "Hardware device control is disabled in public Demo Mode."
     if (vol is not None or is_gesture) and REQUIRE_PRESENCE_FOR_CONTROL and not _authorized_person_present():
         return "I don't see anyone authorized in the room, so I can't change that right now."
     if vol is not None:
@@ -1214,6 +1216,8 @@ def _handle_home_command(user_text: str, raw_request: Request, session_id: str) 
     ("turn my life around") are never hijacked. "it"/"that" refers to the session's last device."""
     if not ha.configured():
         return None
+    if JARVIS_MODE == "demo":
+        return "Home Assistant control is disabled in public Demo Mode."
 
     # 0) A semantic proposal awaiting yes/no? ("Should I turn on the fan?")
     pending = _PENDING_HOME.pop(session_id, None)
@@ -1470,6 +1474,11 @@ def _handle_reminder(user_text: str, raw_request: Request) -> Optional[str]:
     return f"Okay — I'll remind you to {r['text']} at {when}."
 
 
+def _require_not_demo(detail: str = "Hardware & Home Assistant control is disabled in public Demo Mode."):
+    if JARVIS_MODE == "demo":
+        raise HTTPException(status_code=403, detail=detail)
+
+
 @app.post("/devices/volume")
 def queue_volume(req: VolumeRequest, request: Request):
     """Enqueue a volume command for a device agent (e.g. the Windows volume agent).
@@ -1477,6 +1486,7 @@ def queue_volume(req: VolumeRequest, request: Request):
     Authorization is enforced here against the caller's identity/permissions; the command is
     a tiny validated vocabulary (no shell, no free text). The device agent pulls + executes it.
     """
+    _require_not_demo()
     if not _can_control_devices(request):
         raise HTTPException(status_code=403, detail="Not authorized to control devices")
     cmd_id = _enqueue_volume(req.action, req.value, req.device)
@@ -1489,6 +1499,7 @@ def report_gesture(req: GestureReport, request: Request):
     """The camera reports normalized hand height while in gesture mode; the server maps movement to
     volume steps for the mode's target. Gated by an active, voice-authorized mode for THIS camera, so
     the camera key needs no device-control permission. Returns {active} so the camera knows when to stop."""
+    _require_not_demo()
     dev = getattr(request.state, "device_id", None)
     if not dev and getattr(request.state, "is_admin", False):
         dev = request.query_params.get("device")          # admin may drive it for testing
@@ -1539,6 +1550,7 @@ async def pull_device_commands(request: Request, device: str, wait: int = 20):
     `async` + `asyncio.sleep` so a waiting poll holds no worker thread (a sync handler would
     exhaust the thread pool under many concurrent polls). The key must be bound to `device`
     (or be an admin): a key for one device can't drain another device's queue (F1)."""
+    _require_not_demo()
     dev = getattr(request.state, "device_id", None)
     if not getattr(request.state, "is_admin", False) and dev != device:
         raise HTTPException(status_code=403, detail="This key is not bound to that device")
@@ -1636,9 +1648,13 @@ def _maybe_title(needs_title: bool, session_id: str, user_id: int, user_text: st
     if not needs_title:
         return None
     try:
-        resp = request_llm([{"role": "system", "content": "Reply with a very short title (1-4 words). No quotes."},
-                            {"role": "user", "content": user_text}], temperature=0.3, n_predict=10)
-        title = llm_content(resp).replace('"', "").replace(".", "").strip()
+        resp = request_llm([{"role": "system", "content": "Reply with a very short title (1-4 words). No quotes. /no_think"},
+                            {"role": "user", "content": user_text}], temperature=0.3, n_predict=25)
+        raw_val = llm_content(resp)
+        if "<think>" in raw_val:
+            import re
+            raw_val = re.sub(r"<think>.*?</think>", "", raw_val, flags=re.DOTALL).strip()
+        title = raw_val.replace('"', "").replace(".", "").strip()
         if title:
             chat.rename_session(session_id, title, user_id)
             return title
@@ -1661,7 +1677,7 @@ def process_input(request: QueryRequest, raw_request: Request):
                 "audio": synthesize_tts(ack) if request.voice_feedback else None}
 
     existing = chat.get_recent_context(session_id)
-    needs_title = (len(existing) == 0) and not is_default_session(session_id)
+    needs_title = (len(existing) == 0)
     completion_reserve = request.n_predict if (request.n_predict and request.n_predict > 0) else COMPLETION_RESERVE_DEFAULT
     messages = chat.build_messages(session_id, user_id, user_text, request.system_prompt, completion_reserve=completion_reserve, reasoning=request.reasoning)
     max_tokens = chat.clamp_completion_for(messages, request.n_predict)
@@ -1711,7 +1727,7 @@ def chat_stream(request: QueryRequest, raw_request: Request):
         return StreamingResponse(vol_gen(), media_type="text/event-stream")
 
     existing = chat.get_recent_context(session_id)
-    needs_title = (len(existing) == 0) and not is_default_session(session_id)
+    needs_title = (len(existing) == 0)
     completion_reserve = request.n_predict if (request.n_predict and request.n_predict > 0) else COMPLETION_RESERVE_DEFAULT
     messages = chat.build_messages(session_id, user_id, user_text, request.system_prompt, completion_reserve=completion_reserve, reasoning=request.reasoning)
     max_tokens = chat.clamp_completion_for(messages, request.n_predict)

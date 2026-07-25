@@ -921,20 +921,63 @@ html[data-theme="clean"] .send-btn {
 .reasoning-pill.active { background: rgba(161, 161, 170, 0.2); border-color: #a1a1aa; font-weight: 600; }
 
 .think-box {
-  margin-bottom: 12px; border: 1px solid rgba(161, 161, 170, 0.25);
-  border-radius: 8px; background: rgba(0, 0, 0, 0.15); overflow: hidden;
-  font-size: 0.86rem; color: #a1a1aa; transition: all 0.2s;
+  margin-bottom: 16px; border: 1px solid rgba(59, 130, 246, 0.25);
+  border-radius: 12px; background: rgba(15, 23, 42, 0.5); overflow: hidden;
+  font-size: 0.88rem; color: #a1a1aa; transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .think-header {
-  padding: 8px 12px; background: rgba(255, 255, 255, 0.03); cursor: pointer;
-  font-weight: 600; user-select: none; list-style: none; display: flex; align-items: center; gap: 6px;
+  padding: 10px 14px; background: rgba(59, 130, 246, 0.08); cursor: pointer;
+  font-weight: 600; user-select: none; list-style: none; display: flex; align-items: center; justify-content: space-between;
+  color: #60a5fa; transition: background 0.2s, color 0.2s; border-bottom: 1px solid transparent;
 }
 .think-header::-webkit-details-marker { display: none; }
-.think-header:hover { background: rgba(255, 255, 255, 0.06); color: #e4e4e7; }
+.think-header-content { display: flex; align-items: center; gap: 8px; }
+.think-box[open] .think-header { border-bottom: 1px solid rgba(59, 130, 246, 0.15); }
+.think-header:hover { background: rgba(59, 130, 246, 0.15); color: #93c5fd; }
 .think-body {
-  padding: 10px 14px; border-top: 1px solid rgba(161, 161, 170, 0.15);
-  font-family: inherit; line-height: 1.5; color: #d4d4d8; background: rgba(0, 0, 0, 0.2);
+  padding: 14px 16px; font-family: inherit; line-height: 1.6; color: #cbd5e1; background: rgba(0, 0, 0, 0.3);
 }
+.think-steps-container {
+  display: flex; flex-direction: column; gap: 12px; position: relative;
+}
+.think-steps-container .md-line, .think-steps-container .md-list, .think-steps-container .md-h {
+  position: relative;
+  padding: 8px 12px 8px 20px;
+  border-left: 2px solid rgba(59, 130, 246, 0.4);
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 0 8px 8px 0;
+  margin: 0;
+  transition: background 0.2s, border-color 0.2s;
+}
+.think-steps-container .md-line:hover, .think-steps-container .md-list:hover, .think-steps-container .md-h:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-left-color: #3b82f6;
+}
+.think-steps-container .md-line::before, .think-steps-container .md-list::before, .think-steps-container .md-h::before {
+  content: "";
+  position: absolute;
+  left: -5px;
+  top: 14px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #3b82f6;
+  box-shadow: 0 0 6px rgba(59, 130, 246, 0.8);
+}
+.think-pulse { display: inline-block; animation: thinkPulse 1.2s infinite ease-in-out; }
+@keyframes thinkPulse {
+  0%, 100% { transform: scale(1); opacity: 0.8; }
+  50% { transform: scale(1.15); opacity: 1; filter: drop-shadow(0 0 6px #60a5fa); }
+}
+
+.mode-badge {
+  display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px;
+  border-radius: 999px; font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.05em; border: 1px solid;
+}
+.mode-production { background: rgba(16, 185, 129, 0.12); color: #34d399; border-color: rgba(16, 185, 129, 0.3); }
+.mode-development { background: rgba(245, 158, 11, 0.12); color: #fbbf24; border-color: rgba(245, 158, 11, 0.3); }
+.mode-demo { background: rgba(236, 72, 153, 0.15); color: #f472b6; border-color: rgba(236, 72, 153, 0.4); box-shadow: 0 0 8px rgba(236, 72, 153, 0.2); }
 
 /* -------------------------------------------------------------------------- */
 /* Llama Chat UI Components (Model Badge, Turn Footer, Action Buttons)       */
@@ -1104,4 +1147,73 @@ html[data-theme="clean"] .theme-chip,
 html[data-theme="clean"] .new-session-btn,
 html[data-theme="clean"] .cmd-btn {
   border-radius: 10px !important;
+}
+
+/* ============================================================
+   STARK THEME (Futuristic Iron-Man HUD & Gold/Arc Aesthetics)
+   ============================================================ */
+html[data-theme="stark"] body {
+  background: radial-gradient(circle at 50% 20%, #0a1420 0%, #03060a 100%) !important;
+  color: #e2e8f0 !important;
+}
+html[data-theme="stark"] .sidebar,
+html[data-theme="stark"] .top-bar,
+html[data-theme="stark"] .input-wrap,
+html[data-theme="stark"] .hud-panel,
+html[data-theme="stark"] .welcome-screen {
+  background: rgba(8, 18, 30, 0.75) !important;
+  border: 1px solid rgba(255, 214, 107, 0.35) !important;
+  box-shadow: 0 0 20px rgba(255, 214, 107, 0.1), inset 0 0 15px rgba(103, 199, 235, 0.08) !important;
+}
+html[data-theme="stark"] .top-title,
+html[data-theme="stark"] .sidebar-title,
+html[data-theme="stark"] .hud-title {
+  color: #ffd66b !important;
+  text-shadow: 0 0 10px rgba(255, 214, 107, 0.5) !important;
+  font-family: var(--font-data), monospace !important;
+  letter-spacing: 0.08em;
+}
+html[data-theme="stark"] .message.user .msg-body {
+  background: linear-gradient(135deg, rgba(255, 214, 107, 0.2) 0%, rgba(229, 32, 32, 0.25) 100%) !important;
+  border: 1px solid rgba(255, 214, 107, 0.5) !important;
+  color: #fff !important;
+  box-shadow: 0 0 12px rgba(255, 214, 107, 0.2) !important;
+}
+html[data-theme="stark"] .message.jarvis .msg-body {
+  background: rgba(10, 25, 42, 0.85) !important;
+  border-left: 3px solid #ffd66b !important;
+  border: 1px solid rgba(103, 199, 235, 0.3) !important;
+  color: #e0f2fe !important;
+  box-shadow: 0 0 15px rgba(103, 199, 235, 0.15) !important;
+}
+html[data-theme="stark"] .send-btn {
+  background: linear-gradient(135deg, #ffd66b 0%, #e52020 100%) !important;
+  color: #000 !important;
+  font-weight: 800 !important;
+  box-shadow: 0 0 15px rgba(255, 214, 107, 0.5) !important;
+  border: none !important;
+}
+html[data-theme="stark"] .send-btn:hover {
+  filter: brightness(1.2) !important;
+  box-shadow: 0 0 25px rgba(255, 214, 107, 0.8) !important;
+}
+html[data-theme="stark"] .think-box {
+  background: rgba(8, 18, 30, 0.9) !important;
+  border-color: rgba(255, 214, 107, 0.4) !important;
+}
+html[data-theme="stark"] .think-header {
+  background: rgba(255, 214, 107, 0.15) !important;
+  color: #ffd66b !important;
+}
+html[data-theme="stark"] .think-steps-container .md-line,
+html[data-theme="stark"] .think-steps-container .md-list,
+html[data-theme="stark"] .think-steps-container .md-h {
+  border-left-color: #ffd66b !important;
+  background: rgba(255, 214, 107, 0.04) !important;
+}
+html[data-theme="stark"] .think-steps-container .md-line::before,
+html[data-theme="stark"] .think-steps-container .md-list::before,
+html[data-theme="stark"] .think-steps-container .md-h::before {
+  background: #ffd66b !important;
+  box-shadow: 0 0 8px rgba(255, 214, 107, 0.9) !important;
 }

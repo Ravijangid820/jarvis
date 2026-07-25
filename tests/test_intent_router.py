@@ -13,6 +13,7 @@ import ha  # noqa: E402
 import intent_router as ir  # noqa: E402
 
 
+import zlib
 def _bow_embed(texts):
     """Deterministic fake: bag-of-words indicator vectors → cosine = word overlap."""
     vocab = {}
@@ -22,7 +23,7 @@ def _bow_embed(texts):
             vocab.setdefault(w, len(vocab))
         v = [0.0] * 512
         for w in tokens:
-            v[hash(w) % 512] += 1.0
+            v[zlib.crc32(w.encode("utf-8")) % 512] += 1.0
         n = math.sqrt(sum(x * x for x in v))
         return [x / n for x in v]
     return [vec(t) for t in texts]

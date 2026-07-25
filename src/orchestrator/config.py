@@ -192,3 +192,10 @@ INDEX_HTML = REACT_DIST_DIR / "index.html"
 SCHEMA_PATH = BASE_DIR / "config" / "schema.sql"
 ADMIN_MAX_INPUT = 10000
 REGULAR_MAX_INPUT = 500
+
+# Project execution mode: "production" (full features, persistent), "development" (full features, verbose debug),
+# "demo" (public presentation mode: HA/hardware device control disabled, ephemeral session memory/RAG only).
+JARVIS_MODE: str = (os.environ.get("JARVIS_MODE") or CONFIG.get("mode") or "production").lower().strip()
+if JARVIS_MODE not in ("production", "development", "demo"):
+    logger.warning("Unknown JARVIS_MODE '%s', defaulting to 'production'", JARVIS_MODE)
+    JARVIS_MODE = "production"
