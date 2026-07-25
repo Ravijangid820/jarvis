@@ -41,7 +41,6 @@ import chat
 import memory
 from auth import hash_password, hash_token, verify_password
 from intents import HOME_CONTROL_VERB, is_gesture_volume, parse_home_command, parse_reminder, parse_volume
-from budget import is_default_session
 from config import (ADMIN_MAX_INPUT, ALLOWED_ORIGINS, APP_VERSION, BASE_DIR, CHROMA_DB_PATH,
                     COMPLETION_RESERVE_DEFAULT, CONFIG, HA_TOKEN_FROM_ENV, HA_URL_FROM_ENV,
                     INDEX_HTML, LLM_URL, PIPER_BIN, PIPER_MODEL,
