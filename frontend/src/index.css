@@ -271,16 +271,15 @@ button, input, textarea { font-family: inherit; outline: none; }
 
 .input-area { padding: 20px 30px 30px; background: transparent !important; position: relative; z-index: 10; }
 
-/* The HUD Bracket for Input */
 .input-wrap {
   max-width: 900px; margin: 0 auto;
   position: relative;
-  background: var(--bg-glass-heavy);
+  background: transparent !important;
   border: 1px solid rgba(103, 199, 235, 0.3);
   clip-path: var(--clip-angle);
-  box-shadow: 0 0 30px rgba(0,0,0,0.8), inset 0 0 20px rgba(103, 199, 235, 0.05);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
 /* Removed out-of-sync corner lines for smooth UI */
@@ -519,7 +518,6 @@ button, input, textarea { font-family: inherit; outline: none; }
   box-shadow: inset 0 1px 0 rgba(103,199,235,0.14), 0 10px 28px rgba(0,0,0,0.38);
 }
 .msg-avatar.jarvis { box-shadow: 0 0 15px var(--holo-cyan), inset 0 1px 2px rgba(255,255,255,0.4); }
-.input-wrap { box-shadow: 0 0 30px rgba(0,0,0,0.8), inset 0 1px 0 rgba(103,199,235,0.18), inset 0 0 20px rgba(103,199,235,0.05); }
 .sug-btn {
   background: linear-gradient(180deg, rgba(103,199,235,0.06), rgba(103,199,235,0.02));
   box-shadow: inset 0 1px 0 rgba(103,199,235,0.12);
@@ -613,8 +611,7 @@ button, input, textarea { font-family: inherit; outline: none; }
    back to a solid translucent fill so they still read as panels. Toggle in the Theme panel / ⌘K. */
 html.perf .ambient-particles,
 html.perf .chat-reactor-bg { display: none !important; }
-html.perf .sidebar,
-html.perf .input-wrap {
+html.perf .sidebar {
   backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
   background: rgba(6, 14, 20, 0.92) !important;
 }
@@ -905,7 +902,7 @@ html[data-theme="clean"] .chat-reactor-bg {
   display: none !important;
 }
 html[data-theme="clean"] .input-wrap {
-  background: #18181b !important;
+  background: transparent !important;
   border-color: #52525b !important;
   box-shadow: none !important;
 }
@@ -1142,7 +1139,7 @@ html[data-theme="clean"] .model-badge {
 }
 html[data-theme="clean"] .input-wrap {
   border-radius: 24px !important;
-  background: #27272a !important;
+  background: transparent !important;
   border: 1px solid #3f3f46 !important;
 }
 html[data-theme="clean"] .input-wrap::before,
@@ -1167,9 +1164,9 @@ html[data-theme="stark"] body {
   color: #e2e8f0 !important;
 }
 html[data-theme="stark"] .input-wrap {
-  background: rgba(8, 18, 30, 0.75) !important;
+  background: transparent !important;
   border: 1px solid rgba(255, 214, 107, 0.35) !important;
-  box-shadow: 0 0 20px rgba(255, 214, 107, 0.1), inset 0 0 15px rgba(103, 199, 235, 0.08) !important;
+  box-shadow: none !important;
 }
 html[data-theme="stark"] .sidebar {
   background: rgba(8, 18, 30, 0.85) !important;
