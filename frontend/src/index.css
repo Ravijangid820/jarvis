@@ -225,10 +225,8 @@ button, input, textarea { font-family: inherit; outline: none; }
 .welcome-sub { font-size: 0.78rem; color: rgba(103, 199, 235, 0.5); letter-spacing: 0.15em; line-height: 1.8; margin-bottom: 40px; text-transform: uppercase; }
 
 .welcome-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; max-width: 600px; }
-.sug-btn { background: rgba(103, 199, 235, 0.03); border: 1px solid rgba(103, 199, 235, 0.2); padding: 15px 20px; color: var(--holo-cyan); font-family: var(--font-hud); font-size: 0.75rem; text-align: left; text-transform: uppercase; letter-spacing: 0.1em; cursor: pointer; clip-path: var(--clip-angle); transition: all 0.3s; position: relative; }
-.sug-btn::after { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--holo-cyan); opacity: 0; transition: 0.3s; }
-.sug-btn:hover { background: rgba(103, 199, 235, 0.08); border-color: var(--holo-cyan); box-shadow: 0 0 20px var(--holo-cyan-glow); padding-left: 25px; }
-.sug-btn:hover::after { opacity: 1; }
+.sug-btn { background: rgba(103, 199, 235, 0.03); border: 1px solid rgba(103, 199, 235, 0.2); padding: 15px 20px; color: var(--holo-cyan); font-family: var(--font-hud); font-size: 0.75rem; text-align: left; text-transform: uppercase; letter-spacing: 0.1em; cursor: pointer; transition: all 0.3s; position: relative; }
+.sug-btn:hover { background: rgba(103, 199, 235, 0.08); border-color: var(--holo-cyan); box-shadow: 0 0 20px var(--holo-cyan-glow); }
 .sug-icon { display: block; font-family: var(--font-data); color: var(--alert-orange); margin-bottom: 5px; font-size: 0.7rem; }
 
 /* Chat Bubbles */
