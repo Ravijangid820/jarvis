@@ -269,8 +269,7 @@ button, input, textarea { font-family: inherit; outline: none; }
 .typing-dot:nth-child(3) { animation-delay: 0.4s; }
 @keyframes bounce { 0%, 80%, 100% { transform: translateY(0); opacity: 0.3; } 40% { transform: translateY(-4px); opacity: 1; } }
 
-/* --- Input Area --- */
-.input-area { padding: 20px 30px 30px; background: linear-gradient(to top, var(--bg-void) 40%, transparent); position: relative; z-index: 10; }
+.input-area { padding: 20px 30px 30px; background: transparent !important; position: relative; z-index: 10; }
 
 /* The HUD Bracket for Input */
 .input-wrap {
@@ -882,8 +881,7 @@ html[data-theme="clean"] body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
   filter: none !important;
 }
-html[data-theme="clean"] .sidebar,
-html[data-theme="clean"] .input-area {
+html[data-theme="clean"] .sidebar {
   background: #27272a !important;
   border-color: #3f3f46 !important;
   box-shadow: none !important;
