@@ -1130,7 +1130,7 @@ function App() {
   }
 
   return (
-    <div className={`app-container ${processing ? 'thinking' : ''}`}>
+    <div className={`app-container ${processing ? 'thinking' : ''} ${sidebarCollapsed ? 'sidebar-collapsed' : 'sidebar-expanded'} ${sidebarOpen ? 'mobile-sidebar-open' : ''}`}>
       {dueReminders.length > 0 && (
         <div style={{ position: "fixed", top: 12, right: 12, zIndex: 1000, display: "flex", flexDirection: "column", gap: 8, maxWidth: 360 }}>
           {dueReminders.map(r => (
@@ -1177,12 +1177,15 @@ function App() {
       
       <aside className={`sidebar ${sidebarOpen ? 'open' : ''} ${sidebarCollapsed ? 'collapsed' : ''}`}>
         <div className="sidebar-inner">
-          <div className="sidebar-header">
-            <ArcReactor size={40} className="reactor-logo" />
-            <div>
-              <div className="sidebar-title">J.A.R.V.I.S</div>
-              <div className="sidebar-subtitle">Stark Industries</div>
+          <div className="sidebar-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <ArcReactor size={40} className="reactor-logo" />
+              <div>
+                <div className="sidebar-title">J.A.R.V.I.S</div>
+                <div className="sidebar-subtitle">Stark Industries</div>
+              </div>
             </div>
+            <button className="sidebar-toggle inner-toggle" onClick={toggleSidebar} aria-label="Close menu" title="Close sidebar">☰</button>
           </div>
 
           <div className="sidebar-scroll">
@@ -1362,7 +1365,7 @@ function App() {
         {/* Interactive arc reactor behind the chat — parallax-tilts to the cursor, ramps while thinking. */}
         {renderChatReactor()}
         <div className="top-bar">
-          <button className="sidebar-toggle" onClick={toggleSidebar} aria-label="Toggle menu" title="Toggle sidebar">☰</button>
+          <button className="sidebar-toggle top-toggle" onClick={toggleSidebar} aria-label="Toggle menu" title="Toggle sidebar">☰</button>
           <span className="top-title">{currentTitle}</span>
           <span className="top-model">{modelName}</span>
           {appMode !== "production" && (
