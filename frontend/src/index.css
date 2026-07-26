@@ -65,9 +65,14 @@ button, input, textarea, select {
   border: 1px solid transparent !important;
   border-radius: 10px !important;
 }
-.welcome-screen, .welcome-box, .login-box, .palette {
+.login-box, .palette {
   border-radius: 20px !important;
   box-shadow: 0 10px 35px rgba(0, 0, 0, 0.5) !important;
+}
+.welcome-screen, .welcome-box {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
 }
 .msg-body {
   border-radius: 18px !important;
@@ -883,7 +888,6 @@ html[data-theme="clean"] .input-area {
   box-shadow: none !important;
 }
 html[data-theme="clean"] .hud-panel,
-html[data-theme="clean"] .welcome-screen,
 html[data-theme="clean"] .history-item {
   background: #27272a !important;
   border-color: #3f3f46 !important;
@@ -1164,8 +1168,7 @@ html[data-theme="stark"] body {
   color: #e2e8f0 !important;
 }
 html[data-theme="stark"] .top-bar,
-html[data-theme="stark"] .input-wrap,
-html[data-theme="stark"] .welcome-screen {
+html[data-theme="stark"] .input-wrap {
   background: rgba(8, 18, 30, 0.75) !important;
   border: 1px solid rgba(255, 214, 107, 0.35) !important;
   box-shadow: 0 0 20px rgba(255, 214, 107, 0.1), inset 0 0 15px rgba(103, 199, 235, 0.08) !important;

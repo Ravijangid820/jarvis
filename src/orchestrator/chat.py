@@ -60,6 +60,17 @@ def _get_recent_message_ids(session_id: str) -> set:
 
 # --- Session CRUD -----------------------------------------------------------
 def get_sessions(user_id: int) -> List[Dict[str, Any]]:
+    if JARVIS_MODE == "demo":
+        conn = get_db()
+        try:
+            latest = conn.execute(
+                "SELECT id FROM chat_sessions WHERE user_id = ? ORDER BY created_at DESC LIMIT 1",
+                (user_id,),
+            ).fetchone()
+            keep_id = latest["id"] if latest else None
+        finally:
+            conn.close()
+        reset_demo_session(keep_id, user_id)
     conn = get_db()
     try:
         rows = conn.execute(
@@ -71,20 +82,30 @@ def get_sessions(user_id: int) -> List[Dict[str, Any]]:
         conn.close()
 
 
-def reset_demo_session(keep_session_id: str, user_id: int):
+def reset_demo_session(keep_session_id: Optional[str], user_id: int):
     """In Demo mode, wipe older sessions and their RAG embeddings for this user so history remains ephemeral to the current test session."""
     if JARVIS_MODE != "demo":
         return
     conn = get_db()
     try:
-        conn.execute("DELETE FROM conversation_history WHERE session_id IN (SELECT id FROM chat_sessions WHERE id != ? AND user_id = ?)", (keep_session_id, user_id))
-        conn.execute("DELETE FROM chat_sessions WHERE id != ? AND user_id = ?", (keep_session_id, user_id))
+        if keep_session_id:
+            conn.execute("DELETE FROM conversation_history WHERE session_id IN (SELECT id FROM chat_sessions WHERE id != ? AND user_id = ?)", (keep_session_id, user_id))
+            conn.execute("DELETE FROM chat_sessions WHERE id != ? AND user_id = ?", (keep_session_id, user_id))
+        else:
+            conn.execute("DELETE FROM conversation_history WHERE session_id IN (SELECT id FROM chat_sessions WHERE user_id = ?)", (user_id,))
+            conn.execute("DELETE FROM chat_sessions WHERE user_id = ?", (user_id,))
+        # Purge any sessions older than 30 minutes across the entire db in demo mode
+        conn.execute("DELETE FROM conversation_history WHERE session_id IN (SELECT id FROM chat_sessions WHERE created_at < datetime('now', '-30 minutes'))")
+        conn.execute("DELETE FROM chat_sessions WHERE created_at < datetime('now', '-30 minutes')")
         conn.commit()
     finally:
         conn.close()
     try:
         if memory.vectors_available() and memory.memory_collection is not None:
-            memory.memory_collection.delete(where={"$and": [{"user_id": user_id}, {"session_id": {"$ne": keep_session_id}}]})
+            if keep_session_id:
+                memory.memory_collection.delete(where={"$and": [{"user_id": user_id}, {"session_id": {"$ne": keep_session_id}}]})
+            else:
+                memory.memory_collection.delete(where={"user_id": user_id})
     except Exception as e:
         logger.warning("Demo mode RAG cleanup failed: %s", e)
 
