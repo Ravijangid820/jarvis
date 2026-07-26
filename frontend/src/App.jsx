@@ -1364,6 +1364,33 @@ function App() {
       <main className="main-area">
         {/* Interactive arc reactor behind the chat — parallax-tilts to the cursor, ramps while thinking. */}
         {renderChatReactor()}
+        
+        <div className="messages-container" ref={messagesContainerRef} onScroll={onMessagesScroll}>
+          <div className="messages-inner">
+            {messages.length === 0 && (
+              <div className="welcome-screen">
+                <div className="welcome-reactor">
+                  <ArcReactor size={128} />
+                </div>
+                <h1 className="welcome-title">J.A.R.V.I.S</h1>
+                <p className="welcome-greeting">{greetTyped}{greetTyped.length < greeting.length && <span className="greet-cursor" />}</p>
+                <p className="welcome-sub">Just A Rather Very Intelligent System · Local processing · Private server</p>
+                <div className="welcome-grid">
+                  <button className="sug-btn" onClick={() => send("What can you help me with?")}><span className="sug-icon">[SYS]</span> What can you help me with?</button>
+                  <button className="sug-btn" onClick={() => send("Tell me a fun fact about technology")}><span className="sug-icon">[DATA]</span> Fun fact about technology</button>
+                  <button className="sug-btn" onClick={() => send("Explain quantum computing simply")}><span className="sug-icon">[CALC]</span> Explain quantum computing</button>
+                  <button className="sug-btn" onClick={() => send("Write a short poem about AI")}><span className="sug-icon">[GEN]</span> Write a poem about AI</button>
+                </div>
+              </div>
+            )}
+            
+            {messages.map((m, i) => (
+              <MessageItem key={i} index={i} role={m.role} content={m.content} isStreaming={m.isStreaming} modelName={modelName} onAction={handleMessageAction} />
+            ))}
+            <div ref={messagesEndRef} />
+          </div>
+        </div>
+
         <div className="top-bar">
           <button className="sidebar-toggle top-toggle" onClick={toggleSidebar} aria-label="Toggle menu" title="Toggle sidebar">☰</button>
           <span className="top-title">{currentTitle}</span>
@@ -1388,32 +1415,6 @@ function App() {
           <div className="conn-badge">
             <div className={`status-dot ${isOnline ? 'online' : 'offline'}`}></div>
             <span>{isOnline ? 'Active' : 'Down'}</span>
-          </div>
-        </div>
-
-        <div className="messages-container" ref={messagesContainerRef} onScroll={onMessagesScroll}>
-          <div className="messages-inner">
-            {messages.length === 0 && (
-              <div className="welcome-screen">
-                <div className="welcome-reactor">
-                  <ArcReactor size={128} />
-                </div>
-                <h1 className="welcome-title">J.A.R.V.I.S</h1>
-                <p className="welcome-greeting">{greetTyped}{greetTyped.length < greeting.length && <span className="greet-cursor" />}</p>
-                <p className="welcome-sub">Just A Rather Very Intelligent System · Local processing · Private server</p>
-                <div className="welcome-grid">
-                  <button className="sug-btn" onClick={() => send("What can you help me with?")}><span className="sug-icon">[SYS]</span> What can you help me with?</button>
-                  <button className="sug-btn" onClick={() => send("Tell me a fun fact about technology")}><span className="sug-icon">[DATA]</span> Fun fact about technology</button>
-                  <button className="sug-btn" onClick={() => send("Explain quantum computing simply")}><span className="sug-icon">[CALC]</span> Explain quantum computing</button>
-                  <button className="sug-btn" onClick={() => send("Write a short poem about AI")}><span className="sug-icon">[GEN]</span> Write a poem about AI</button>
-                </div>
-              </div>
-            )}
-            
-            {messages.map((m, i) => (
-              <MessageItem key={i} index={i} role={m.role} content={m.content} isStreaming={m.isStreaming} modelName={modelName} onAction={handleMessageAction} />
-            ))}
-            <div ref={messagesEndRef} />
           </div>
         </div>
         
