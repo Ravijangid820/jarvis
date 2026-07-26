@@ -202,7 +202,7 @@ button, input, textarea { font-family: inherit; outline: none; }
 
 .main-area { flex: 1; display: flex; flex-direction: column; position: relative; overflow: hidden; }
 
-.top-bar { position: absolute; top: 0; left: 0; right: 0; height: 50px; min-height: 50px; background: transparent !important; backdrop-filter: blur(20px) !important; -webkit-backdrop-filter: blur(20px) !important; border: none !important; box-shadow: none !important; display: flex; align-items: center; padding: 0 20px; gap: 15px; z-index: 10; }
+.top-bar { position: absolute; top: 0; left: 0; right: 0; height: 50px; min-height: 50px; background: rgba(4, 10, 16, 0.25) !important; backdrop-filter: blur(20px) !important; -webkit-backdrop-filter: blur(20px) !important; border: none !important; box-shadow: none !important; display: flex; align-items: center; padding: 0 20px; gap: 15px; z-index: 10; }
 .sidebar-toggle { background: none; border: 1px solid rgba(103, 199, 235, 0.3); color: var(--holo-cyan); width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; cursor: pointer; border-radius: 8px !important; transition: 0.2s; flex-shrink: 0; }
 .sidebar-toggle:hover { border-color: var(--holo-cyan); background: var(--holo-cyan-dim); }
 .sidebar-expanded .top-bar .top-toggle { display: none !important; }
@@ -273,9 +273,10 @@ button, input, textarea { font-family: inherit; outline: none; }
 .input-wrap {
   max-width: 900px; margin: 0 auto;
   position: relative;
-  background: transparent !important;
+  background: rgba(4, 10, 16, 0.25) !important;
   border: 1px solid rgba(103, 199, 235, 0.3);
-  clip-path: var(--clip-angle);
+  clip-path: none !important;
+  border-radius: 24px !important;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5) !important;
   backdrop-filter: blur(20px) !important;
   -webkit-backdrop-filter: blur(20px) !important;
@@ -903,7 +904,7 @@ html[data-theme="clean"] .chat-reactor-bg {
   display: none !important;
 }
 html[data-theme="clean"] .top-bar {
-  background: transparent !important;
+  background: rgba(24, 24, 27, 0.25) !important;
   border: none !important;
   box-shadow: none !important;
   backdrop-filter: blur(20px) !important;
@@ -911,9 +912,11 @@ html[data-theme="clean"] .top-bar {
 }
 
 html[data-theme="clean"] .input-wrap {
-  background: transparent !important;
+  background: rgba(24, 24, 27, 0.25) !important;
   border-color: #52525b !important;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4) !important;
+  clip-path: none !important;
+  border-radius: 24px !important;
   backdrop-filter: blur(20px) !important;
   -webkit-backdrop-filter: blur(20px) !important;
 }
@@ -1150,9 +1153,10 @@ html[data-theme="clean"] .model-badge {
 }
 html[data-theme="clean"] .input-wrap {
   border-radius: 24px !important;
-  background: transparent !important;
+  background: rgba(24, 24, 27, 0.25) !important;
   border: 1px solid #3f3f46 !important;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4) !important;
+  clip-path: none !important;
   backdrop-filter: blur(20px) !important;
   -webkit-backdrop-filter: blur(20px) !important;
 }
@@ -1178,7 +1182,7 @@ html[data-theme="stark"] body {
   color: #e2e8f0 !important;
 }
 html[data-theme="stark"] .top-bar {
-  background: transparent !important;
+  background: rgba(8, 18, 30, 0.25) !important;
   border: none !important;
   box-shadow: none !important;
   backdrop-filter: blur(20px) !important;
@@ -1186,9 +1190,11 @@ html[data-theme="stark"] .top-bar {
 }
 
 html[data-theme="stark"] .input-wrap {
-  background: transparent !important;
+  background: rgba(8, 18, 30, 0.25) !important;
   border: 1px solid rgba(255, 214, 107, 0.35) !important;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), inset 0 0 15px rgba(103, 199, 235, 0.08) !important;
+  clip-path: none !important;
+  border-radius: 24px !important;
   backdrop-filter: blur(20px) !important;
   -webkit-backdrop-filter: blur(20px) !important;
 }
