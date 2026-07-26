@@ -203,7 +203,7 @@ button, input, textarea { font-family: inherit; outline: none; }
 /* --- Main Area --- */
 .main-area { flex: 1; display: flex; flex-direction: column; }
 
-.top-bar { height: 50px; min-height: 50px; background: var(--bg-glass-heavy); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border-bottom: 1px solid rgba(103, 199, 235, 0.2); display: flex; align-items: center; padding: 0 20px; gap: 15px; z-index: 10; box-shadow: 0 5px 20px rgba(0,0,0,0.5); }
+.top-bar { height: 50px; min-height: 50px; background: transparent !important; backdrop-filter: none !important; -webkit-backdrop-filter: none !important; border: none !important; box-shadow: none !important; display: flex; align-items: center; padding: 0 20px; gap: 15px; z-index: 10; }
 .sidebar-toggle { background: none; border: 1px solid rgba(103, 199, 235, 0.3); color: var(--holo-cyan); width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; cursor: pointer; clip-path: var(--clip-angle-sm); transition: 0.2s; flex-shrink: 0; }
 .sidebar-toggle:hover { border-color: var(--holo-cyan); background: var(--holo-cyan-dim); }
 .top-title { font-size: 0.9rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.15em; text-shadow: 0 0 10px var(--holo-cyan-glow); }
@@ -610,7 +610,6 @@ button, input, textarea { font-family: inherit; outline: none; }
 html.perf .ambient-particles,
 html.perf .chat-reactor-bg { display: none !important; }
 html.perf .sidebar,
-html.perf .top-bar,
 html.perf .input-wrap {
   backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
   background: rgba(6, 14, 20, 0.92) !important;
@@ -879,7 +878,6 @@ html[data-theme="clean"] body {
   filter: none !important;
 }
 html[data-theme="clean"] .sidebar,
-html[data-theme="clean"] .top-bar,
 html[data-theme="clean"] .input-area {
   background: #27272a !important;
   border-color: #3f3f46 !important;
@@ -1165,7 +1163,6 @@ html[data-theme="stark"] body {
   background: radial-gradient(circle at 50% 20%, #0a1420 0%, #03060a 100%) !important;
   color: #e2e8f0 !important;
 }
-html[data-theme="stark"] .top-bar,
 html[data-theme="stark"] .input-wrap {
   background: rgba(8, 18, 30, 0.75) !important;
   border: 1px solid rgba(255, 214, 107, 0.35) !important;
