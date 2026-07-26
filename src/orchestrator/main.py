@@ -184,8 +184,8 @@ def _apply_security_headers(response: Response, cache: str = "no-store") -> Resp
 async def security_middleware(request: Request, call_next):
     path = request.url.path
     if (request.method == "OPTIONS" 
-            or path in ["/health", "/", "/admin", "/auth/login", "/favicon.svg", "/ca.crt"]
-            or path.endswith("/favicon.svg") or path.endswith("/ca.crt")
+            or path in ["/health", "/", "/admin", "/auth/login", "/favicon.svg", "/favicon.png", "/favicon.ico", "/ca.crt"]
+            or path.endswith("/favicon.svg") or path.endswith("/favicon.png") or path.endswith("/favicon.ico") or path.endswith("/ca.crt")
             or "/static/" in path or "/assets/" in path):
         resp = await call_next(request)
         # Vite emits content-hashed bundles under /assets — safe to cache forever.
@@ -2316,14 +2316,15 @@ def serve_admin():
     return FileResponse(INDEX_HTML, media_type="text/html")
 
 
-@app.get("/favicon.svg")
-def serve_favicon():
-    # index.html links /favicon.svg, but only /assets and /static are mounted, so
-    # the dist-root favicon would 404 on every page load without this route.
-    favicon = REACT_DIST_DIR / "favicon.svg"
+@app.get("/favicon.{ext}")
+def serve_favicon(ext: str):
+    if ext not in ("png", "ico", "svg"):
+        raise HTTPException(status_code=404)
+    media_types = {"png": "image/png", "ico": "image/x-icon", "svg": "image/svg+xml"}
+    favicon = REACT_DIST_DIR / f"favicon.{ext}"
     if not favicon.exists():
         raise HTTPException(status_code=404)
-    return FileResponse(favicon, media_type="image/svg+xml")
+    return FileResponse(favicon, media_type=media_types[ext])
 
 
 @app.get("/ca.crt")
