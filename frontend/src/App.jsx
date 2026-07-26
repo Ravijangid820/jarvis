@@ -245,7 +245,6 @@ const MessageItem = memo(function MessageItem({ role, content, isStreaming, inde
 
   return (
     <div className={`message ${role}`}>
-      {role === 'jarvis' && <div className="msg-avatar jarvis">J</div>}
       <div className={`msg-body ${isStreaming ? 'streaming' : ''}`}>
         <div className="msg-head">
           <span className={`msg-sender ${role}`}>{role === 'user' ? 'You' : 'Jarvis'}</span>
