@@ -61,6 +61,8 @@ def _build_payload(messages, temperature, top_k, top_p, min_p, repeat_penalty,
         # Effective only because build_messages keeps the leading system message + history stable.
         "cache_prompt": True,
     }
+    if stream:
+        data["stream_options"] = {"include_usage": True}
     # Where the caller didn't override a param, fall back to the config "sampling" defaults (absent
     # key -> None -> the value is omitted and llama.cpp uses its own default). Back-compat: an empty
     # SAMPLING_DEFAULTS leaves the request identical to before.
@@ -139,10 +141,17 @@ def request_llm_stream(messages: List[Dict[str, str]], temperature=None, top_k=N
                 if line.startswith("data: ") and line != "data: [DONE]":
                     try:
                         chunk = json.loads(line[6:])
+                        evt: Dict[str, Any] = {}
                         if "choices" in chunk and chunk["choices"]:
                             content = chunk["choices"][0]["delta"].get("content", "")
                             if content:
-                                yield content
+                                evt["content"] = content
+                        if "usage" in chunk:
+                            evt["usage"] = chunk["usage"]
+                        if "timings" in chunk:
+                            evt["timings"] = chunk["timings"]
+                        if evt:
+                            yield evt
                     except json.JSONDecodeError:
                         pass
     except Exception as e:

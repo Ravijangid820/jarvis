@@ -15,17 +15,33 @@ import pytest
 SRC = Path(__file__).resolve().parents[1] / "src" / "orchestrator"
 sys.path.insert(0, str(SRC))
 
+import logging
+
 # --- stub heavy/path-bound modules before importing the code under test ---
-_cfg = types.ModuleType("config")
-_cfg.DB_PATH = ":memory:"
-_cfg.SCHEMA_PATH = Path("/nonexistent/schema.sql")  # init_db isn't exercised here
-_cfg.COMPLETION_RESERVE_DEFAULT = 512
-_cfg.KNOWLEDGE_TOKEN_CAP = 512
-_cfg.MAX_CONTEXT_MESSAGES = 100
-_cfg.MAX_CONTEXT_TOKENS = 4096
-_cfg.MIN_COMPLETION_TOKENS = 64
-_cfg.PROMPT_SAFETY_MARGIN = 96
-_cfg.SYSTEM_PROMPT = "You are Jarvis."
+class ConfigStub:
+    DB_PATH = ":memory:"
+    SCHEMA_PATH = Path("/nonexistent/schema.sql")  # init_db isn't exercised here
+    COMPLETION_RESERVE_DEFAULT = 512
+    KNOWLEDGE_TOKEN_CAP = 512
+    MAX_CONTEXT_MESSAGES = 100
+    MAX_CONTEXT_TOKENS = 4096
+    MIN_COMPLETION_TOKENS = 64
+    PROMPT_SAFETY_MARGIN = 96
+    SYSTEM_PROMPT = "You are Jarvis."
+    REASONING = None
+    BASE_DIR = Path("/nonexistent")
+    LLM_URL = "http://localhost:8081"
+    PIPER_BIN = "/nonexistent/piper"
+    PIPER_MODEL = "/nonexistent/model.onnx"
+    REQUEST_TIMEOUT = 30
+    SAMPLING_DEFAULTS = {}
+    JARVIS_MODE = "production"
+    TEMPERATURE = 0.4
+    logger = logging.getLogger("test")
+    def __getattr__(self, name):
+        return None
+
+_cfg = ConfigStub()
 sys.modules["config"] = _cfg
 
 _mem = types.ModuleType("memory")

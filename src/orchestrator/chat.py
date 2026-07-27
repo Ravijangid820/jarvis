@@ -206,9 +206,8 @@ def build_messages(session_id: str, user_id: int, user_text: str, custom_sys_pro
     if global_kb:
         global_kb = truncate_to_tokens(global_kb, KNOWLEDGE_TOKEN_CAP)
         system_parts.append(
-            "--- HOUSEHOLD KNOWLEDGE (shared, about this home) ---\n"
+            "--- HOUSEHOLD KNOWLEDGE ---\n"
             f"{global_kb}\n"
-            "(Common facts about the home and the people in it. Use naturally.)\n"
             "---"
         )
 
@@ -216,26 +215,21 @@ def build_messages(session_id: str, user_id: int, user_text: str, custom_sys_pro
     if knowledge:
         knowledge = truncate_to_tokens(knowledge, KNOWLEDGE_TOKEN_CAP)
         system_parts.append(
-            "--- USER PROFILE (persistent knowledge) ---\n"
+            "--- USER PROFILE ---\n"
             f"{knowledge}\n"
-            "(Use this information naturally. Do not repeat it back unless asked.)\n"
             "---"
         )
 
     context_ids = _get_recent_message_ids(session_id)
     memories = memory.retrieve_long_term_memory(user_id, session_id, user_text, recent_context_ids=context_ids)
-    # Dynamic context (presence + recalled memories) rides with the current turn, NOT the system prefix,
-    # so the KV cache stays reusable. Stored history keeps the clean user_text, so the prefix is stable.
     turn_parts: List[str] = []
     present = memory.get_present_people()
     if present:
-        turn_parts.append(f"[Seen by the cameras right now: {', '.join(present)}. "
-                          "Address the person naturally if relevant.]")
+        turn_parts.append(f"[Seen by cameras: {', '.join(present)}]")
     if memories:
         turn_parts.append(
             "--- RECALLED MEMORIES ---\n"
             f"{memories}\n"
-            "(If the current conversation contradicts these, prioritize the current conversation.)\n"
             "---")
     turn_content = ("\n\n".join(turn_parts) + "\n\n" + user_text) if turn_parts else user_text
 

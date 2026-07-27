@@ -287,46 +287,39 @@ button, input, textarea { font-family: inherit; outline: none; }
 
 .input-field {
   width: 100%;
-  padding: 20px 100px 20px 25px; /* Leave space for button on right */
+  /* A taller composer keeps the typing baseline above the controls, leaving the
+     lower edge clear for attachments and llama-style actions. */
+  padding: 18px 260px 62px 56px; /* Leave space for + button on left and actions on right */
   background: transparent;
   border: none;
   color: var(--holo-cyan);
   font-family: var(--font-data);
   font-size: 0.95rem;
   resize: none;
-  min-height: 64px;
-  max-height: 200px;
+  min-height: 108px;
+  max-height: 220px;
   line-height: 1.5;
 }
-.input-field::placeholder { color: rgba(103, 199, 235, 0.3); text-transform: uppercase; letter-spacing: 0.1em; }
+.input-field::placeholder { color: rgba(103, 199, 235, 0.4); text-transform: none; letter-spacing: normal; }
 
-.char-ct {
-  position: absolute;
-  right: 70px;
-  bottom: 22px;
-  font-family: var(--font-data);
-  font-size: 0.65rem;
-  color: rgba(103, 199, 235, 0.5);
-  pointer-events: none;
-}
-
-/* Transmit Button - Fixed Alignment */
+/* Transmit Button - Circular Llama UI Style */
 .send-btn {
   position: absolute;
   right: 15px;
   bottom: 12px;
-  width: 40px; height: 40px;
-  background: rgba(103, 199, 235, 0.1);
-  border: 1px solid var(--holo-cyan);
-  color: var(--holo-cyan);
+  width: 36px; height: 36px;
+  background: #3f3f46;
+  border: none;
+  border-radius: 50% !important;
+  color: #fff;
   cursor: pointer;
   display: flex; align-items: center; justify-content: center;
-  clip-path: var(--clip-angle-sm);
-  transition: all 0.3s;
+  clip-path: none !important;
+  transition: all 0.2s ease;
 }
-.send-btn:hover { background: var(--holo-cyan); color: var(--bg-void); box-shadow: 0 0 20px var(--holo-cyan); }
-.send-btn.stop { border-color: var(--action-red); color: var(--action-red); background: rgba(229, 32, 32, 0.1); }
-.send-btn.stop:hover { background: var(--action-red); color: #fff; box-shadow: 0 0 20px var(--action-red); }
+.send-btn:hover { background: #52525b; box-shadow: 0 0 15px rgba(255, 255, 255, 0.15); }
+.send-btn.stop { background: var(--action-red); color: #fff; }
+.send-btn.stop:hover { background: #dc2626; box-shadow: 0 0 15px var(--action-red); }
 
 .input-hint { text-align: center; font-size: 0.6rem; color: rgba(103, 199, 235, 0.4); text-transform: uppercase; letter-spacing: 0.2em; margin-top: 15px; }
 .scroll-btn { position: absolute; right: 30px; bottom: 120px; width: 40px; height: 40px; background: var(--bg-glass-heavy); border: 1px solid var(--holo-cyan); color: var(--holo-cyan); clip-path: var(--clip-angle-sm); cursor: pointer; display: none; z-index: 15; box-shadow: 0 0 15px rgba(0,0,0,0.8); }
@@ -359,6 +352,9 @@ button, input, textarea { font-family: inherit; outline: none; }
   .sidebar-overlay.visible { opacity: 1; pointer-events: auto; }
   .input-wrap { clip-path: none; border-radius: 8px; }
   .welcome-grid { grid-template-columns: 1fr; }
+  .input-field { padding: 15px 180px 15px 15px; }
+  .llama-actions-group { right: 55px; gap: 4px; }
+  .llama-model-pill { padding: 3px 6px; font-size: 0.65rem; }
 }
 
 /* ============================================================
@@ -1287,4 +1283,374 @@ html[data-theme="stark"] .think-steps-container .md-list::before,
 html[data-theme="stark"] .think-steps-container .md-h::before {
   background: #ffd66b !important;
   box-shadow: 0 0 8px rgba(255, 214, 107, 0.9) !important;
+}
+
+/* MARK X — Llama UI Interactive Usage Popover & Badges
+   ============================================================ */
+.llama-plus-wrap {
+  position: absolute;
+  left: 14px;
+  bottom: 12px;
+  z-index: 5;
+}
+.llama-plus-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #27272a;
+  color: #a1a1aa;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 1.2rem;
+  font-weight: 400;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  line-height: 1;
+  padding: 0 0 2px 0;
+}
+.llama-plus-btn:hover, .llama-plus-btn.active {
+  background: #3f3f46;
+  color: #fff;
+}
+.llama-plus-menu {
+  position: absolute;
+  bottom: calc(100% + 12px);
+  left: 0;
+  width: 220px;
+  background: #18181b;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  padding: 6px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.65), 0 0 16px rgba(0, 0, 0, 0.4);
+  z-index: 10000;
+  color: #e4e4e7;
+  font-family: inherit;
+  font-size: 0.85rem;
+  animation: lupFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.plus-menu-stack { position: absolute; bottom: calc(100% + 12px); left: 0; z-index: 10000; }
+.plus-menu-stack .llama-plus-menu { position: static; }
+.lpm-item {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  user-select: none;
+}
+.lpm-item:hover, .lpm-item.active {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+.lpm-item.disabled { cursor: not-allowed; opacity: 0.45; }
+.lpm-icon {
+  font-size: 1rem;
+  width: 20px;
+  text-align: center;
+}
+.lpm-label {
+  flex: 1;
+  font-weight: 500;
+}
+.lpm-arrow {
+  color: #71717a;
+  font-size: 1.1rem;
+  line-height: 1;
+}
+.lpm-submenu {
+  position: absolute;
+  left: calc(100% + 8px);
+  bottom: 0;
+  width: 290px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  background: #18181b;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.65);
+  color: #e4e4e7;
+  animation: lupFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.lpm-subhead { padding: 12px 14px 7px; color: #a1a1aa; font-size: 0.72rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.lpm-choice, .lpm-disabled {
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: 23px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 41px;
+  padding: 8px 12px;
+  border: 0;
+  background: transparent;
+  color: #e4e4e7;
+  font: inherit;
+  text-align: left;
+}
+.lpm-choice { cursor: pointer; }
+.lpm-choice:hover { background: rgba(255, 255, 255, .08); }
+.lpm-choice > span { color: #d4d4d8; text-align: center; }
+.lpm-choice strong { font-size: .84rem; font-weight: 500; }
+.lpm-choice small, .lpm-disabled small { color: #71717a; font-size: .68rem; white-space: nowrap; }
+.lpm-disabled { color: #71717a; cursor: not-allowed; }
+.lpm-file-choice { border-top: 1px solid rgba(255,255,255,.07); border-bottom: 1px solid rgba(255,255,255,.07); }
+.lpm-system-panel { padding-bottom: 10px; }
+.lpm-system-panel textarea { box-sizing: border-box; width: calc(100% - 24px); margin: 3px 12px 8px; resize: vertical; border: 1px solid rgba(255,255,255,.14); border-radius: 7px; background: #27272a; color: #f4f4f5; padding: 8px; font: inherit; font-size: .78rem; }
+.lpm-system-panel > div:last-child { display: flex; justify-content: flex-end; gap: 7px; padding: 0 12px; }
+.lpm-system-panel button, .lpm-info-panel button { border: 0; border-radius: 6px; padding: 6px 9px; background: #3f3f46; color: #f4f4f5; cursor: pointer; font: inherit; font-size: .72rem; }
+.lpm-info-panel { padding: 8px 14px 14px; font-size: .8rem; line-height: 1.45; }
+.lpm-info-panel p { margin: 7px 0; color: #b4b4b8; }
+.lpm-info-panel .lpm-empty { padding-bottom: 11px; border-bottom: 1px solid rgba(255,255,255,.08); text-align: center; color: #a1a1aa; }
+@media (max-width: 768px) { .lpm-submenu { left: 0; bottom: calc(100% + 8px); width: min(290px, calc(100vw - 24px)); } }
+
+.llama-actions-group {
+  position: absolute;
+  right: 65px;
+  bottom: 12px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  z-index: 5;
+}
+.char-ct-inline {
+  font-family: var(--font-data);
+  font-size: 0.7rem;
+  color: rgba(103, 199, 235, 0.5);
+  pointer-events: none;
+  user-select: none;
+  margin-right: 2px;
+}
+.llama-circle-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.llama-circle-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  color: #a1a1aa;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  padding: 0;
+}
+.llama-circle-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+.llama-ring-icon {
+  color: #10b981;
+  filter: drop-shadow(0 0 4px rgba(16, 185, 129, 0.4));
+  transition: transform 0.2s ease;
+}
+.llama-circle-wrap:hover .llama-ring-icon {
+  transform: scale(1.1);
+}
+.llama-model-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(24, 24, 27, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: #d4d4d8;
+  cursor: default;
+  user-select: none;
+  transition: all 0.15s ease;
+}
+.llama-model-pill:hover {
+  background: rgba(39, 39, 42, 0.9);
+  border-color: rgba(255, 255, 255, 0.25);
+  color: #fff;
+}
+
+/* Floating Card / Popover */
+.llama-usage-popup {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  right: 0;
+  width: 280px;
+  background: #18181b;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  padding: 14px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.65), 0 0 16px rgba(0, 0, 0, 0.4);
+  z-index: 10000;
+  color: #e4e4e7;
+  font-family: inherit;
+  font-size: 0.8rem;
+  text-align: left;
+  line-height: 1.4;
+  animation: lupFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.top-bar .llama-usage-popup {
+  top: calc(100% + 10px);
+  bottom: auto;
+  left: 0;
+  right: auto;
+}
+@keyframes lupFadeIn {
+  from { opacity: 0; transform: translateY(6px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.lup-header {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-weight: 600;
+}
+.lup-title {
+  color: #fff;
+  font-size: 0.9rem;
+}
+.lup-ctx-val {
+  color: #a1a1aa;
+  font-size: 0.85rem;
+}
+.lup-divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.08);
+  margin: 10px 0;
+}
+.lup-subtext {
+  font-size: 0.75rem;
+  color: #9ca3af;
+  margin-bottom: 10px;
+}
+.lup-context-meter {
+  height: 6px;
+  overflow: hidden;
+  margin: 10px 0 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.09);
+}
+.lup-context-meter > span {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #10b981, #38bdf8);
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.55);
+  transition: width 0.2s ease;
+}
+.lup-accordion-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  font-weight: 500;
+  color: #e4e4e7;
+  padding: 2px 0;
+}
+.lup-accordion-header:hover {
+  color: #fff;
+}
+.lup-chevron {
+  font-size: 0.75rem;
+  transition: transform 0.2s ease;
+}
+.lup-chevron.open {
+  transform: rotate(180deg);
+}
+.lup-accordion-body {
+  margin-top: 10px;
+}
+.lup-section-label {
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: #71717a;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.lup-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+  font-size: 0.75rem;
+}
+.lup-row-sub {
+  font-size: 0.7rem;
+  color: #71717a;
+  margin-top: -2px;
+  margin-bottom: 6px;
+  padding-left: 8px;
+}
+.lup-k {
+  color: #a1a1aa;
+}
+.lup-v {
+  color: #f4f4f5;
+  font-family: var(--font-data, monospace);
+}
+.lup-v.bold-val {
+  font-weight: 700;
+  color: #fff;
+}
+.lup-v.speed-val {
+  font-weight: 700;
+  color: #10b981;
+}
+.file-picker {
+  display: none;
+}
+.attachment-tray {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  max-width: min(900px, calc(100vw - 32px));
+  margin: 7px auto 0;
+}
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 260px;
+  padding: 4px 7px 4px 9px;
+  border: 1px solid rgba(56, 189, 248, 0.32);
+  border-radius: 7px;
+  background: rgba(14, 116, 144, 0.16);
+  color: #d7f3ff;
+  font-family: var(--font-data, monospace);
+  font-size: 0.69rem;
+}
+.attachment-chip > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attachment-chip button {
+  flex: 0 0 auto;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: #9bdcf6;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.attachment-chip button:hover { color: #fff; }
+.attachment-error {
+  color: #fca5a5;
+  font-size: 0.72rem;
 }
