@@ -48,8 +48,9 @@ from config import (ADMIN_MAX_INPUT, ALLOWED_ORIGINS, APP_VERSION, BASE_DIR, CHR
                     STATIC_DIR, VALID_FACT_CATEGORIES, JARVIS_MODE, logger)
 import ha
 import intent_router
+import mcp
 from db import get_db, get_setting, init_db, set_setting
-from llm import llm_content, request_llm, request_llm_stream, request_llm_tools, synthesize_tts
+from llm import count_prompt_tokens, llm_content, request_llm, request_llm_stream, request_llm_tools, synthesize_tts
 
 
 @asynccontextmanager
@@ -389,6 +390,22 @@ class EnrollPreview(BaseModel):
     total: int = 0
 
 
+class MCPServerRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=64)
+    url: str = Field(..., min_length=5, max_length=500)
+    type: str = Field(default="http", max_length=32)
+    description: str = Field(default="", max_length=200)
+
+
+class MCPServerTestRequest(BaseModel):
+    url: str = Field(..., min_length=5, max_length=500)
+
+
+class ModelSwitchRequest(BaseModel):
+    model: str = Field(..., min_length=1, max_length=128)
+
+
+
 # ----------------- Auth endpoints -----------------
 @app.post("/auth/login")
 def login(req: LoginRequest, request: Request):
@@ -638,6 +655,118 @@ def admin_services(request: Request) -> Dict[str, Any]:
         "version": APP_VERSION,
         "summary": {"up": up, "total": len(services), "operational": up == len(services)},
     }
+
+
+# ----------------- MCP Server Management -----------------
+@app.get("/mcp/servers")
+def get_mcp_servers(request: Request):
+    """Return configured MCP tool servers."""
+    _require_admin(request)
+    return {"servers": mcp.get_servers()}
+
+
+@app.post("/mcp/servers")
+def add_mcp_server(req: MCPServerRequest, request: Request):
+    """Add or update an MCP server."""
+    _require_admin(request)
+    try:
+        server = mcp.add_server(req.name, req.url, req.type, req.description)
+        return {"status": "ok", "server": server}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to add server: {e}")
+
+
+@app.delete("/mcp/servers/{name}")
+def delete_mcp_server(name: str, request: Request):
+    """Delete an MCP server by name."""
+    _require_admin(request)
+    if mcp.delete_server(name):
+        return {"status": "ok"}
+    raise HTTPException(status_code=404, detail="Server not found")
+
+
+@app.post("/mcp/test")
+def test_mcp_server(req: MCPServerTestRequest, request: Request):
+    """Test connection to an MCP server URL."""
+    _require_admin(request)
+    ok, detail = mcp.test_server(req.url)
+    return {"ok": ok, "detail": detail}
+
+
+# ----------------- Multi-Model Discovery & Switching -----------------
+@app.get("/models")
+def get_available_models(request: Request):
+    """Return an admin-safe inventory of installed GGUF models.
+
+    Model files and their absolute paths are server implementation details, so regular
+    chat users never receive them. A selected model is only active after llama-server
+    has actually restarted and reported it through /props.
+    """
+    _require_admin(request)
+    models = []
+    models_dir = BASE_DIR / "models"
+    active_name = "Qwen3.5 2B"
+    requested_name = None
+    try:
+        cfg_path = BASE_DIR / "config" / "active_model.json"
+        if cfg_path.exists():
+            data = json.loads(cfg_path.read_text(encoding="utf-8"))
+            if data.get("active_model"):
+                requested_name = data["active_model"]
+        p = urlsplit(LLM_URL)
+        with urllib.request.urlopen(f"{p.scheme}://{p.netloc}/props", timeout=1.5) as r:
+            props = json.loads(r.read().decode("utf-8"))
+            dgs = props.get("default_generation_settings") or {}
+            model_path = props.get("model_path") or dgs.get("model") or ""
+            if model_path:
+                active_name = os.path.basename(str(model_path)).removesuffix(".gguf")
+    except Exception:
+        pass
+
+    if models_dir.exists():
+        for gguf in sorted(models_dir.rglob("*.gguf")):
+            name = gguf.name.removesuffix(".gguf")
+            size_bytes = gguf.stat().st_size
+            size_mb = round(size_bytes / (1024 * 1024))
+            models.append({
+                "id": name,
+                "name": name,
+                "size_mb": size_mb,
+                "active": (name == active_name or name in active_name or active_name in name),
+                "requested": name == requested_name,
+            })
+    return {"models": models, "active": active_name, "requested": requested_name}
+
+
+@app.post("/models/switch")
+def switch_model(req: ModelSwitchRequest, request: Request):
+    """Stage the model selected for the next deployment-managed llama-server restart.
+
+    The server process belongs to systemd/Docker, not the web process. Persisting the
+    requested model without pretending the live process changed prevents a UI/LLM
+    mismatch and leaves the actual restart under the deployment supervisor.
+    """
+    _require_admin(request)
+    models_dir = BASE_DIR / "models"
+    target = None
+    if models_dir.exists():
+        for gguf in models_dir.rglob("*.gguf"):
+            if gguf.name.removesuffix(".gguf") == req.model or gguf.name == req.model:
+                target = gguf
+                break
+    if not target:
+        raise HTTPException(status_code=404, detail=f"Model '{req.model}' not found on server disk.")
+
+    try:
+        cfg_path = BASE_DIR / "config" / "active_model.json"
+        cfg_path.write_text(json.dumps({"active_model": target.name.removesuffix(".gguf"), "path": str(target)}, indent=2), encoding="utf-8")
+        _audit(request, "model.stage", target.name)
+        return {"status": "restart_required", "requested": target.name.removesuffix(".gguf"),
+                "message": "Model selection saved. Restart llama-server to activate it."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update active model config: {e}")
 
 
 # ----------------- Voice / TTS -----------------
@@ -1660,6 +1789,19 @@ def ingest_event(req: EventRequest, request: Request):
 
 
 # ----------------- Chat -----------------
+@app.post("/chat/token-estimate")
+def chat_token_estimate(request: QueryRequest, raw_request: Request):
+    """Return the current prompt size before generation, without persisting a turn."""
+    user_id, session_id, user_text = _validate_chat(request, raw_request)
+    completion_reserve = request.n_predict if (request.n_predict and request.n_predict > 0) else COMPLETION_RESERVE_DEFAULT
+    messages = chat.build_messages(session_id, user_id, user_text, request.system_prompt,
+                                   completion_reserve=completion_reserve, reasoning=request.reasoning)
+    result = count_prompt_tokens(messages)
+    result["context_tokens"] = CONFIG["llm"].get("max_context_tokens", 4096)
+    result["available_tokens"] = max(0, result["context_tokens"] - result["tokens"] - completion_reserve)
+    return result
+
+
 def _validate_chat(request: "QueryRequest", raw_request: Request):
     """Shared front-matter for /inbox and /chat/stream: returns (user_id, session_id, user_text)."""
     memory.update_activity()

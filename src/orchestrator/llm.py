@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 
+from budget import estimate_message_tokens
 from config import (BASE_DIR, LLM_URL, PIPER_BIN, PIPER_MODEL, REQUEST_TIMEOUT, SAMPLING_DEFAULTS,
                     TEMPERATURE, logger)
 
@@ -157,6 +158,29 @@ def request_llm_stream(messages: List[Dict[str, str]], temperature=None, top_k=N
     except Exception as e:
         logger.error("LLM streaming error: %s", e)
         raise
+
+
+def count_prompt_tokens(messages: List[Dict[str, str]]) -> Dict[str, Any]:
+    """Count a chat prompt using llama.cpp when available.
+
+    Recent llama-server builds expose the Anthropic-compatible count endpoint. Older
+    pinned builds may not, so callers always receive a conservative local estimate
+    instead of losing the composer telemetry feature.
+    """
+    fallback = sum(estimate_message_tokens(message) for message in messages)
+    base = LLM_URL.removesuffix("/v1/chat/completions")
+    body = {"model": "local", "messages": messages}
+    req = urllib.request.Request(f"{base}/v1/messages/count_tokens", data=json.dumps(body).encode("utf-8"),
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=min(5, REQUEST_TIMEOUT)) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        count = data.get("input_tokens")
+        if isinstance(count, int) and count >= 0:
+            return {"tokens": count, "source": "llama.cpp"}
+    except Exception as e:
+        logger.debug("llama.cpp token count unavailable; using estimate: %s", e)
+    return {"tokens": fallback, "source": "estimate"}
 
 
 def llm_content(resp: Dict[str, Any]) -> str:

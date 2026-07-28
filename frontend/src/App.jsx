@@ -369,12 +369,23 @@ function App() {
   const [allTurnsUsage, setAllTurnsUsage] = useState({ prompt: 0, cached: 0, generated: 0 })
   const [lastTurnUsage, setLastTurnUsage] = useState({ prompt: 0, generated: 0, cached: 0 })
   const [lastTurnTimings, setLastTurnTimings] = useState({})
+  const [draftTokenEstimate, setDraftTokenEstimate] = useState(null)
   const [showModelDetails, setShowModelDetails] = useState(false)
   const [showUsageAccordion, setShowUsageAccordion] = useState(true)
   const [showPlusMenu, setShowPlusMenu] = useState(false)
   const [plusPanel, setPlusPanel] = useState(null)
   const [attachments, setAttachments] = useState([])
   const [attachmentError, setAttachmentError] = useState("")
+
+  const [mcpServers, setMcpServers] = useState([])
+  const [showMcpModal, setShowMcpModal] = useState(false)
+  const [mcpNameInput, setMcpNameInput] = useState("")
+  const [mcpUrlInput, setMcpUrlInput] = useState("")
+  const [mcpTestResult, setMcpTestResult] = useState(null)
+
+  const [availableModels, setAvailableModels] = useState([])
+  const [showModelModal, setShowModelModal] = useState(false)
+  const [switchingModel, setSwitchingModel] = useState(false)
 
   // Sidebar: `open` drives the mobile slide-in drawer; `collapsed` hides it on desktop.
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -690,8 +701,55 @@ function App() {
     document.documentElement.classList.toggle("perf", perfMode)
   }, [perfMode])
 
+  const apiRequest = (path, options = {}) => fetch(API + path, {
+    ...options,
+    headers: { Authorization: "Bearer " + token, ...(options.headers || {}) },
+  })
+
+  const fetchMcpServers = async () => {
+    if (role !== "admin") return
+    try {
+      const res = await apiRequest("/mcp/servers")
+      if (res.ok) {
+        const d = await res.json()
+        setMcpServers(d.servers || [])
+      }
+    } catch { /* ignore */ }
+  }
+
+  const fetchAvailableModels = async () => {
+    if (role !== "admin") return
+    try {
+      const res = await apiRequest("/models")
+      if (res.ok) {
+        const d = await res.json()
+        setAvailableModels(d.models || [])
+        if (d.active) setModelName(d.active)
+      }
+    } catch { /* ignore */ }
+  }
+
+  const refreshDraftTokenEstimate = async () => {
+    const text = input.trim() || (attachments.length ? "Please review the attached file(s)." : "")
+    if (!text || !token) { setDraftTokenEstimate(null); return }
+    try {
+      const res = await apiRequest("/chat/token-estimate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text, session_id: currentSessionId, n_predict: Number.isFinite(nPredict) ? nPredict : undefined,
+          system_prompt: sysPrompt || undefined, reasoning,
+          attachments: attachments.map(({ name, content, mime_type }) => ({ name, content, mime_type })),
+        }),
+      })
+      if (res.ok) setDraftTokenEstimate(await res.json())
+    } catch { setDraftTokenEstimate(null) }
+  }
+
   const checkHealth = async () => {
     try {
+      fetchMcpServers()
+      fetchAvailableModels()
       const res = await fetch(API + "/health")
       if (res.ok) {
         const data = await res.json()
@@ -1132,6 +1190,11 @@ function App() {
   const paletteActions = () => {
     const acts = [
       { tag: "NEW", label: "New session", run: () => createSession() },
+      { tag: "MCP", label: "/mcp — Manage MCP Tool Servers", run: () => { fetchMcpServers(); setShowMcpModal(true); } },
+      { tag: "MDL", label: "/models — Switch Language Model", run: () => { fetchAvailableModels(); setShowModelModal(true); } },
+      { tag: "FIL", label: "/files — Attach Text/Code File", run: () => fileInputRef.current?.click() },
+      { tag: "SYS", label: "/system — Edit System Message", run: () => { setShowPlusMenu(true); setPlusPanel("system"); } },
+      { tag: "TLS", label: "/tools — View Jarvis Built-in Tools", run: () => { setShowPlusMenu(true); setPlusPanel("tools"); } },
       { tag: "CFG", label: `${advancedOpen ? "Hide" : "Show"} advanced parameters`, run: () => setAdvancedOpen(o => !o) },
       { tag: "IN", label: "Focus message input", run: () => inputRef.current?.focus() },
       { tag: "VOX", label: `JARVIS voice: ${sound ? "on" : "off"} — toggle (greeting + spoken replies)`, run: () => setSound(s => !s) },
@@ -1279,11 +1342,11 @@ function App() {
         </div>}
         {plusPanel === "files" && <div className="lpm-submenu">
           <div className="lpm-subhead">Add files</div>
-          <div className="lpm-disabled">▧ Images <small>Vision model required</small></div>
-          <div className="lpm-disabled">♩ Audio files <small>Transcription required</small></div>
-          <div className="lpm-disabled">▸ Video files <small>Not available</small></div>
+          <div className="lpm-disabled"><span>▧</span><strong>Images</strong><small>Vision model required</small></div>
+          <div className="lpm-disabled"><span>♩</span><strong>Audio files</strong><small>Transcription required</small></div>
+          <div className="lpm-disabled"><span>▸</span><strong>Video files</strong><small>Not available</small></div>
           <button type="button" className="lpm-choice lpm-file-choice" onClick={() => { fileInputRef.current?.click(); closePlusMenu() }}><span>📄</span><strong>Text files</strong><small>TXT, code, CSV, JSON</small></button>
-          <div className="lpm-disabled">▤ PDF files <small>PDF extraction required</small></div>
+          <div className="lpm-disabled"><span>▤</span><strong>PDF files</strong><small>PDF extraction required</small></div>
         </div>}
         {plusPanel === "system" && <div className="lpm-submenu lpm-system-panel">
           <div className="lpm-subhead">System Message</div>
@@ -1295,12 +1358,153 @@ function App() {
           <p>They handle configured home control, reminders, presence, and volume actions.</p>
         </div>}
         {plusPanel === "mcp" && <div className="lpm-submenu lpm-info-panel">
-          <p className="lpm-empty">No MCP servers configured</p>
-          <button type="button" onClick={() => { setPaletteQuery("/mcp "); setPaletteOpen(true); closePlusMenu() }}>＋ Add MCP Servers</button>
+          {role !== "admin" ? (
+            <p className="lpm-empty">MCP servers are managed by an administrator.</p>
+          ) : mcpServers.length === 0 ? (
+            <p className="lpm-empty">No MCP servers configured</p>
+          ) : (
+            <div className="lpm-mcp-list">
+              {mcpServers.map(s => (
+                <div key={s.name} className="lpm-mcp-item">
+                  <span className={`mcp-dot ${s.enabled ? 'active' : ''}`} />
+                  <strong>{s.name}</strong>
+                  <small>{s.type.toUpperCase()}</small>
+                </div>
+              ))}
+            </div>
+          )}
+          {role === "admin" && <button type="button" onClick={() => { fetchMcpServers(); setShowMcpModal(true); closePlusMenu() }}>＋ Manage MCP Servers</button>}
         </div>}
       </div>
     )
   }
+
+  const renderMcpModal = () => (
+    <div className="jarvis-modal-backdrop" onClick={() => setShowMcpModal(false)}>
+      <div className="jarvis-modal mcp-modal" onClick={e => e.stopPropagation()}>
+        <div className="jm-header">
+          <h3>📎 MCP Tool Server Manager</h3>
+          <button type="button" className="jm-close" onClick={() => setShowMcpModal(false)}>×</button>
+        </div>
+        <div className="jm-body">
+          <p className="jm-desc">Connect Model Context Protocol (MCP) tool endpoints (SSE or HTTP) to extend Jarvis capabilities.</p>
+          <div className="mcp-server-list">
+            {mcpServers.length === 0 ? (
+              <div className="mcp-empty">No MCP servers configured yet. Add an endpoint below.</div>
+            ) : (
+              mcpServers.map(s => (
+                <div key={s.name} className="mcp-server-card">
+                  <div className="mcp-card-left">
+                    <span className={`mcp-status-dot ${s.enabled ? 'active' : ''}`} />
+                    <div>
+                      <strong>{s.name}</strong>
+                      <div className="mcp-url">{s.url}</div>
+                      {s.description && <div className="mcp-desc">{s.description}</div>}
+                    </div>
+                  </div>
+                  <div className="mcp-card-actions">
+                    <button type="button" onClick={async () => {
+                      setMcpTestResult({ name: s.name, text: "Testing..." });
+                      try {
+                        const r = await apiRequest("/mcp/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: s.url }) });
+                        const d = await r.json();
+                        setMcpTestResult({ name: s.name, text: d.detail, ok: d.ok });
+                      } catch { setMcpTestResult({ name: s.name, text: "Failed", ok: false }); }
+                    }}>Test</button>
+                    <button type="button" onClick={async () => {
+                      try {
+                        await apiRequest(`/mcp/servers/${encodeURIComponent(s.name)}`, { method: "DELETE" });
+                        fetchMcpServers();
+                      } catch { /* ignore */ }
+                    }}>Remove</button>
+                  </div>
+                  {mcpTestResult?.name === s.name && (
+                    <div className={`mcp-test-res ${mcpTestResult.ok ? 'ok' : 'err'}`}>{mcpTestResult.text}</div>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+          <form className="mcp-add-form" onSubmit={async (e) => {
+            e.preventDefault();
+            if (!mcpNameInput.trim() || !mcpUrlInput.trim()) return;
+            try {
+              const res = await apiRequest("/mcp/servers", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name: mcpNameInput.trim(), url: mcpUrlInput.trim(), type: mcpUrlInput.includes("sse") ? "sse" : "http" })
+              });
+              if (res.ok) {
+                setMcpNameInput(""); setMcpUrlInput("");
+                fetchMcpServers();
+              } else {
+                const d = await res.json();
+                alert(d.detail || "Failed to add server");
+              }
+            } catch { alert("Error adding MCP server"); }
+          }}>
+            <h4>Add New Endpoint</h4>
+            <div className="mcp-form-inputs">
+              <input type="text" placeholder="Server Name (e.g. weather-tools)" value={mcpNameInput} onChange={e => setMcpNameInput(e.target.value)} required />
+              <input type="text" placeholder="URL (http://... or sse://...)" value={mcpUrlInput} onChange={e => setMcpUrlInput(e.target.value)} required />
+              <button type="submit">＋ Connect</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  )
+
+  const renderModelModal = () => (
+    <div className="jarvis-modal-backdrop" onClick={() => setShowModelModal(false)}>
+      <div className="jarvis-modal model-modal" onClick={e => e.stopPropagation()}>
+        <div className="jm-header">
+          <h3>📦 Language Model Switcher</h3>
+          <button type="button" className="jm-close" onClick={() => setShowModelModal(false)}>×</button>
+        </div>
+        <div className="jm-body">
+          <p className="jm-desc">Select the GGUF model to activate on the next llama-server restart. The highlighted Active model is the one currently serving chat.</p>
+          <div className="model-grid">
+            {availableModels.length === 0 ? (
+              <div className="model-empty">Scanning disk for GGUF models...</div>
+            ) : (
+              availableModels.map(m => (
+                <div key={m.id} className={`model-card ${m.active ? 'active' : ''}`} onClick={async () => {
+                  if (m.active || switchingModel) return;
+                  setSwitchingModel(true);
+                  try {
+                    const res = await apiRequest("/models/switch", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ model: m.id })
+                    });
+                    if (res.ok) {
+                      const d = await res.json();
+                      fetchAvailableModels();
+                      checkHealth();
+                      alert(d.message || "Model selection saved.");
+                    } else {
+                      const d = await res.json();
+                      alert(d.detail || "Failed to switch model");
+                    }
+                  } catch { alert("Error switching model"); }
+                  finally { setSwitchingModel(false); }
+                }}>
+                  <div className="model-card-top">
+                    <strong>{m.name}</strong>
+                    {m.active && <span className="model-active-badge">Active</span>}
+                  </div>
+                  {m.requested && !m.active && <span className="model-pending-badge">Restart pending</span>}
+                  <div className="model-card-meta">Size: ~{m.size_mb} MB</div>
+                </div>
+              ))
+            )}
+          </div>
+          {switchingModel && <div className="model-switching-status">↻ Updating active model preference...</div>}
+        </div>
+      </div>
+    </div>
+  )
 
   const renderLlamaUsagePopup = () => {
     const totalCtx = nCtx || 4096
@@ -1327,6 +1531,10 @@ function App() {
           <span style={{ width: `${contextPct}%` }}></span>
         </div>
         <div className="lup-subtext">{contextLeft.toLocaleString()} tokens available · {contextPct}% in use</div>
+        {draftTokenEstimate && <div className="lup-draft-estimate">
+          Draft prompt: {draftTokenEstimate.tokens.toLocaleString()} tokens
+          <small> · {draftTokenEstimate.source === "llama.cpp" ? "exact llama.cpp count" : "local estimate"}</small>
+        </div>}
         <div className="lup-divider"></div>
         <div className="lup-accordion-header" onClick={(e) => { e.stopPropagation(); setShowUsageAccordion(a => !a); }}>
           <span>Token usage details</span>
@@ -1642,7 +1850,6 @@ function App() {
         <div className="top-bar">
           <button className="sidebar-toggle top-toggle" onClick={toggleSidebar} aria-label="Toggle menu" title="Toggle sidebar">☰</button>
           <span className="top-title">{currentTitle}</span>
-          <span className="top-model">📦 {modelName}</span>
           {appMode !== "production" && (
             <span className={`mode-badge mode-${appMode}`}>
               {appMode === "demo" ? "🧪 Demo" : "🛠️ Dev"}
@@ -1692,7 +1899,10 @@ function App() {
             />
             <div className="llama-actions-group">
               <span className="char-ct-inline">{input.length}</span>
-              <div className="llama-circle-wrap" ref={usageMenuRef} onClick={(e) => { e.stopPropagation(); setShowModelDetails(s => !s); }}>
+              <div className="llama-circle-wrap" ref={usageMenuRef} onClick={(e) => {
+                e.stopPropagation()
+                setShowModelDetails(open => { if (!open) refreshDraftTokenEstimate(); return !open })
+              }}>
                 <button type="button" className="llama-circle-btn" aria-label="View token usage & context size" title="Token usage details">
                   <svg className="llama-ring-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                     <circle cx="12" cy="12" r="9" strokeOpacity="0.25"></circle>
@@ -1701,7 +1911,7 @@ function App() {
                 </button>
                 {showModelDetails && renderLlamaUsagePopup()}
               </div>
-              <button type="button" className="llama-model-pill" title="Current Model">
+              <button type="button" className="llama-model-pill" title="Current Model" onClick={() => { fetchAvailableModels(); setShowModelModal(true); }}>
                 📦 {modelName}
               </button>
             </div>
@@ -1725,6 +1935,8 @@ function App() {
           )}
           <div className="input-hint">Enter to transmit · Shift+Enter new line · <span className="kbd" role="button" tabIndex={0} onClick={() => { setPaletteQuery(""); setPaletteIndex(0); setPaletteOpen(true) }} style={{cursor:'pointer'}}>⌘K</span> commands</div>
         </div>
+        {showMcpModal && renderMcpModal()}
+        {showModelModal && renderModelModal()}
       </main>
     </div>
   )

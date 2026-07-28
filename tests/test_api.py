@@ -181,6 +181,27 @@ def test_admin_services_requires_admin(client):
     assert client.get("/admin/services", headers={"Authorization": "Bearer " + user}).status_code == 403
 
 
+def test_mcp_and_model_inventory_are_admin_only(client):
+    user = _tok(client, "pepper", "pw-user")
+    admin = _tok(client, "tony", "pw-admin")
+    assert client.get("/mcp/servers").status_code == 401
+    assert client.get("/models").status_code == 401
+    assert client.get("/mcp/servers", headers={"Authorization": "Bearer " + user}).status_code == 403
+    assert client.get("/models", headers={"Authorization": "Bearer " + user}).status_code == 403
+    assert client.get("/mcp/servers", headers={"Authorization": "Bearer " + admin}).status_code == 200
+    assert client.get("/models", headers={"Authorization": "Bearer " + admin}).status_code == 200
+
+
+def test_chat_token_estimate_uses_llama_counter_or_fallback(client, monkeypatch):
+    admin = _tok(client, "tony", "pw-admin")
+    monkeypatch.setattr(main, "count_prompt_tokens", lambda messages: {"tokens": 42, "source": "llama.cpp"})
+    r = client.post("/chat/token-estimate", headers={"Authorization": "Bearer " + admin},
+                    json={"text": "Count this prompt", "session_id": "default"})
+    assert r.status_code == 200
+    assert r.json()["tokens"] == 42
+    assert r.json()["source"] == "llama.cpp"
+
+
 def test_admin_services_reports_subsystems(client):
     admin = _tok(client, "tony", "pw-admin")
     svc = client.get("/admin/services", headers={"Authorization": "Bearer " + admin}).json()["services"]
