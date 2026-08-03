@@ -1387,6 +1387,10 @@ html[data-theme="stark"] .think-steps-container .md-h::before {
   border-radius: 6px;
   transition: width 0.3s ease;
 }
+/* Graph compilation reports no progress, so the bar pulses instead of pretending to advance. */
+.stt-loading-fill.indeterminate { animation: sttPulse 1.4s ease-in-out infinite; }
+@keyframes sttPulse { 0%, 100% { opacity: .35; } 50% { opacity: .85; } }
+
 .stt-loading-label {
   position: relative;
   z-index: 1;

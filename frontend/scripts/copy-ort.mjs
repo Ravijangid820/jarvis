@@ -32,10 +32,15 @@ const SRC = [
   join(NM, "@huggingface", "transformers", "node_modules", "onnxruntime-web", "dist"),
 ].find((dir) => existsSync(dir));
 
-// We run the CPU backend (device: "wasm"), so we need the threaded builds and their
-// loaders. `jsep` is the WebGPU backend — ~26 MB we would never execute, so it is
-// excluded rather than shipped as dead weight.
-const WANTED = /^ort-wasm-simd-threaded(\.asyncify|\.jspi)?\.(mjs|wasm)$/;
+// Vendor EVERY ort-wasm-simd-threaded variant, including jsep.
+//
+// Do not "optimise" this back down to the ones that look necessary. ORT builds the filename at
+// runtime from feature detection (JSPI support, WebGPU/WebNN availability, …), so which variant
+// a given browser asks for is not knowable from the bundle — the names never appear in it as
+// literals. And a missing variant does not fail loudly: the dynamic import 404s inside ORT and
+// the load simply never settles, which presents as the UI hanging at "100%" with no error.
+// ~26 MB of unused binaries is a much better trade than that failure mode.
+const WANTED = /^ort-wasm-simd-threaded(\.[a-z]+)?\.(mjs|wasm)$/;
 
 if (!SRC || !existsSync(SRC)) {
   console.error("[copy-ort] could not locate onnxruntime-web's dist/ — run npm ci first.");

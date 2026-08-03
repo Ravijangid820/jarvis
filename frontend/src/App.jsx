@@ -436,6 +436,7 @@ function App() {
   const [sttTranscribing, setSttTranscribing] = useState(false)
   const [sttError, setSttError] = useState("")
   const [sttSource, setSttSource] = useState("")   // "official" | "failsafe" — which copy loaded
+  const [sttPreparing, setSttPreparing] = useState(false)  // downloads done, compiling the graphs
   const whisperWorkerRef = useRef(null)
   const mediaStreamRef = useRef(null)
   const mediaRecorderRef = useRef(null)
@@ -456,15 +457,20 @@ function App() {
 
   /** Handle messages coming back from the Whisper worker. */
   const handleWorkerMessage = (e) => {
-    const { type, progress, text, error, source } = e.data || {}
+    const { type, progress, text, error, source, phase } = e.data || {}
     switch (type) {
       case "progress":
         setSttLoadProgress(Math.round(progress ?? 0))
+        break
+      case "status":
+        // Post-download graph compilation: no progress to report, several seconds long.
+        setSttPreparing(phase === "preparing")
         break
       case "ready":
         setSttReady(true)
         setSttLoading(false)
         setSttLoadProgress(100)
+        setSttPreparing(false)
         setSttSource(source || "")
         break
       case "result":
@@ -2055,7 +2061,7 @@ function App() {
         </div>
         
         <div className="input-area">
-          {sttLoading && <div className="stt-loading-bar"><div className="stt-loading-fill" style={{ width: `${sttLoadProgress}%` }} /><span className="stt-loading-label">Downloading Whisper model… {sttLoadProgress}%</span></div>}
+          {sttLoading && <div className="stt-loading-bar"><div className={`stt-loading-fill ${sttPreparing ? 'indeterminate' : ''}`} style={{ width: `${sttPreparing ? 100 : sttLoadProgress}%` }} /><span className="stt-loading-label">{sttPreparing ? "Preparing speech model…" : `Downloading Whisper model… ${sttLoadProgress}%`}</span></div>}
           {sttError && <div className="stt-error-banner">{sttError}<button type="button" onClick={() => setSttError("")}>×</button></div>}
           <div className="input-wrap">
             <input ref={fileInputRef} className="file-picker" type="file" multiple

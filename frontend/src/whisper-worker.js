@@ -84,6 +84,11 @@ function buildPipeline() {
           loaded: p.loaded ?? 0,
           total: p.total ?? 0,
         });
+      } else if (p.status === "done") {
+        // Downloads report progress; compiling the WASM graphs afterwards reports nothing and
+        // takes seconds. Without this the UI sits at "100%" looking hung — which is exactly how
+        // a genuinely stuck load presented, making the two indistinguishable.
+        self.postMessage({ type: "status", phase: "preparing" });
       }
     },
   });
