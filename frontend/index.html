@@ -5,19 +5,12 @@
     <link rel="icon" type="image/png" href="/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>J.A.R.V.I.S</title>
-    <!-- GitHub Pages SPA redirect handler (companion to 404.html). -->
-    <script>
-      (function(l) {
-        if (l.search[1] === '/') {
-          var decoded = l.search.slice(1).split('&').map(function(s) {
-            return s.replace(/~and~/g, '&')
-          }).join('?');
-          window.history.replaceState(null, null,
-            l.pathname.slice(0, -1) + decoded + l.hash
-          );
-        }
-      }(window.location))
-    </script>
+    <!--
+      Do NOT add inline scripts here. The orchestrator serves a strict
+      script-src 'self' 'wasm-unsafe-eval' policy, so an inline script is blocked and fails
+      silently apart from a console violation. Put startup code in src/main.jsx instead —
+      the GitHub Pages SPA redirect shim that used to live here now runs from there.
+    -->
   </head>
   <body>
     <div id="root"></div>
