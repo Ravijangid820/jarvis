@@ -77,7 +77,7 @@ export default function Admin({ token, onExit, apiBase = "" }) {
       setFaces(f.faces || []); setServices(sv.services || []); setEnrollReqs(er.requests || [])
       setSysInfo({ version: sv.version, summary: sv.summary, checkedAt: Date.now() })
       setRecogs(rc.events || []); setGlobalFacts(gk.facts || []); setPresent(pr.present || []); setErr("")
-    } catch (e) {
+    } catch {
       setErr("System Standby Mode — Displaying preview layout (Backend container offline)")
       setStats({ users: 1, keys: 1, facts: 3, memory_MB: 128, version: "2.6.0" })
       setUsers([{ id: "usr_1", username: "admin", role: "admin", created_at: "2026-07-24" }])

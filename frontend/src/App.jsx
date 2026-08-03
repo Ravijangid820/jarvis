@@ -115,7 +115,7 @@ function ArcReactor({ size = 120, className = "" }) {
 
 // JARVIS-style greeting: addresses the user as "sir", and varies by the time of day, the day of week,
 // and a bit of "the moment" (late nights, weekends). Re-rolled each session so it never feels canned.
-function jarvisGreeting(_name) {
+function jarvisGreeting() {
   const now = new Date()
   const h = now.getHours()
   const weekend = now.getDay() === 0 || now.getDay() === 6
@@ -329,18 +329,6 @@ const MessageItem = memo(function MessageItem({ role, content, isStreaming, inde
   )
 })
 
-// Static "neural activity" waveform path (two harmonics; seamless loop over the tile).
-const OSC_PATH = (() => {
-  const w = 480, mid = 30, amp = 18, P = 8, steps = 240
-  let d = `M0 ${mid}`
-  for (let i = 1; i <= steps; i++) {
-    const t = i / steps, x = t * w
-    const y = mid + amp * (0.7 * Math.sin(t * 2 * Math.PI * P) + 0.3 * Math.sin(t * 2 * Math.PI * P * 2))
-    d += ` L${x.toFixed(1)} ${y.toFixed(1)}`
-  }
-  return d
-})()
-
 function App() {
   const [token, setToken] = useState(localStorage.getItem("jarvis_token"))
   const [role, setRole] = useState(localStorage.getItem("jarvis_role") || "user")
@@ -356,7 +344,7 @@ function App() {
   const [input, setInput] = useState("")
   const [greetTyped, setGreetTyped] = useState("")
   // eslint-disable-next-line react-hooks/exhaustive-deps -- recompute on login so the name appears
-  const greeting = useMemo(() => jarvisGreeting((localStorage.getItem("jarvis_user") || "").trim()), [token])
+  const greeting = useMemo(() => jarvisGreeting(), [token])
   const [processing, setProcessing] = useState(false)
   const [speed, setSpeed] = useState("")
 
@@ -382,6 +370,7 @@ function App() {
   const [mcpNameInput, setMcpNameInput] = useState("")
   const [mcpUrlInput, setMcpUrlInput] = useState("")
   const [mcpTestResult, setMcpTestResult] = useState(null)
+  const [mcpTools, setMcpTools] = useState(null)
 
   const [availableModels, setAvailableModels] = useState([])
   const [showModelModal, setShowModelModal] = useState(false)
@@ -1245,6 +1234,22 @@ function App() {
     return <svg className="spark" width={w} height={h} viewBox={`0 0 ${w} ${h}`}><polyline points={pts} fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" /></svg>
   }
 
+  const renderGenerationTrace = (data) => {
+    if (!data.length) return <div className="generation-trace-empty">Awaiting generation data</div>
+    const w = 240, h = 50
+    const max = Math.max(...data), min = Math.min(...data), range = Math.max(max - min, 0.1)
+    const points = data.map((value, index) => {
+      const x = data.length === 1 ? w / 2 : (index / (data.length - 1)) * w
+      const y = h - ((value - min) / range) * (h - 12) - 6
+      return `${x.toFixed(1)},${y.toFixed(1)}`
+    }).join(" ")
+    return <svg className="generation-trace" viewBox={`0 0 ${w} ${h}`} role="img" aria-label={`Generation speed history, latest ${data.at(-1).toFixed(1)} tokens per second`}>
+      <line x1="0" y1={h - 6} x2={w} y2={h - 6} className="generation-trace-base" />
+      <polyline points={points} className="generation-trace-line" />
+      <circle cx={points.split(" ").at(-1).split(",")[0]} cy={points.split(" ").at(-1).split(",")[1]} r="2.5" className="generation-trace-point" />
+    </svg>
+  }
+
   // copyText / renderInline / renderMessageContent + the memoized <MessageItem>
   // now live at module scope (top of file) so memo() can skip unchanged messages.
 
@@ -1404,6 +1409,14 @@ function App() {
                   </div>
                   <div className="mcp-card-actions">
                     <button type="button" onClick={async () => {
+                      setMcpTools({ name: s.name, loading: true, tools: [] })
+                      try {
+                        const r = await apiRequest(`/mcp/servers/${encodeURIComponent(s.name)}/tools`)
+                        const d = await r.json()
+                        setMcpTools({ name: s.name, tools: r.ok ? (d.tools || []) : [], error: r.ok ? "" : (d.detail || "Discovery failed") })
+                      } catch { setMcpTools({ name: s.name, tools: [], error: "Discovery failed" }) }
+                    }}>Tools</button>
+                    <button type="button" onClick={async () => {
                       setMcpTestResult({ name: s.name, text: "Testing..." });
                       try {
                         const r = await apiRequest("/mcp/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: s.url }) });
@@ -1420,6 +1433,11 @@ function App() {
                   </div>
                   {mcpTestResult?.name === s.name && (
                     <div className={`mcp-test-res ${mcpTestResult.ok ? 'ok' : 'err'}`}>{mcpTestResult.text}</div>
+                  )}
+                  {mcpTools?.name === s.name && (
+                    <div className="mcp-tools-preview">
+                      {mcpTools.loading ? "Discovering tools…" : mcpTools.error ? mcpTools.error : mcpTools.tools.length ? mcpTools.tools.map(tool => <div key={tool.name}><strong>{tool.name}</strong><span>{tool.description || "No description"}</span></div>) : "No tools advertised"}
+                    </div>
                   )}
                 </div>
               ))
@@ -1673,10 +1691,9 @@ function App() {
               <span>Host Up</span>
               <span className="stat-val">{fmtDuration(sys.uptime_sec)}</span>
             </div>
-            <div className="oscilloscope">
-              <svg className="osc-svg" viewBox="0 0 240 60" preserveAspectRatio="none">
-                <path className="osc-wave" d={OSC_PATH} fill="none" stroke="var(--holo-cyan)" strokeWidth="1.5" />
-              </svg>
+            <div className="generation-trace-card">
+              <div className="generation-trace-head"><span>Generation rate</span><span>{tokHistory.length ? `${tokHistory.at(-1).toFixed(1)} tok/s` : '—'}</span></div>
+              {renderGenerationTrace(tokHistory)}
             </div>
           </div>
 
@@ -1689,10 +1706,9 @@ function App() {
           </div>
 
           <div className="hud-panel">
-            <div className="hud-label">
-              Interface Theme
-              <button className="adv-btn" onClick={() => setThemeOpen(o => !o)}>{themeOpen ? '▾ Hide' : '▸ Show'}</button>
-            </div>
+            <button className="panel-disclosure" onClick={() => setThemeOpen(o => !o)} aria-expanded={themeOpen}>
+              <span>Interface Theme</span><span>{themeOpen ? '▾' : '▸'}</span>
+            </button>
             {themeOpen && (
               <div className="theme-grid">
                 {[
@@ -1716,12 +1732,9 @@ function App() {
           </div>
 
           <div className="hud-panel">
-            <div className="hud-label">
-              Parameters
-              <button className="adv-btn" onClick={() => setAdvancedOpen(!advancedOpen)}>
-                {advancedOpen ? '▾ Hide' : '▸ Advanced'}
-              </button>
-            </div>
+            <button className="panel-disclosure" onClick={() => setAdvancedOpen(o => !o)} aria-expanded={advancedOpen}>
+              <span>Parameters</span><span>{advancedOpen ? '▾' : '▸'}</span>
+            </button>
             <div className="temp-gauge">
               <svg width="92" height="92" viewBox="0 0 92 92">
                 <circle cx="46" cy="46" r="38" fill="none" stroke="rgba(103,199,235,0.15)" strokeWidth="4" />
@@ -1825,9 +1838,6 @@ function App() {
           <div className="messages-inner">
             {messages.length === 0 && (
               <div className="welcome-screen">
-                <div className="welcome-reactor">
-                  <ArcReactor size={128} />
-                </div>
                 <h1 className="welcome-title">J.A.R.V.I.S</h1>
                 <p className="welcome-greeting">{greetTyped}{greetTyped.length < greeting.length && <span className="greet-cursor" />}</p>
                 <p className="welcome-sub">Just A Rather Very Intelligent System · Local processing · Private server</p>

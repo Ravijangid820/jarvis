@@ -144,6 +144,10 @@ button, input, textarea { font-family: inherit; outline: none; }
 
 .hud-panel { padding: 16px 20px; border-bottom: 1px solid rgba(103, 199, 235, 0.15); }
 .hud-label { font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.2em; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+.panel-disclosure { width: 100%; display: flex; align-items: center; justify-content: space-between; margin: 0 0 12px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; font-size: .65rem; font-weight: 700; text-transform: uppercase; letter-spacing: .2em; cursor: pointer; text-align: left; }
+.panel-disclosure > span:last-child { color: rgba(103,199,235,.55); font-size: .8rem; transition: transform .2s ease; }
+.panel-disclosure:hover, .panel-disclosure:focus-visible { color: var(--holo-cyan); }
+.panel-disclosure:focus-visible { outline: 1px solid var(--holo-cyan); outline-offset: 5px; }
 
 .stat-row { display: flex; align-items: center; gap: 10px; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 6px; }
 .status-dot { width: 6px; height: 6px; }
@@ -219,7 +223,7 @@ button, input, textarea { font-family: inherit; outline: none; }
 .messages-container { flex: 1; overflow-y: auto; padding: 70px 0 170px; overflow-anchor: none; clip-path: inset(0 0 48px 0); mask-image: linear-gradient(to bottom, black 0%, black calc(100% - 48px), transparent calc(100% - 48px)); -webkit-mask-image: linear-gradient(to bottom, black 0%, black calc(100% - 48px), transparent calc(100% - 48px)); }
 .messages-inner { max-width: 900px; margin: 0 auto; padding: 0 30px; }
 
-.welcome-screen { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; text-align: center; animation: bootUp 1s cubic-bezier(0.16, 1, 0.3, 1); }
+.welcome-screen { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; text-align: center; position: relative; top: var(--welcome-offset, 42px); animation: bootUp 1s cubic-bezier(0.16, 1, 0.3, 1); }
 @keyframes bootUp { from { opacity: 0; transform: scale(0.95) translateY(20px); filter: blur(10px); } to { opacity: 1; transform: scale(1) translateY(0); filter: blur(0); } }
 
 .welcome-title { font-size: 2rem; font-weight: 700; letter-spacing: 0.3em; margin: 20px 0 6px; text-shadow: 0 0 20px var(--holo-cyan-glow); }
@@ -674,25 +678,19 @@ html[data-theme="ember"]    body { filter: hue-rotate(-156deg) saturate(1.2); }
 .mini-bar-fill.hot { background: var(--action-red); box-shadow: 0 0 8px var(--action-red); }
 .gauge-row .stat-val { min-width: 34px; }
 
-/* Sidebar "neural activity" oscilloscope: idles low, spikes while thinking. */
-.oscilloscope {
+/* Sidebar diagnostics: measured generation speed, never decorative telemetry. */
+.generation-trace-card {
   height: 50px; margin-top: 14px; overflow: hidden; position: relative;
   border: 1px solid rgba(103,199,235,0.15); background: rgba(103,199,235,0.025);
   clip-path: var(--clip-angle-sm);
 }
-.osc-svg { width: 100%; height: 100%; display: block; --osc-amp: 0.4; }
-.app-container.thinking .osc-svg { --osc-amp: 1; }
-.osc-wave {
-  filter: drop-shadow(0 0 4px var(--holo-cyan-glow));
-  transform-box: fill-box; transform-origin: center;
-}
-/* The waveform is a static readout at idle; it only scrolls while the model is thinking. */
-.app-container.thinking .osc-wave { animation: oscScroll 7s linear infinite; }
-@keyframes oscScroll {
-  from { transform: translateX(0) scaleY(var(--osc-amp)); }
-  to   { transform: translateX(-50%) scaleY(var(--osc-amp)); }
-}
-.app-container.thinking .osc-wave { animation-duration: 1.8s; }
+.generation-trace-head { position: absolute; inset: 5px 7px auto; z-index: 1; display: flex; justify-content: space-between; color: rgba(103,199,235,.55); font-family: var(--font-data); font-size: .5rem; letter-spacing: .08em; text-transform: uppercase; pointer-events: none; }
+.generation-trace-head span:last-child { color: var(--holo-cyan); }
+.generation-trace { width: 100%; height: 100%; display: block; padding-top: 12px; }
+.generation-trace-base { stroke: rgba(103,199,235,.15); stroke-width: 1; }
+.generation-trace-line { fill: none; stroke: var(--holo-cyan); stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; filter: drop-shadow(0 0 4px var(--holo-cyan-glow)); }
+.generation-trace-point { fill: var(--alert-orange); filter: drop-shadow(0 0 4px rgba(251,202,3,.8)); }
+.generation-trace-empty { display: grid; height: 100%; place-items: center; color: rgba(103,199,235,.38); font-family: var(--font-data); font-size: .52rem; letter-spacing: .1em; text-transform: uppercase; }
 
 /* Richer markdown in replies. */
 .md-line { min-height: 0.4em; }
@@ -1314,6 +1312,7 @@ html[data-theme="stark"] .think-steps-container .md-h::before {
   background: #3f3f46;
   color: #fff;
 }
+
 .llama-plus-menu {
   position: absolute;
   bottom: calc(100% + 12px);
@@ -1747,6 +1746,10 @@ button.clickable-model:hover {
 .mcp-test-res { width: 100%; font-size: 0.75rem; padding: 6px 10px; border-radius: 6px; margin-top: 4px; }
 .mcp-test-res.ok { background: rgba(16,185,129,.15); color: #6ee7b7; border: 1px solid rgba(16,185,129,.3); }
 .mcp-test-res.err { background: rgba(239,68,68,.15); color: #fca5a5; border: 1px solid rgba(239,68,68,.3); }
+.mcp-tools-preview { width: 100%; display: grid; gap: 5px; margin-top: 4px; padding: 8px 10px; border: 1px solid rgba(103,199,235,.16); border-radius: 6px; background: rgba(103,199,235,.04); color: #9bdcf6; font-size: .72rem; }
+.mcp-tools-preview > div { display: grid; grid-template-columns: minmax(72px, auto) 1fr; gap: 8px; }
+.mcp-tools-preview strong { color: #e4f8ff; font-family: var(--font-data); font-weight: 500; }
+.mcp-tools-preview span { color: rgba(212,244,255,.65); }
 
 /* Add MCP Form */
 .mcp-add-form { background: rgba(0,0,0,.2); border: 1px solid rgba(255,255,255,.06); padding: 14px; border-radius: 10px; }
