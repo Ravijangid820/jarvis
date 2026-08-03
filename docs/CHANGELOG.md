@@ -4,6 +4,30 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## v3.1.0 — 2026-08-03 — MCP tool discovery + a frontend CI gate
+
+- **MCP servers are now verified by protocol, not by ping.** `test_server` previously called any HTTP
+  response — including 401/404/405 — "reachable", so a plain web server passed as an MCP endpoint.
+  It now runs the real Streamable-HTTP lifecycle (`initialize` → `notifications/initialized` →
+  `tools/list`), requires the server to actually advertise `tools` capability, and reports the tool
+  count it found. URL validation moved to `urlsplit` and rejects embedded credentials; the
+  unroutable `mcp://` / `sse://` schemes are gone.
+- **New `GET /mcp/servers/{name}/tools`** (admin-only) returns validated tool definitions so an
+  operator can *review* what a server exposes. Discovery is request-scoped and deliberately
+  read-only: **nothing executes MCP tools yet, and no tool is offered to the model.** Execution waits
+  on a tool-level allowlist and an answer to whose authority a remote tool runs under.
+- Responses are capped at 1 MB and tool lists at 32 entries — an MCP endpoint is an untrusted remote
+  party and this box has 8 GB.
+- **CI now gates the frontend** (`npm ci` → lint → production build) alongside ruff + pytest; the
+  eslint config learned about `vite.config.js`'s Node globals.
+- UI: the sidebar's decorative "oscilloscope" is replaced by a **real generation-rate trace** plotted
+  from measured `tok/s`; collapsible panels became proper `aria-expanded` buttons.
+- `_CLIENT_INFO` now derives its version from `pyproject.toml` rather than a hardcoded literal.
+
+> **Version note:** `pyproject.toml` had drifted to `2.6.0` while `v3.0.0`/`v3.0.1` were tagged; this
+> release reconciles it. Those two releases are recorded by git tag only — their entries are still
+> owed here.
+
 ## v2.6.0 — 2026-07-09 — semantic understanding + a UI that fits in your pocket
 
 Two threads, detailed in the dated sections below:
