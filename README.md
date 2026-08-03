@@ -283,11 +283,12 @@ Project meta: **[CONTRIBUTING.md](CONTRIBUTING.md)** (dev setup, tests, conventi
 ## Status
 
 - ✅ LLM Layer (Qwen3.5-2B, llama.cpp, `-c 4096` with prompt token-budgeting)
-- ✅ Speech-to-Text (whisper.cpp, base.en)
+- ✅ Speech-to-Text — **in-browser Whisper (WASM)** for the web UI, so STT costs the server nothing; whisper.cpp base.en still serves the server-side wake-word listener
 - ✅ Orchestrator (FastAPI, modular + secured + tested)
 - ✅ Memory (SQLite + ChromaDB cosine RAG, embeddinggemma-300m, background embedding)
 - ✅ Text-to-Speech (Piper TTS — wired into both `/inbox` and the streaming web UI)
-- ⬜ Tool / function calling · ⬜ Home Automation (MQTT + Home Assistant)
+- ✅ Tool / function calling (voice path + deterministic fast-paths) · ✅ Home Assistant control
+- ⬜ MQTT event push · ⬜ MCP tool execution (discovery + review shipped in v3.1.0)
 
 Checks: `uv run pytest` · `uv run ruff check src/orchestrator src/scripts tests`.
 

@@ -4,7 +4,11 @@ All notable changes to this project are documented in this file.
 
 ---
 
-## Unreleased
+## v3.2.0 — 2026-08-03 — speech-to-text moves to the device
+
+Voice input now runs in the user's browser instead of on the server. Verified end to end on a real
+device after four load-time failures, each hidden behind the last — the details below are kept
+deliberately specific, because every one of them failed silently rather than loudly.
 
 - **Speech-to-text moved into the browser.** The web UI now transcribes voice input with Whisper
   (ONNX q8) running in a WASM Web Worker on the *user's device*, so STT no longer costs the 2011
@@ -43,6 +47,14 @@ All notable changes to this project are documented in this file.
   so the browser grants SharedArrayBuffer and the runtime can use more than one thread.
   Verified: HF reflects the requesting origin in `access-control-allow-origin` across the whole
   redirect chain, so the fetch satisfies `require-corp`.
+
+- **Every ORT wasm variant is vendored, not just the ones that look needed.** ORT builds its backend
+  filename at runtime from feature detection, so the variant a given browser requests never appears
+  in the bundle as a literal. A missing one does not fail loudly — the dynamic import 404s inside ORT
+  and the load never settles, presenting as a hang at "100%" with no error. Shipping ~26 MB of
+  possibly-unused binaries is the better trade.
+- The loader now reports a **"preparing"** phase: downloads report progress, but compiling the WASM
+  graphs afterwards took seconds with no feedback, making a slow load and a dead one identical.
 
 > This is the one deliberate outbound request in the product, it carries no user data, it is made by
 > the browser and never the server, and it degrades to a local copy. Everything else remains offline.
