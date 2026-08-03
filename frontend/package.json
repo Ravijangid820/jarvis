@@ -17,6 +17,10 @@
     "react": "^19.2.6",
     "react-dom": "^19.2.6"
   },
+  "//overrides": "transformers 4.2.0 ships onnxruntime-web 1.26.0-dev, which cannot create a session from whisper-base's quantized decoder: 'qdq_actions.cc:137 TransposeDQWeightsForMatMulNBits Missing required scale'. Verified by bisecting the same file across releases: 1.24.3 loads it, 1.25.1 / 1.26.0 / 1.26.0-dev all fail. 1.24.3 is also the version transformers pins for onnxruntime-NODE, so the library is known-good against it. Re-test and drop this pin when upstream fixes the regression.",
+  "overrides": {
+    "onnxruntime-web": "1.24.3"
+  },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/react": "^19.2.14",

@@ -22,16 +22,24 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const SRC = join(here, "..", "node_modules", "onnxruntime-web", "dist");
 const DEST = join(here, "..", "public", "ort");
+
+// Locate onnxruntime-web wherever npm actually put it. The `overrides` pin in package.json
+// leaves it NESTED under @huggingface/transformers rather than hoisted, and ORT's exports map
+// does not expose ./package.json, so require.resolve is not usable here — check paths directly.
+const NM = join(here, "..", "node_modules");
+const SRC = [
+  join(NM, "onnxruntime-web", "dist"),
+  join(NM, "@huggingface", "transformers", "node_modules", "onnxruntime-web", "dist"),
+].find((dir) => existsSync(dir));
 
 // We run the CPU backend (device: "wasm"), so we need the threaded builds and their
 // loaders. `jsep` is the WebGPU backend — ~26 MB we would never execute, so it is
 // excluded rather than shipped as dead weight.
 const WANTED = /^ort-wasm-simd-threaded(\.asyncify|\.jspi)?\.(mjs|wasm)$/;
 
-if (!existsSync(SRC)) {
-  console.error(`[copy-ort] onnxruntime-web not found at ${SRC} — run npm ci first.`);
+if (!SRC || !existsSync(SRC)) {
+  console.error("[copy-ort] could not locate onnxruntime-web's dist/ — run npm ci first.");
   process.exit(1);
 }
 

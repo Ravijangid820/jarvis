@@ -15,6 +15,14 @@ All notable changes to this project are documented in this file.
   `/stt-models` only if that fails — blocked egress, an air-gapped LAN, or an HF outage. The UI
   reports which of the two actually loaded. `download_models.sh` fetches the failsafe copy (~76 MB,
   skip with `SKIP_STT_MODEL=1`).
+- **onnxruntime-web pinned to 1.24.3.** transformers.js 4.2.0 ships `1.26.0-dev` for the browser,
+  which cannot create a session from whisper-base's quantized decoder — it aborts with
+  `qdq_actions.cc:137 TransposeDQWeightsForMatMulNBits Missing required scale`. Bisected the same
+  model file across releases: **1.24.3 loads it; 1.25.1, 1.26.0 and 1.26.0-dev all fail**, so the
+  regression landed in 1.25.x. 1.24.3 is also the version transformers.js pins for
+  onnxruntime-**node**, so the library is known-good against it. Pinned via npm `overrides`; re-test
+  and drop it when upstream fixes the regression. Note the pin leaves ORT *nested* under
+  `@huggingface/transformers` rather than hoisted, which the vendoring script accounts for.
 - **The ONNX Runtime is self-hosted too.** ORT loads its backend as a *pair* of files — a `.mjs`
   loader plus the `.wasm` binary — and the bundler only emits the `.wasm`, so ORT silently reached for
   `cdn.jsdelivr.net` for the loader and the CSP blocked it. That surfaced as the thoroughly
