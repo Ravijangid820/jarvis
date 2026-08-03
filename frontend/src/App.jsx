@@ -428,6 +428,177 @@ function App() {
   const audioCtxRef = useRef(null)
   const greetSpokenRef = useRef(false)   // speak the greeting at most once per session
 
+  // ─── Speech-to-Text (client-side Whisper via WASM Web Worker) ──────────────
+  const [sttReady, setSttReady] = useState(false)
+  const [sttLoading, setSttLoading] = useState(false)
+  const [sttLoadProgress, setSttLoadProgress] = useState(0)
+  const [sttRecording, setSttRecording] = useState(false)
+  const [sttTranscribing, setSttTranscribing] = useState(false)
+  const [sttError, setSttError] = useState("")
+  const [sttSource, setSttSource] = useState("")   // "official" | "failsafe" — which copy loaded
+  const whisperWorkerRef = useRef(null)
+  const mediaStreamRef = useRef(null)
+  const mediaRecorderRef = useRef(null)
+  const audioChunksRef = useRef([])
+
+  /** Lazily create the Whisper Web Worker and start downloading the model. */
+  const initWhisperWorker = () => {
+    if (whisperWorkerRef.current) return whisperWorkerRef.current
+    const w = new Worker(new URL("./whisper-worker.js", import.meta.url), { type: "module" })
+    w.addEventListener("message", handleWorkerMessage)
+    whisperWorkerRef.current = w
+    setSttLoading(true)
+    setSttLoadProgress(0)
+    setSttError("")
+    w.postMessage({ type: "load" })
+    return w
+  }
+
+  /** Handle messages coming back from the Whisper worker. */
+  const handleWorkerMessage = (e) => {
+    const { type, progress, text, error, source } = e.data || {}
+    switch (type) {
+      case "progress":
+        setSttLoadProgress(Math.round(progress ?? 0))
+        break
+      case "ready":
+        setSttReady(true)
+        setSttLoading(false)
+        setSttLoadProgress(100)
+        setSttSource(source || "")
+        break
+      case "result":
+        setSttTranscribing(false)
+        if (text) {
+          setInput(prev => {
+            const sep = prev && !prev.endsWith(" ") ? " " : ""
+            return prev + sep + text
+          })
+          // Auto-resize the textarea to fit the injected text
+          setTimeout(() => {
+            const el = inputRef.current
+            if (el) { el.style.height = "auto"; el.style.height = Math.min(el.scrollHeight, 140) + "px" }
+          }, 0)
+        }
+        break
+      case "error":
+        setSttLoading(false)
+        setSttTranscribing(false)
+        setSttError(error || "STT error")
+        console.error("[STT]", error)
+        break
+      default:
+        break
+    }
+  }
+
+  /**
+   * Resample an AudioBuffer to 16 kHz mono Float32Array (Whisper's expected
+   * input format).  Uses an OfflineAudioContext for accurate, browser-native
+   * resampling — no manual interpolation.
+   */
+  const resampleTo16kHz = async (audioBuffer) => {
+    const TARGET_SR = 16000
+    const numSamples = Math.round(audioBuffer.duration * TARGET_SR)
+    const offCtx = new OfflineAudioContext(1, numSamples, TARGET_SR)
+    const src = offCtx.createBufferSource()
+    src.buffer = audioBuffer
+    src.connect(offCtx.destination)
+    src.start()
+    const rendered = await offCtx.startRendering()
+    return rendered.getChannelData(0)
+  }
+
+  /** Request microphone permission and start capturing audio. */
+  const startRecording = async () => {
+    setSttError("")
+    // Ensure the worker + model are ready (lazy load on first click)
+    const w = initWhisperWorker()
+    if (!sttReady && !sttLoading) {
+      setSttLoading(true)
+      w.postMessage({ type: "load" })
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, sampleRate: 16000 }
+      })
+      mediaStreamRef.current = stream
+      audioChunksRef.current = []
+
+      const recorder = new MediaRecorder(stream, { mimeType: MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "audio/webm" })
+      mediaRecorderRef.current = recorder
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data)
+      }
+      recorder.onstop = async () => {
+        // Release mic immediately
+        stream.getTracks().forEach(t => t.stop())
+        mediaStreamRef.current = null
+
+        const blob = new Blob(audioChunksRef.current, { type: "audio/webm" })
+        audioChunksRef.current = []
+
+        if (blob.size < 100) { setSttRecording(false); return } // too short
+
+        setSttTranscribing(true)
+
+        try {
+          // Decode the recorded blob into an AudioBuffer, then resample to 16kHz
+          const arrayBuf = await blob.arrayBuffer()
+          const actx = new AudioContext({ sampleRate: 48000 })
+          const decoded = await actx.decodeAudioData(arrayBuf)
+          await actx.close()
+          const pcm16k = await resampleTo16kHz(decoded)
+
+          // Send to the worker for transcription
+          if (whisperWorkerRef.current) {
+            whisperWorkerRef.current.postMessage({ type: "transcribe", audio: pcm16k })
+          } else {
+            setSttTranscribing(false)
+            setSttError("Worker not available")
+          }
+        } catch (err) {
+          setSttTranscribing(false)
+          setSttError("Audio processing failed")
+          console.error("[STT] decode error:", err)
+        }
+      }
+
+      recorder.start()
+      setSttRecording(true)
+    } catch (err) {
+      setSttError(err?.name === "NotAllowedError" ? "Microphone access denied" : "Mic error: " + (err?.message || "unknown"))
+      console.error("[STT] getUserMedia error:", err)
+    }
+  }
+
+  /** Stop recording and trigger transcription. */
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop()
+    }
+    setSttRecording(false)
+  }
+
+  /** Toggle recording on/off — main click handler for the mic button. */
+  const toggleRecording = () => {
+    if (sttRecording) {
+      stopRecording()
+    } else if (!sttTranscribing) {
+      startRecording()
+    }
+  }
+
+  // Clean up worker + mic on unmount
+  useEffect(() => {
+    return () => {
+      if (whisperWorkerRef.current) { whisperWorkerRef.current.terminate(); whisperWorkerRef.current = null }
+      if (mediaStreamRef.current) { mediaStreamRef.current.getTracks().forEach(t => t.stop()) }
+    }
+  }, [])
+
   // Speak arbitrary text via the server's Piper TTS (used for the JARVIS greeting).
   const speak = async (text, tok = token) => {
     if (!text || !tok) return
@@ -1884,6 +2055,8 @@ function App() {
         </div>
         
         <div className="input-area">
+          {sttLoading && <div className="stt-loading-bar"><div className="stt-loading-fill" style={{ width: `${sttLoadProgress}%` }} /><span className="stt-loading-label">Downloading Whisper model… {sttLoadProgress}%</span></div>}
+          {sttError && <div className="stt-error-banner">{sttError}<button type="button" onClick={() => setSttError("")}>×</button></div>}
           <div className="input-wrap">
             <input ref={fileInputRef} className="file-picker" type="file" multiple
               accept=".txt,.md,.markdown,.csv,.json,.yaml,.yml,.xml,.html,.htm,.js,.jsx,.ts,.tsx,.py,.java,.c,.cpp,.h,.hpp,.css,.sql,.sh,.log,text/*"
@@ -1894,6 +2067,22 @@ function App() {
               </button>
               {showPlusMenu && renderPlusMenu()}
             </div>
+            <button type="button"
+              className={`mic-btn ${sttRecording ? 'recording' : ''} ${sttTranscribing ? 'transcribing' : ''} ${sttLoading ? 'loading' : ''}`}
+              onClick={toggleRecording}
+              disabled={sttTranscribing || sttLoading}
+              aria-label={sttRecording ? 'Stop recording' : 'Start voice input'}
+              title={sttRecording ? 'Click to stop & transcribe' : sttTranscribing ? 'Transcribing…' : sttLoading ? 'Loading model…' : sttReady ? `Voice input (Whisper, in-browser — ${sttSource === 'failsafe' ? 'loaded from this server' : 'loaded from huggingface.co'})` : 'Voice input — click to enable'}>
+              {sttTranscribing ? (
+                <svg className="mic-spinner" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M12 2a10 10 0 0 1 10 10" /></svg>
+              ) : (
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="9" y="2" width="6" height="12" rx="3" />
+                  <path d="M5 10a7 7 0 0 0 14 0" />
+                  <line x1="12" y1="19" x2="12" y2="22" />
+                </svg>
+              )}
+            </button>
             <textarea 
               ref={inputRef}
               className="input-field" 
@@ -1943,7 +2132,7 @@ function App() {
               {attachmentError && <span className="attachment-error">{attachmentError}</span>}
             </div>
           )}
-          <div className="input-hint">Enter to transmit · Shift+Enter new line · <span className="kbd" role="button" tabIndex={0} onClick={() => { setPaletteQuery(""); setPaletteIndex(0); setPaletteOpen(true) }} style={{cursor:'pointer'}}>⌘K</span> commands</div>
+          <div className="input-hint">Enter to transmit · Shift+Enter new line · 🎙 Voice input · <span className="kbd" role="button" tabIndex={0} onClick={() => { setPaletteQuery(""); setPaletteIndex(0); setPaletteOpen(true) }} style={{cursor:'pointer'}}>⌘K</span> commands</div>
         </div>
         {showMcpModal && renderMcpModal()}
         {showModelModal && renderModelModal()}

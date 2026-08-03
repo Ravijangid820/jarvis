@@ -47,6 +47,37 @@ else
   fi
 fi
 
+# 1b) Browser-side STT model (Whisper base, ONNX q8) — the FAILSAFE copy.
+#     The web UI transcribes in the browser, and normally pulls this straight from huggingface.co
+#     (the official first-party source). This local copy exists only so voice input still works when
+#     that fetch can't happen: an air-gapped LAN, blocked egress, or an HF outage. The orchestrator
+#     serves it read-only at /stt-models. Skip with SKIP_STT_MODEL=1 (saves ~76 MB).
+STT_DIR="$REPO/models/stt/onnx-community/whisper-base"
+STT_BASE="${STT_BASE:-https://huggingface.co/onnx-community/whisper-base/resolve/main}"
+if [ "${SKIP_STT_MODEL:-0}" = "1" ]; then
+  warn "SKIP_STT_MODEL=1 — browser STT will rely on huggingface.co with no local fallback"
+else
+  cyan "Browser STT model: whisper-base q8 (failsafe copy, ~76 MB)"
+  mkdir -p "$STT_DIR/onnx"
+  fetch_stt() {  # $1=file  $2=sha256 — skip when present+verified; else download (retry+resume) + verify
+    f="$STT_DIR/$1"
+    if [ -f "$f" ] && echo "$2  $f" | sha256sum -c - >/dev/null 2>&1; then return 0; fi
+    curl -L --fail --retry 5 --retry-all-errors --retry-delay 5 -C - -o "$f" "$STT_BASE/$1" || return 1
+    echo "$2  $f" | sha256sum -c - >/dev/null 2>&1 || { warn "$1 SHA-256 MISMATCH — deleting"; rm -f "$f"; return 1; }
+  }
+  if fetch_stt config.json            f4d0608f7d918166da7edb3e188de5ef1bfe70d9802e785d271fd88111e9cf4b \
+  && fetch_stt generation_config.json 61070cf8de25b1e9256e8e102ded49d8d24a8369ed36ef84fdf21549e68125a0 \
+  && fetch_stt preprocessor_config.json a6a76d28c93edb273669eb9e0b0636a2bddbb1272c3261e47b7ca6dfdbac1b8d \
+  && fetch_stt tokenizer.json         27fc476bfe7f17299480be2273fc0608e4d5a99aba2ab5dec5374b4482d1a566 \
+  && fetch_stt tokenizer_config.json  2e036e4dbacfdeb7242c7d4ec4149f4a16e86026048f94d1637e3a8ee9c6a573 \
+  && fetch_stt onnx/encoder_model_quantized.onnx 5862993336bf33acd23736071aae2b32261d3b1b2f37780194460d4ef974dd46 \
+  && fetch_stt onnx/decoder_model_merged_quantized.onnx fa3ef9902734ce5ae6f9ef2bdb2ba9a6c4b5785b09f4f420ce036573dc9d090b; then
+    ok "browser STT failsafe bundle present + verified ($STT_DIR)"
+  else
+    warn "STT failsafe bundle incomplete — browser voice input will depend on huggingface.co being reachable"
+  fi
+fi
+
 # 2) Piper TTS (binary + en_GB-alan-medium voice)
 cyan "Piper TTS (binary + voice)"
 if bash "$REPO/src/scripts/piper_setup.sh"; then ok "Piper ready"; else warn "Piper setup failed"; fi

@@ -4,6 +4,27 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## Unreleased
+
+- **Speech-to-text moved into the browser.** The web UI now transcribes voice input with Whisper
+  (ONNX q8) running in a WASM Web Worker on the *user's device*, so STT no longer costs the 2011
+  server any CPU and the mic no longer has to be physically attached to the box. Partially delivers
+  the "edge voice" roadmap item for the web path (the wake-word listener is still server-side).
+- **Two-stage model sourcing.** The browser fetches the model from **huggingface.co first** (the
+  official first-party source), and falls back to a **SHA-256-pinned copy served by this server** at
+  `/stt-models` only if that fails — blocked egress, an air-gapped LAN, or an HF outage. The UI
+  reports which of the two actually loaded. `download_models.sh` fetches the failsafe copy (~76 MB,
+  skip with `SKIP_STT_MODEL=1`).
+- Security headers updated for it: `connect-src` now allows `huggingface.co` and `*.hf.co` (the
+  weights 302 to a CDN host under `hf.co`, so both are required), `worker-src 'self' blob:` for the
+  ONNX runtime's threading workers, and `Cross-Origin-Opener-Policy`/`Cross-Origin-Embedder-Policy`
+  so the browser grants SharedArrayBuffer and the runtime can use more than one thread.
+  Verified: HF reflects the requesting origin in `access-control-allow-origin` across the whole
+  redirect chain, so the fetch satisfies `require-corp`.
+
+> This is the one deliberate outbound request in the product, it carries no user data, it is made by
+> the browser and never the server, and it degrades to a local copy. Everything else remains offline.
+
 ## v3.1.0 — 2026-08-03 — MCP tool discovery + a frontend CI gate
 
 - **MCP servers are now verified by protocol, not by ping.** `test_server` previously called any HTTP

@@ -188,6 +188,9 @@ PIPER_MODEL = BASE_DIR / "piper" / "voices" / "en_GB-alan-medium.onnx"
 # --- HTTP / static ----------------------------------------------------------
 REACT_DIST_DIR = BASE_DIR / "frontend" / "dist"
 STATIC_DIR = Path(__file__).parent / "static"
+# Failsafe copy of the in-browser speech-to-text model (official HF is tried first). Populated by
+# src/scripts/download_models.sh; served read-only at /stt-models when present.
+STT_MODELS_DIR = BASE_DIR / "models" / "stt"
 INDEX_HTML = REACT_DIST_DIR / "index.html"
 SCHEMA_PATH = BASE_DIR / "config" / "schema.sql"
 ADMIN_MAX_INPUT = 10000

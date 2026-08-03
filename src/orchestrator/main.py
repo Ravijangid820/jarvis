@@ -45,7 +45,7 @@ from config import (ADMIN_MAX_INPUT, ALLOWED_ORIGINS, APP_VERSION, BASE_DIR, CHR
                     COMPLETION_RESERVE_DEFAULT, CONFIG, HA_TOKEN_FROM_ENV, HA_URL_FROM_ENV,
                     INDEX_HTML, LLM_URL, PIPER_BIN, PIPER_MODEL,
                     RATE_LIMIT_RPM, REACT_DIST_DIR, REGULAR_MAX_INPUT, REQUIRE_PRESENCE_FOR_CONTROL,
-                    STATIC_DIR, VALID_FACT_CATEGORIES, JARVIS_MODE, logger)
+                    STATIC_DIR, STT_MODELS_DIR, VALID_FACT_CATEGORIES, JARVIS_MODE, logger)
 import ha
 import intent_router
 import mcp
@@ -168,7 +168,17 @@ def check_login_rate(username: str) -> bool:
 _CSP = (
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
     "img-src 'self' data:; font-src 'self'; media-src 'self' data: blob:; "
-    "connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+    # connect-src: 'self' covers the API and the /stt-models failsafe bundle. The two HF hosts are
+    # the browser-side speech-to-text model's OFFICIAL source — huggingface.co serves the metadata
+    # and 302s the weights to a CDN host under hf.co (currently us.aws.cdn.hf.co), so BOTH are
+    # required or the redirect is blocked mid-download. This is the one deliberate egress in the
+    # app: STT model weights only, fetched by the browser (never the server), first-party, and it
+    # falls back to our own copy if it fails. No conversation data ever leaves the network.
+    "connect-src 'self' https://huggingface.co https://*.hf.co; "
+    # ORT spawns its WASM threading workers from blob URLs; without blob: the multi-threaded
+    # runtime silently degrades to single-threaded.
+    "worker-src 'self' blob:; "
+    "object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
 )
 
 
@@ -177,6 +187,12 @@ def _apply_security_headers(response: Response, cache: str = "no-store") -> Resp
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Content-Security-Policy"] = _CSP
     response.headers["Referrer-Policy"] = "no-referrer"
+    # Cross-origin isolation — required for SharedArrayBuffer, which is what lets the in-browser
+    # Whisper runtime use multiple threads instead of one. require-corp (not credentialless) because
+    # the HF CDN answers with `access-control-allow-origin: *`, so the model fetch satisfies it, and
+    # require-corp has the wider browser support of the two.
+    response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+    response.headers["Cross-Origin-Embedder-Policy"] = "require-corp"
     response.headers["Cache-Control"] = cache
     return response
 
@@ -187,10 +203,15 @@ async def security_middleware(request: Request, call_next):
     if (request.method == "OPTIONS" 
             or path in ["/health", "/", "/admin", "/auth/login", "/favicon.svg", "/favicon.png", "/favicon.ico", "/ca.crt"]
             or path.endswith("/favicon.svg") or path.endswith("/favicon.png") or path.endswith("/favicon.ico") or path.endswith("/ca.crt")
-            or "/static/" in path or "/assets/" in path):
+            or "/static/" in path or "/assets/" in path or "/stt-models/" in path):
         resp = await call_next(request)
         # Vite emits content-hashed bundles under /assets — safe to cache forever.
         if "/assets/" in path:
+            return _apply_security_headers(resp, "public, max-age=31536000, immutable")
+        # The STT bundle is unauthenticated on purpose: it is a public, SHA-256-pinned upstream
+        # model — no secret — and the Web Worker that fetches it cannot attach a Bearer token.
+        # Immutable because the pinned files only change with a version bump.
+        if "/stt-models/" in path:
             return _apply_security_headers(resp, "public, max-age=31536000, immutable")
         return _apply_security_headers(resp)
 
@@ -2578,6 +2599,11 @@ if REACT_DIST_DIR.exists():
         app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+# Failsafe copy of the browser-side speech-to-text model, laid out as transformers.js expects
+# (<repo>/models/stt/<org>/<model>/...). Absent unless download_models.sh fetched it — the mount is
+# skipped rather than erroring, and the worker simply has no fallback if the official source fails.
+if STT_MODELS_DIR.exists():
+    app.mount("/stt-models", StaticFiles(directory=str(STT_MODELS_DIR)), name="stt-models")
 
 
 if __name__ == "__main__":
