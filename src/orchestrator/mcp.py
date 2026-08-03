@@ -7,14 +7,21 @@ import json
 import logging
 import os
 import urllib.request
-import urllib.error
+from urllib.parse import urlsplit
 from typing import Any, Dict, List, Tuple
 
-from config import BASE_DIR
+from config import APP_VERSION, BASE_DIR
 
 logger = logging.getLogger("jarvis")
 
 _CONFIG_PATH = BASE_DIR / "config" / "mcp_servers.json"
+_PROTOCOL_VERSION = "2025-03-26"
+# Derived from pyproject, never hardcoded: a stale literal here would be a third version
+# source disagreeing with the git tag and the image tag.
+_CLIENT_INFO = {"name": "jarvis", "version": APP_VERSION}
+_MAX_DISCOVERED_TOOLS = 32
+# Bound the read: an MCP endpoint is a remote party we don't control, and this box has 8 GB.
+_MAX_RESPONSE_BYTES = 1024 * 1024
 
 
 def get_servers() -> List[Dict[str, Any]]:
@@ -49,8 +56,9 @@ def add_server(name: str, url: str, server_type: str = "http", description: str 
     url = (url or "").strip()
     if not name:
         raise ValueError("Server name is required.")
-    if not url or not (url.startswith("http://") or url.startswith("https://") or url.startswith("mcp://") or url.startswith("sse://")):
-        raise ValueError("Valid server URL is required (must start with http://, https://, mcp://, or sse://).")
+    parsed = urlsplit(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc or parsed.username or parsed.password:
+        raise ValueError("Use a complete HTTP(S) MCP endpoint URL without embedded credentials.")
 
     servers = get_servers()
     entry = {
@@ -95,34 +103,78 @@ def toggle_server(name: str, enabled: bool) -> Dict[str, Any]:
 
 
 def test_server(url: str) -> Tuple[bool, str]:
-    """Test connection to an MCP server URL."""
-    url = (url or "").strip()
-    if not url:
-        return False, "Empty URL provided."
-
-    # Normalize protocol for HTTP ping testing
-    test_url = url
-    if test_url.startswith("sse://"):
-        test_url = "http://" + test_url[6:]
-    elif test_url.startswith("mcp://"):
-        test_url = "http://" + test_url[6:]
-
+    """Verify the MCP lifecycle and report actual tool discovery, not a mere HTTP ping."""
     try:
-        req = urllib.request.Request(
-            test_url,
-            headers={"User-Agent": "Jarvis-MCP-Client/1.0", "Accept": "application/json, text/event-stream, */*"},
-            method="GET"
-        )
-        with urllib.request.urlopen(req, timeout=3.0) as resp:
-            status = resp.getcode()
-            if 200 <= status < 400:
-                return True, f"Connected (HTTP {status})"
-            return False, f"Server responded with status {status}"
-    except urllib.error.HTTPError as e:
-        # Many MCP servers return 405 Method Not Allowed on GET if they expect POST/SSE, or 400/401
-        # A response from the HTTP server itself proves the endpoint exists and is reachable
-        if e.code in (400, 401, 403, 404, 405, 406):
-            return True, f"Server reachable (HTTP {e.code})"
-        return False, f"HTTP error {e.code}: {e.reason}"
+        tools = discover_tools(url)
+        return True, f"Connected — discovered {len(tools)} tool{'s' if len(tools) != 1 else ''}."
+    except ValueError as e:
+        return False, str(e)
     except Exception as e:
-        return False, f"Connection failed: {str(e)}"
+        logger.info("MCP test failed for %s: %s", url, e)
+        return False, f"MCP handshake failed: {str(e)[:160]}"
+
+
+def _decode_rpc_response(raw: bytes, content_type: str) -> Dict[str, Any]:
+    text = raw.decode("utf-8", errors="replace").strip()
+    if "text/event-stream" in content_type:
+        for line in text.splitlines():
+            if line.startswith("data:"):
+                text = line[5:].strip()
+                break
+    data = json.loads(text)
+    if not isinstance(data, dict):
+        raise ValueError("MCP endpoint returned an invalid JSON-RPC response.")
+    if "error" in data:
+        raise ValueError(f"MCP error: {data['error'].get('message', 'unknown error')}")
+    return data
+
+
+def _rpc(url: str, payload: Dict[str, Any], session_id: str | None = None) -> Tuple[Dict[str, Any], str | None]:
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+        "MCP-Protocol-Version": _PROTOCOL_VERSION,
+        "User-Agent": "Jarvis-MCP-Client/3.0",
+    }
+    if session_id:
+        headers["Mcp-Session-Id"] = session_id
+    req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
+    with urllib.request.urlopen(req, timeout=8.0) as response:
+        raw = response.read(_MAX_RESPONSE_BYTES + 1)     # don't trust the server's advertised size
+        if len(raw) > _MAX_RESPONSE_BYTES:
+            raise ValueError("MCP endpoint returned an oversized response.")
+        data = _decode_rpc_response(raw, response.headers.get("Content-Type", ""))
+        return data, response.headers.get("Mcp-Session-Id") or session_id
+
+
+def discover_tools(url: str) -> List[Dict[str, Any]]:
+    """Perform a Streamable HTTP MCP handshake and return validated tool definitions.
+
+    Discovery is intentionally request-scoped. It avoids long-lived server sessions and
+    any cross-user state until a tool-execution policy is in place.
+    """
+    parsed = urlsplit((url or "").strip())
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError("Only complete HTTP(S) Streamable MCP endpoint URLs are supported.")
+    initialized, session_id = _rpc(url, {
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": _PROTOCOL_VERSION, "capabilities": {}, "clientInfo": _CLIENT_INFO},
+    })
+    result = initialized.get("result") or {}
+    if not isinstance(result.get("capabilities"), dict) or "tools" not in result["capabilities"]:
+        raise ValueError("MCP server does not advertise tool support.")
+    _rpc(url, {"jsonrpc": "2.0", "method": "notifications/initialized"}, session_id)
+    listed, _ = _rpc(url, {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}, session_id)
+    tools = (listed.get("result") or {}).get("tools")
+    if not isinstance(tools, list):
+        raise ValueError("MCP server returned an invalid tools/list response.")
+    valid = []
+    for tool in tools[:_MAX_DISCOVERED_TOOLS]:
+        if not isinstance(tool, dict) or not isinstance(tool.get("name"), str) or not tool["name"]:
+            continue
+        schema = tool.get("inputSchema") or {"type": "object", "properties": {}}
+        if not isinstance(schema, dict) or schema.get("type", "object") != "object":
+            continue
+        valid.append({"name": tool["name"], "description": str(tool.get("description") or "")[:500],
+                      "inputSchema": schema})
+    return valid

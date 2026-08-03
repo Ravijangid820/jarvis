@@ -695,6 +695,22 @@ def test_mcp_server(req: MCPServerTestRequest, request: Request):
     return {"ok": ok, "detail": detail}
 
 
+@app.get("/mcp/servers/{name}/tools")
+def get_mcp_server_tools(name: str, request: Request):
+    """Discover a configured server's MCP tools for review before any tool is enabled."""
+    _require_admin(request)
+    server = next((item for item in mcp.get_servers() if item.get("name") == name), None)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    try:
+        return {"server": name, "tools": mcp.discover_tools(server.get("url", ""))}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.info("MCP tool discovery failed for %s: %s", name, e)
+        raise HTTPException(status_code=502, detail="MCP tool discovery failed")
+
+
 # ----------------- Multi-Model Discovery & Switching -----------------
 @app.get("/models")
 def get_available_models(request: Request):

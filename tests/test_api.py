@@ -202,6 +202,19 @@ def test_chat_token_estimate_uses_llama_counter_or_fallback(client, monkeypatch)
     assert r.json()["source"] == "llama.cpp"
 
 
+def test_mcp_tool_discovery_is_admin_only_and_returns_reviewable_tools(client, monkeypatch):
+    admin = _tok(client, "tony", "pw-admin")
+    user = _tok(client, "pepper", "pw-user")
+    monkeypatch.setattr(main.mcp, "get_servers", lambda: [{"name": "weather", "url": "https://mcp.example/tools"}])
+    monkeypatch.setattr(main.mcp, "discover_tools", lambda url: [{
+        "name": "forecast", "description": "Get a forecast", "inputSchema": {"type": "object", "properties": {}},
+    }])
+    assert client.get("/mcp/servers/weather/tools", headers={"Authorization": "Bearer " + user}).status_code == 403
+    r = client.get("/mcp/servers/weather/tools", headers={"Authorization": "Bearer " + admin})
+    assert r.status_code == 200
+    assert r.json()["tools"][0]["name"] == "forecast"
+
+
 def test_admin_services_reports_subsystems(client):
     admin = _tok(client, "tony", "pw-admin")
     svc = client.get("/admin/services", headers={"Authorization": "Bearer " + admin}).json()["services"]
