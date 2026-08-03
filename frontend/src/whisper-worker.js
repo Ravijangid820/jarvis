@@ -88,6 +88,32 @@ function buildPipeline() {
 }
 
 /**
+ * Turn a raw loader failure into something that names the actual cause.
+ *
+ * These failures are opaque by default: the browser reports "no available backend
+ * found" for anything that goes wrong before the first inference, whether that was
+ * a blocked fetch, a blocked WASM compile, or a genuinely missing model.
+ */
+function describeLoadFailure(officialDetail, failsafeError) {
+  const both = `${officialDetail} ${failsafeError?.message || failsafeError}`;
+
+  if (/violates the following Content Security policy|unsafe-eval/i.test(both)) {
+    // A worker enforces the CSP that came with its OWN script response, and that
+    // response is cached immutably — so a widened policy can be live on the server
+    // while this worker still runs under the old one.
+    return "Speech-to-text runtime blocked by Content Security Policy. The server policy may " +
+           "already be fixed while this page is running a cached copy of the old one — do a hard " +
+           "reload (Ctrl+Shift+R, or Cmd+Shift+R) to pick it up.";
+  }
+  if (/Failed to fetch|NetworkError|Load failed/i.test(both)) {
+    return "Could not download the speech-to-text runtime or model. Both huggingface.co and this " +
+           "server's local copy were unreachable — check network access, then reload.";
+  }
+  return `Speech-to-text failed to start. Official source: ${officialDetail}. ` +
+         `Local fallback: ${failsafeError?.message || failsafeError}`;
+}
+
+/**
  * Initialise the ASR pipeline.  Downloads the model on first run (~76 MB for
  * whisper-base q8) and caches it in the browser's Cache Storage for instant
  * subsequent loads.
@@ -112,14 +138,11 @@ async function loadModel() {
         // Not fatal on its own — this is exactly what the failsafe copy exists for.
         console.warn("[STT] official source failed, trying failsafe:", err?.message || err);
       } else {
-        // Both sources are gone. Report the official failure too: it is almost always
-        // the real cause (blocked egress / CSP), while the failsafe error is just a 404
-        // from a server that was never given the bundle.
-        self.postMessage({
-          type: "error",
-          error: `Model download failed. Official: ${officialError?.message || officialError}. ` +
-                 `Failsafe: ${err?.message || err}`,
-        });
+        // Both sources are gone. When BOTH fail identically the cause is almost never the
+        // model — it is the runtime failing to start, so say so instead of blaming the
+        // download and sending the reader off in the wrong direction.
+        const detail = `${officialError?.message || officialError}`;
+        self.postMessage({ type: "error", error: describeLoadFailure(detail, err) });
       }
     }
   }

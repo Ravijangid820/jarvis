@@ -439,6 +439,22 @@ def test_csp_allows_wasm_but_never_plain_eval(client):
     assert "'unsafe-eval'" not in script_src.replace("'wasm-unsafe-eval'", "")
 
 
+def test_immutable_assets_do_not_pin_a_csp_into_the_browser_cache(client):
+    """Immutable, content-hashed asset responses must NOT carry a CSP.
+
+    A dedicated Web Worker enforces the policy delivered with its own script response, and an
+    immutable response is cached headers-and-all — so a CSP shipped here freezes into the browser
+    for a year and a later policy change never reaches the worker, while the document already has
+    the new one. Workers inherit the creating document's policy, which is no-store and therefore
+    always current, so omitting it here loses nothing.
+    """
+    r = client.get("/assets/does-not-exist.js")
+    assert "immutable" in r.headers.get("Cache-Control", "")
+    assert "Content-Security-Policy" not in r.headers
+    # The document itself must still carry it.
+    assert "Content-Security-Policy" in client.get("/health").headers
+
+
 def test_cross_origin_isolation_headers_present(client):
     """Without both of these the browser withholds SharedArrayBuffer and the in-browser
     speech-to-text runtime silently drops to a single thread."""

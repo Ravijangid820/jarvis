@@ -187,10 +187,18 @@ _CSP = (
 )
 
 
-def _apply_security_headers(response: Response, cache: str = "no-store") -> Response:
+def _apply_security_headers(response: Response, cache: str = "no-store", csp: bool = True) -> Response:
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
-    response.headers["Content-Security-Policy"] = _CSP
+    # csp=False for immutable, content-hashed assets. A dedicated Web Worker enforces the CSP
+    # delivered with ITS OWN script response, and an immutable response is cached headers-and-all —
+    # so a CSP shipped on such an asset gets frozen into the browser for a year, and a later policy
+    # change silently fails to reach the worker while the document already has the new one. (That is
+    # exactly how a stale `script-src 'self'` kept blocking WASM after the policy was widened.)
+    # Omitting it is safe: workers inherit the creating document's policy, and the document is
+    # no-store, so the effective policy is always current. Documents get the header; caches don't.
+    if csp:
+        response.headers["Content-Security-Policy"] = _CSP
     response.headers["Referrer-Policy"] = "no-referrer"
     # Cross-origin isolation — required for SharedArrayBuffer, which is what lets the in-browser
     # Whisper runtime use multiple threads instead of one. require-corp (not credentialless) because
@@ -213,12 +221,12 @@ async def security_middleware(request: Request, call_next):
         resp = await call_next(request)
         # Vite emits content-hashed bundles under /assets — safe to cache forever.
         if "/assets/" in path:
-            return _apply_security_headers(resp, "public, max-age=31536000, immutable")
+            return _apply_security_headers(resp, "public, max-age=31536000, immutable", csp=False)
         # The STT bundle is unauthenticated on purpose: it is a public, SHA-256-pinned upstream
         # model — no secret — and the Web Worker that fetches it cannot attach a Bearer token.
         # Immutable because the pinned files only change with a version bump.
         if "/stt-models/" in path or "/ort/" in path:
-            return _apply_security_headers(resp, "public, max-age=31536000, immutable")
+            return _apply_security_headers(resp, "public, max-age=31536000, immutable", csp=False)
         return _apply_security_headers(resp)
 
     auth_header = request.headers.get("Authorization", "")
