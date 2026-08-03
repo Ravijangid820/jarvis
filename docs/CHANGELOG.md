@@ -15,6 +15,12 @@ All notable changes to this project are documented in this file.
   `/stt-models` only if that fails — blocked egress, an air-gapped LAN, or an HF outage. The UI
   reports which of the two actually loaded. `download_models.sh` fetches the failsafe copy (~76 MB,
   skip with `SKIP_STT_MODEL=1`).
+- **`immutable` caching restricted to content-addressed URLs.** The ONNX Runtime is now served from
+  `/ort/<version>/`, with the version baked into the worker bundle at build time. ORT's filenames
+  are stable across releases, so the previous flat `/ort/` path served `immutable, max-age=1y` had
+  pinned one build into every browser for a year — upgrading ORT swapped the bytes on disk while
+  clients kept executing the cached old `.wasm` against newer JS glue. `/stt-models/` (also fixed
+  filenames) now uses a revalidating policy for the same reason; ETags keep the normal case a 304.
 - **onnxruntime-web pinned to 1.24.3.** transformers.js 4.2.0 ships `1.26.0-dev` for the browser,
   which cannot create a session from whisper-base's quantized decoder — it aborts with
   `qdq_actions.cc:137 TransposeDQWeightsForMatMulNBits Missing required scale`. Bisected the same

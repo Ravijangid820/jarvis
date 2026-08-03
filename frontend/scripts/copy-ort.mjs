@@ -17,12 +17,11 @@
  * Runs from package.json's prebuild/predev hooks. public/ort/ is gitignored: it is
  * a build artifact copied from the locked node_modules, not source.
  */
-import { copyFileSync, mkdirSync, readdirSync, existsSync } from "node:fs";
+import { copyFileSync, mkdirSync, readdirSync, existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const DEST = join(here, "..", "public", "ort");
 
 // Locate onnxruntime-web wherever npm actually put it. The `overrides` pin in package.json
 // leaves it NESTED under @huggingface/transformers rather than hoisted, and ORT's exports map
@@ -43,6 +42,14 @@ if (!SRC || !existsSync(SRC)) {
   process.exit(1);
 }
 
+// Files land under public/ort/<version>/ so the URL is content-addressed by ORT version.
+// These filenames are stable across releases, so a flat path served `immutable` would pin one
+// build into every browser for a year: upgrading ORT would swap the bytes on disk while clients
+// kept executing the cached old binary. (That is exactly what happened with 1.26.0-dev — new JS
+// glue running against a stale cached .wasm.) Versioning the path makes `immutable` honest.
+const ORT_VERSION = JSON.parse(readFileSync(join(dirname(SRC), "package.json"), "utf8")).version;
+const DEST = join(here, "..", "public", "ort", ORT_VERSION);
+
 mkdirSync(DEST, { recursive: true });
 
 const copied = readdirSync(SRC).filter((f) => WANTED.test(f));
@@ -55,4 +62,4 @@ for (const file of copied) {
   copyFileSync(join(SRC, file), join(DEST, file));
 }
 
-console.log(`[copy-ort] vendored ${copied.length} ONNX Runtime files into public/ort/`);
+console.log(`[copy-ort] vendored ${copied.length} ONNX Runtime files into public/ort/${ORT_VERSION}/`);

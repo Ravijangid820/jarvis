@@ -455,6 +455,17 @@ def test_immutable_assets_do_not_pin_a_csp_into_the_browser_cache(client):
     assert "Content-Security-Policy" in client.get("/health").headers
 
 
+def test_immutable_caching_only_on_content_addressed_paths(client):
+    """`immutable` tells a browser never to revalidate — only honest when the URL changes with
+    the bytes. /ort/<version>/ carries the runtime version, so it qualifies. /stt-models/ has
+    fixed filenames, so re-pinning the bundle would leave clients on year-old weights.
+    """
+    ort = client.get("/ort/1.2.3/ort-wasm-simd-threaded.wasm")
+    assert "immutable" in ort.headers.get("Cache-Control", "")
+    stt = client.get("/stt-models/onnx-community/whisper-base/config.json")
+    assert "immutable" not in stt.headers.get("Cache-Control", "")
+
+
 def test_cross_origin_isolation_headers_present(client):
     """Without both of these the browser withholds SharedArrayBuffer and the in-browser
     speech-to-text runtime silently drops to a single thread."""

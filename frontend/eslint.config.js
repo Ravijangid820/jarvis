@@ -7,8 +7,13 @@ import { defineConfig, globalIgnores } from 'eslint/config'
 export default defineConfig([
   globalIgnores(['dist']),
   {
-    files: ['vite.config.js'],
+    files: ['vite.config.js', 'scripts/**/*.mjs'],
     languageOptions: { globals: globals.node },
+  },
+  {
+    // Injected at build time by vite's `define` (see vite.config.js).
+    files: ['src/whisper-worker.js'],
+    languageOptions: { globals: { __ORT_VERSION__: 'readonly' } },
   },
   {
     files: ['**/*.{js,jsx}'],

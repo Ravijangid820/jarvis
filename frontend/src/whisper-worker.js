@@ -43,8 +43,10 @@ const FAILSAFE_PATH = "/stt-models/";
 // No remote fallback here on purpose: this is executable code, not model data.
 // Guarded: if a future transformers.js reshapes env.backends, an unguarded assignment
 // would throw at module scope and kill the worker before it can report anything.
+// Version-scoped path: ORT's filenames are stable across releases, so a flat /ort/ served
+// `immutable` would let a browser keep executing a cached older .wasm after an upgrade.
 if (env?.backends?.onnx?.wasm) {
-  env.backends.onnx.wasm.wasmPaths = "/ort/";
+  env.backends.onnx.wasm.wasmPaths = `/ort/${__ORT_VERSION__}/`;
 } else {
   console.error("[STT] env.backends.onnx.wasm missing — ORT will try to fetch its backend from a CDN and the CSP will block it.");
 }

@@ -225,8 +225,16 @@ async def security_middleware(request: Request, call_next):
         # The STT bundle is unauthenticated on purpose: it is a public, SHA-256-pinned upstream
         # model — no secret — and the Web Worker that fetches it cannot attach a Bearer token.
         # Immutable because the pinned files only change with a version bump.
-        if "/stt-models/" in path or "/ort/" in path:
+        # `immutable` is only ever honest for a CONTENT-ADDRESSED url. /ort/<version>/… is
+        # (the ORT version is in the path), so it may be cached forever. /stt-models/… is NOT:
+        # the filenames are fixed, so re-pinning the bundle would swap the bytes underneath a
+        # url browsers had been told never to revalidate — and they would keep the old weights
+        # for a year. It gets a revalidating policy instead; StaticFiles serves ETags, so the
+        # normal case is a cheap 304 rather than a re-download.
+        if "/ort/" in path:
             return _apply_security_headers(resp, "public, max-age=31536000, immutable", csp=False)
+        if "/stt-models/" in path:
+            return _apply_security_headers(resp, "public, no-cache", csp=False)
         return _apply_security_headers(resp)
 
     auth_header = request.headers.get("Authorization", "")
