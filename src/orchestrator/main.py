@@ -166,7 +166,12 @@ def check_login_rate(username: str) -> bool:
 # allow data: for TTS audio + inline SVG. This is the second line of defence behind the
 # render-as-React-nodes / http(s)-only-links invariants — it neutralises any future XSS regression.
 _CSP = (
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+    # 'wasm-unsafe-eval' permits WebAssembly.instantiate — required by the in-browser Whisper
+    # runtime — and NOTHING else. It is deliberately not 'unsafe-eval', which would re-enable
+    # eval()/new Function() for ordinary JavaScript and hand any future XSS a code-execution
+    # primitive. This keyword grants WASM compilation only, so the guarantee that matters here
+    # (no attacker-supplied *script* can be evaluated) is unchanged.
+    "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; "
     "img-src 'self' data:; font-src 'self'; media-src 'self' data: blob:; "
     # connect-src: 'self' covers the API and the /stt-models failsafe bundle. The two HF hosts are
     # the browser-side speech-to-text model's OFFICIAL source — huggingface.co serves the metadata

@@ -426,6 +426,36 @@ def test_security_headers_present(client):
     assert r.headers.get("Referrer-Policy") == "no-referrer"
 
 
+def test_csp_allows_wasm_but_never_plain_eval(client):
+    """The in-browser Whisper runtime needs WebAssembly.instantiate, which CSP gates.
+
+    'wasm-unsafe-eval' grants exactly that. 'unsafe-eval' would additionally re-enable
+    eval()/new Function() for ordinary JavaScript, handing any future XSS a code-execution
+    primitive — so widening this to the blunter keyword must fail loudly here.
+    """
+    csp = client.get("/health").headers.get("Content-Security-Policy", "")
+    script_src = next(d for d in csp.split(";") if d.strip().startswith("script-src"))
+    assert "'wasm-unsafe-eval'" in script_src
+    assert "'unsafe-eval'" not in script_src.replace("'wasm-unsafe-eval'", "")
+
+
+def test_cross_origin_isolation_headers_present(client):
+    """Without both of these the browser withholds SharedArrayBuffer and the in-browser
+    speech-to-text runtime silently drops to a single thread."""
+    r = client.get("/health")
+    assert r.headers.get("Cross-Origin-Opener-Policy") == "same-origin"
+    assert r.headers.get("Cross-Origin-Embedder-Policy") == "require-corp"
+
+
+def test_stt_model_host_is_reachable_from_the_browser(client):
+    """The browser fetches Whisper weights from huggingface.co, which 302s them to a CDN
+    host under hf.co. Allowing only the first host breaks the download mid-redirect."""
+    csp = client.get("/health").headers.get("Content-Security-Policy", "")
+    connect_src = next(d for d in csp.split(";") if d.strip().startswith("connect-src"))
+    assert "https://huggingface.co" in connect_src
+    assert "https://*.hf.co" in connect_src
+
+
 def test_tts_requires_auth(client):
     assert client.post("/tts", json={"text": "hi"}).status_code == 401
 
