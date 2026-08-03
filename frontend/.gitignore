@@ -10,6 +10,10 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+
+# ONNX Runtime WASM binaries, vendored from node_modules at build time by
+# scripts/copy-ort.mjs. Build artifact copied from the lockfile, not source (~51 MB).
+public/ort/
 *.local
 
 # Editor directories and files

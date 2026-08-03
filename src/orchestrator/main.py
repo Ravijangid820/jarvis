@@ -203,7 +203,8 @@ async def security_middleware(request: Request, call_next):
     if (request.method == "OPTIONS" 
             or path in ["/health", "/", "/admin", "/auth/login", "/favicon.svg", "/favicon.png", "/favicon.ico", "/ca.crt"]
             or path.endswith("/favicon.svg") or path.endswith("/favicon.png") or path.endswith("/favicon.ico") or path.endswith("/ca.crt")
-            or "/static/" in path or "/assets/" in path or "/stt-models/" in path):
+            or "/static/" in path or "/assets/" in path or "/stt-models/" in path
+            or "/ort/" in path):
         resp = await call_next(request)
         # Vite emits content-hashed bundles under /assets — safe to cache forever.
         if "/assets/" in path:
@@ -211,7 +212,7 @@ async def security_middleware(request: Request, call_next):
         # The STT bundle is unauthenticated on purpose: it is a public, SHA-256-pinned upstream
         # model — no secret — and the Web Worker that fetches it cannot attach a Bearer token.
         # Immutable because the pinned files only change with a version bump.
-        if "/stt-models/" in path:
+        if "/stt-models/" in path or "/ort/" in path:
             return _apply_security_headers(resp, "public, max-age=31536000, immutable")
         return _apply_security_headers(resp)
 
@@ -2604,6 +2605,11 @@ if STATIC_DIR.exists():
 # skipped rather than erroring, and the worker simply has no fallback if the official source fails.
 if STT_MODELS_DIR.exists():
     app.mount("/stt-models", StaticFiles(directory=str(STT_MODELS_DIR)), name="stt-models")
+# ONNX Runtime WASM backend, vendored into the SPA build by frontend/scripts/copy-ort.mjs.
+# Served from our own origin so the runtime never reaches for a CDN (see whisper-worker.js).
+_ORT_DIR = REACT_DIST_DIR / "ort"
+if _ORT_DIR.exists():
+    app.mount("/ort", StaticFiles(directory=str(_ORT_DIR)), name="ort")
 
 
 if __name__ == "__main__":

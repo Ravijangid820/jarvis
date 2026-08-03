@@ -35,6 +35,20 @@ const MODEL_ID = "onnx-community/whisper-base";
 // must not resolve against the worker's own /assets/ URL.
 const FAILSAFE_PATH = "/stt-models/";
 
+// Serve the ONNX Runtime backend ourselves. ORT loads a .mjs loader alongside the
+// .wasm binary; the bundler only emits the .wasm, so left alone ORT fetches the
+// loader from cdn.jsdelivr.net and our CSP (rightly) blocks it — which surfaces as
+// "no available backend found. ERR: [wasm] TypeError: Failed to fetch", with no hint
+// that a CDN was involved. scripts/copy-ort.mjs vendors both files into public/ort/.
+// No remote fallback here on purpose: this is executable code, not model data.
+// Guarded: if a future transformers.js reshapes env.backends, an unguarded assignment
+// would throw at module scope and kill the worker before it can report anything.
+if (env?.backends?.onnx?.wasm) {
+  env.backends.onnx.wasm.wasmPaths = "/ort/";
+} else {
+  console.error("[STT] env.backends.onnx.wasm missing — ORT will try to fetch its backend from a CDN and the CSP will block it.");
+}
+
 let transcriber = null;
 let modelSource = null;
 

@@ -15,6 +15,14 @@ All notable changes to this project are documented in this file.
   `/stt-models` only if that fails — blocked egress, an air-gapped LAN, or an HF outage. The UI
   reports which of the two actually loaded. `download_models.sh` fetches the failsafe copy (~76 MB,
   skip with `SKIP_STT_MODEL=1`).
+- **The ONNX Runtime is self-hosted too.** ORT loads its backend as a *pair* of files — a `.mjs`
+  loader plus the `.wasm` binary — and the bundler only emits the `.wasm`, so ORT silently reached for
+  `cdn.jsdelivr.net` for the loader and the CSP blocked it. That surfaced as the thoroughly
+  unhelpful `no available backend found. ERR: [wasm] TypeError: Failed to fetch`, identically for
+  both model sources, because the runtime never came up to fetch anything. `scripts/copy-ort.mjs`
+  now vendors both files from the locked `node_modules` into `public/ort/` at build time, served at
+  `/ort`. Deliberately **no** remote fallback here: unlike model weights, this is executable code,
+  and a CDN in `script-src` would be a supply-chain regression.
 - Security headers updated for it: `connect-src` now allows `huggingface.co` and `*.hf.co` (the
   weights 302 to a CDN host under `hf.co`, so both are required), `worker-src 'self' blob:` for the
   ONNX runtime's threading workers, and `Cross-Origin-Opener-Policy`/`Cross-Origin-Embedder-Policy`
