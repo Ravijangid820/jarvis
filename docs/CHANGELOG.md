@@ -103,6 +103,52 @@ deliberately specific, because every one of them failed silently rather than lou
 > release reconciles it. Those two releases are recorded by git tag only — their entries are still
 > owed here.
 
+> The three entries below were reconstructed from git history on 2026-08-03. They were shipped
+> without changelog entries at the time, so they are less detailed than the releases either side.
+
+## v3.0.1 — 2026-07-29 — MCP registry, model switching, live token estimate
+
+- **MCP server registry** — a new `mcp.py` stores configured Model Context Protocol endpoints in
+  `config/mcp_servers.json`, with admin-only add / delete / toggle / test endpoints and a management
+  modal in the UI. Registration only: nothing executes MCP tools. (The connection test was a plain
+  HTTP ping that counted 401/404/405 as success — replaced with a real protocol handshake in v3.1.0.)
+- **Multi-model discovery and switching** — `GET /models` inventories the GGUF files on disk and
+  reports which one llama-server actually has loaded via `/props`; `POST /models/switch` stages the
+  selection in `config/active_model.json` and returns `restart_required` rather than pretending the
+  running process changed. Model paths stay admin-only — they are a server implementation detail.
+- **Live token estimate in the composer** — `POST /chat/token-estimate` with
+  `llm.count_prompt_tokens`, which uses llama.cpp's token-count endpoint when the build exposes it
+  and falls back to the local char-based estimate otherwise, so an older pinned build degrades
+  instead of losing the feature.
+
+## v3.0.0 — 2026-07-27 — three-tier deploy, run modes, and the Llama Clean UI
+
+- **Three-tier containerization** — a dedicated Nginx frontend image (`Dockerfile.frontend`) beside
+  the orchestrator and llama services, with path-filtered CI and GHA Docker layer caching so an
+  unchanged tier is not rebuilt.
+- **Run modes** (`JARVIS_MODE`: `production` / `development` / `demo`). Demo mode disables Home
+  Assistant and hardware control outright and keeps sessions ephemeral — history and its RAG vectors
+  are purged on listing and after 30 minutes — so the UI can be shown publicly without exposing a
+  house or retaining strangers' conversations.
+- **Zero-config startup** — admin seeding from `ADMIN_USER`/`ADMIN_PASS`, the ONNX embedding bundle
+  auto-downloading on first boot if absent, `/v1/chat/completions` auto-appended to
+  `JARVIS_FAST_BRAIN_URL`, and `ALLOWED_ORIGINS` honoured from the environment with CORS preflight.
+- **The UI became "Llama Clean"** — a new default theme replacing the pixelated HUD styling (grid,
+  scanlines, corner brackets, golden borders) with rounded corners, soft shadows and frosted-glass
+  header/composer. Adds a Deep Reasoning toggle with a collapsible thinking accordion, per-turn model
+  badge, inline editing, branch and regenerate, session auto-titling, a Stark theme, and a
+  transparent Arc Reactor favicon served from dynamic favicon routes.
+- **Text attachments** — small documents are parsed in the browser and sent as text on the
+  authenticated chat request (max 3, 16k chars each). Deliberately text-only: nothing pretends a
+  text-only model can read arbitrary PDFs or images, and no file is ever written to the server.
+- Fixed: static assets under a subpath prefix were rejected by the security middleware.
+
+## v2.6.1 — 2026-07-10 — camera dependency + documentation refresh
+
+- Camera agent's desktop dependency moved to OpenCV 5.0.
+- Full documentation refresh for the v2.6.0 feature set, including `DIAGRAMS.md` — every flow
+  (system, intent ladder, RAG, Home Assistant, deploys) as GitHub-rendered mermaid.
+
 ## v2.6.0 — 2026-07-09 — semantic understanding + a UI that fits in your pocket
 
 Two threads, detailed in the dated sections below:

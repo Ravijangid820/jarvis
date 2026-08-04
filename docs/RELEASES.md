@@ -6,6 +6,12 @@ see [CHANGELOG.md](CHANGELOG.md); for published image tags see
 
 | Version | Date | Theme |
 |---|---|---|
+| v3.2.1 | 2026-08-03 | Patch: two silent-failure fixes (CSP-blocked inline script, ORT path 404 on Pages) + build-time guards |
+| **v3.2.0** | 2026-08-03 | **Speech-to-text on the device** — in-browser Whisper (WASM); the server spends no CPU on STT |
+| **v3.1.0** | 2026-08-03 | **MCP tool discovery** — real protocol handshake, review-only; frontend CI gate |
+| v3.0.1 | 2026-07-29 | MCP registry, multi-model discovery + staged switching, live composer token estimate |
+| **v3.0.0** | 2026-07-27 | **Three-tier deploy + Llama Clean UI** — frontend container, run modes (prod/dev/demo), attachments |
+| v2.6.1 | 2026-07-10 | Patch: camera on OpenCV 5.0; full doc refresh + DIAGRAMS.md |
 | **v2.6.0** | 2026-07-09 | **Semantic understanding + mobile** — the intent router (meaning, not phrasings) + a phone-calibrated UI |
 | v2.5.1 | 2026-07-09 | HA hardening round — eight live-testing fixes (fast-paths, pronouns, stop/enable semantics, anti-bluff, honest replies) |
 | **v2.5.0** | 2026-07-08 | **Home Assistant** — smart-home control via allowlisted LLM tools + Smart Home admin UI |
@@ -60,6 +66,36 @@ melting in here" turns on the fan — confident matches act, plausible ones ask 
 confirm, and the thresholds were calibrated against the real embedder on the production box. Plus a
 full mobile calibration of the web UI (dvh viewport, 16px inputs, touch targets, containment). Test
 suite: 74 → 118 across the v2.5–v2.6 arc.
+
+**v3.0.0 — make it presentable, and shippable in tiers (July 10–27).** Two threads. The deploy story
+grew a third tier — a dedicated Nginx frontend image alongside the orchestrator and llama, with
+path-filtered CI so an untouched tier is not rebuilt — and the app learned **run modes**: `demo` mode
+disables Home Assistant and hardware control outright and keeps sessions ephemeral, so the UI can be
+shown publicly without exposing a house or retaining strangers' conversations. Meanwhile the interface
+was rebuilt: the pixelated HUD styling gave way to **Llama Clean**, plus a Deep Reasoning toggle with a
+thinking accordion, inline editing, branch/regenerate, auto-titling, and browser-parsed text
+attachments (deliberately text-only — nothing pretends a text-only model can read a PDF).
+
+**v3.0.1 → v3.1.0 — reach toward other tools.** An MCP server registry landed first (v3.0.1) together
+with multi-model discovery and a *staged* model switch that honestly reports `restart_required`
+instead of pretending the running llama process changed. v3.1.0 then replaced the registry's
+connection test — an HTTP ping that counted 401/404/405 as success, so any web server passed — with a
+real protocol handshake, and added admin-only tool discovery for review. Discovery stays read-only:
+nothing executes MCP tools until there is a per-tool allowlist and an answer to whose authority a
+remote tool runs under. v3.1.0 also put the frontend under CI for the first time, and reconciled a
+version drift where `pyproject` had stayed at 2.6.0 across two tagged releases.
+
+**v3.2.0 — give the hardware back its CPU (August 3).** Speech-to-text moved off the server and into
+the browser: Whisper ONNX in a WASM Web Worker on the user's own device, so the 2011 box spends
+nothing on transcription and the microphone no longer has to be attached to it. Model sourcing is
+official-first (huggingface.co) with a SHA-256-pinned local copy as failsafe; the ONNX Runtime itself
+is self-hosted outright, because unlike model weights it is executable code. Measured on the box, the
+server-side alternative costs ~30 s of all-core work per utterance — Whisper pads every input to a
+fixed 30 s window, so short commands get no discount — which is why this one goes to the edge.
+Getting there took four load-time fixes, every one of which failed *silently*: a CSP-blocked model
+fetch, a runtime loader reaching for a CDN, `immutable` caching freezing stale headers and then a
+stale binary into browsers, and a missing wasm variant that hung instead of erroring. v3.2.1 added two
+more of the same family and the build-time guards that now catch them.
 
 ## How releases work
 - Bump `pyproject.toml` → tag `vX.Y.Z` → GitHub Actions builds `jarvis-combined` +
