@@ -4,6 +4,26 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## v3.2.1 — 2026-08-03 — two silent-failure fixes found after tagging
+
+Both of these broke without raising anything — the page rendered, and only a console line or a
+spinner that never finished marked the damage. Both now have build-time guards.
+
+- **The GitHub Pages SPA redirect shim ran as an inline `<script>`**, which our
+  `script-src 'self' 'wasm-unsafe-eval'` policy blocks outright — so it had never actually run when
+  the orchestrator served the app, and logged a CSP violation on every page load. Moved into
+  `src/main.jsx`, where it is served from `/assets` under `'self'`; it still runs before React reads
+  the location. Deliberately not fixed by pinning the script's hash into the CSP, which would break
+  silently on any edit.
+- **The ONNX Runtime was addressed with an absolute `/ort/…` path.** The Pages build is served from
+  `/jarvis/`, so the runtime 404'd there — and a 404 on an ORT file does not raise: the load promise
+  never settles and the UI hangs at "Preparing…". The demo's microphone was broken this way. Both
+  the runtime and failsafe-model paths now derive from `import.meta.env.BASE_URL`.
+- New `frontend/scripts/check-build.mjs` runs as a `postbuild` hook (so CI covers it) and fails the
+  build on either regression: an inline script in `index.html`, missing ORT variants in `dist`, or a
+  hardcoded `/ort/` on a sub-path deploy. Verified to fail on a reintroduced bug, not merely to pass
+  on a clean tree.
+
 ## v3.2.0 — 2026-08-03 — speech-to-text moves to the device
 
 Voice input now runs in the user's browser instead of on the server. Verified end to end on a real
