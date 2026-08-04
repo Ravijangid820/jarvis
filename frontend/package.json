@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "predev": "node scripts/copy-ort.mjs",
     "prebuild": "node scripts/copy-ort.mjs",
-    "postbuild": "node scripts/check-no-inline-scripts.mjs",
+    "postbuild": "node scripts/check-build.mjs",
     "prepreview": "node scripts/copy-ort.mjs"
   },
   "dependencies": {

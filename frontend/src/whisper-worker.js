@@ -31,9 +31,16 @@ import { pipeline, env } from "@huggingface/transformers";
 
 const MODEL_ID = "onnx-community/whisper-base";
 
-// Absolute, origin-relative: the failsafe copy is served by OUR orchestrator, so it
-// must not resolve against the worker's own /assets/ URL.
-const FAILSAFE_PATH = "/stt-models/";
+// Base-aware, not origin-absolute. Vite's BASE_URL is "/" when the orchestrator serves the app
+// but "/jarvis/" for the GitHub Pages build, so a hardcoded "/…" 404s there — and a 404 on an ORT
+// runtime file does not error, it hangs (see the WANTED comment in scripts/copy-ort.mjs).
+// Always ends with a slash.
+const BASE = import.meta.env.BASE_URL;
+
+// The failsafe model copy is served by OUR orchestrator, so this must not resolve against the
+// worker's own /assets/ URL. On Pages there is no orchestrator and this 404s by design — the
+// official source is used there instead.
+const FAILSAFE_PATH = `${BASE}stt-models/`;
 
 // Serve the ONNX Runtime backend ourselves. ORT loads a .mjs loader alongside the
 // .wasm binary; the bundler only emits the .wasm, so left alone ORT fetches the
@@ -46,7 +53,7 @@ const FAILSAFE_PATH = "/stt-models/";
 // Version-scoped path: ORT's filenames are stable across releases, so a flat /ort/ served
 // `immutable` would let a browser keep executing a cached older .wasm after an upgrade.
 if (env?.backends?.onnx?.wasm) {
-  env.backends.onnx.wasm.wasmPaths = `/ort/${__ORT_VERSION__}/`;
+  env.backends.onnx.wasm.wasmPaths = `${BASE}ort/${__ORT_VERSION__}/`;
 } else {
   console.error("[STT] env.backends.onnx.wasm missing — ORT will try to fetch its backend from a CDN and the CSP will block it.");
 }
