@@ -701,6 +701,16 @@ function App() {
     return () => clearTimeout(t)
   }, [booting])
 
+  // Admin inventories: fetched once when an admin session starts, then only on demand when their
+  // modal opens. They used to ride the 10s health poll, which refetched rarely-changing data 360
+  // times an hour and hammered any backend that lacked the routes.
+  useEffect(() => {
+    if (!token || role !== "admin") return
+    fetchMcpServers()
+    fetchAvailableModels()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchers are stable per auth state
+  }, [token, role])
+
   useEffect(() => {
     const el = messagesContainerRef.current
     if (!el) return
@@ -872,10 +882,19 @@ function App() {
     headers: { Authorization: "Bearer " + token, ...(options.headers || {}) },
   })
 
+  // A 404 here means the backend predates the endpoint, not that the request failed — the UI and
+  // the API can be on different versions whenever they deploy separately (the public site is a
+  // static Pages build talking to a self-hosted orchestrator). Latch it off rather than asking
+  // again forever: without this, an older backend gets a 404 every poll for as long as the tab is
+  // open. Ref, not state, so flipping it never triggers a re-render.
+  const mcpSupportedRef = useRef(true)
+  const modelsSupportedRef = useRef(true)
+
   const fetchMcpServers = async () => {
-    if (role !== "admin") return
+    if (role !== "admin" || !mcpSupportedRef.current) return
     try {
       const res = await apiRequest("/mcp/servers")
+      if (res.status === 404) { mcpSupportedRef.current = false; return }
       if (res.ok) {
         const d = await res.json()
         setMcpServers(d.servers || [])
@@ -884,9 +903,10 @@ function App() {
   }
 
   const fetchAvailableModels = async () => {
-    if (role !== "admin") return
+    if (role !== "admin" || !modelsSupportedRef.current) return
     try {
       const res = await apiRequest("/models")
+      if (res.status === 404) { modelsSupportedRef.current = false; return }
       if (res.ok) {
         const d = await res.json()
         setAvailableModels(d.models || [])
@@ -914,8 +934,11 @@ function App() {
 
   const checkHealth = async () => {
     try {
-      fetchMcpServers()
-      fetchAvailableModels()
+      // Deliberately NOT fetching the MCP/model inventories here. This runs every 10s, and neither
+      // list is health: MCP servers change only when an admin edits them, models only when a file
+      // lands on disk. Both are loaded once per admin session (below) and refreshed on demand when
+      // their modal opens — which is also what kept a version-mismatched backend under a permanent
+      // two-404s-per-tick drumbeat.
       const res = await fetch(API + "/health")
       if (res.ok) {
         const data = await res.json()

@@ -54,6 +54,14 @@ const FAILSAFE_PATH = `${BASE}stt-models/`;
 // `immutable` would let a browser keep executing a cached older .wasm after an upgrade.
 if (env?.backends?.onnx?.wasm) {
   env.backends.onnx.wasm.wasmPaths = `${BASE}ort/${__ORT_VERSION__}/`;
+  // Multi-threaded WASM needs SharedArrayBuffer, which the browser only grants to a
+  // cross-origin-isolated page. Our orchestrator sends COOP/COEP so it qualifies; GitHub Pages
+  // cannot send those headers at all, so the public build never will. Pin threads to 1 there
+  // rather than letting ORT request workers it cannot create — the difference between "works
+  // locally, fails on the public domain".
+  if (!globalThis.crossOriginIsolated) {
+    env.backends.onnx.wasm.numThreads = 1;
+  }
 } else {
   console.error("[STT] env.backends.onnx.wasm missing — ORT will try to fetch its backend from a CDN and the CSP will block it.");
 }
