@@ -344,6 +344,52 @@ button, input, textarea { font-family: inherit; outline: none; }
 .login-btn:hover { background: var(--holo-cyan); color: var(--bg-void); box-shadow: 0 0 20px var(--holo-cyan); }
 .login-error { color: var(--action-red); font-size: 0.75rem; margin-top: 15px; display: none; text-transform: uppercase; letter-spacing: 0.1em; text-shadow: 0 0 5px var(--action-red); }
 
+/* --- Demo runtime affordances (rendered only when /health reports demo_signup) --- */
+/* The suggested demo/demo credentials sit at a lower opacity than typed input so they read as a
+   hint rather than as a filled-in value — they are placeholders, and the field is really empty. */
+.login-input.demo-hint::placeholder { color: rgba(103, 199, 235, 0.45); }
+
+.demo-divider { display: flex; align-items: center; gap: 10px; margin: 14px 0 12px; color: rgba(103, 199, 235, 0.35); font-family: var(--font-data); font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.25em; }
+.demo-divider::before, .demo-divider::after { content: ""; flex: 1; height: 1px; background: rgba(103, 199, 235, 0.18); }
+
+/* Secondary to the primary Initialize button: same shape, quieter fill, so "Try the Demo" is
+   clearly an alternative route in rather than the main credentialed one. */
+.demo-btn { background: transparent; border-color: rgba(103, 199, 235, 0.5); color: rgba(103, 199, 235, 0.85); }
+.demo-btn:hover { background: var(--holo-cyan); color: var(--bg-void); }
+
+.demo-note { margin-top: 14px; font-family: var(--font-data); font-size: 0.68rem; line-height: 1.6; color: rgba(103, 199, 235, 0.5); text-align: center; letter-spacing: 0.02em; }
+.demo-note strong { color: rgba(103, 199, 235, 0.85); font-weight: 700; letter-spacing: 0.08em; }
+
+/* --- Demo session banner --------------------------------------------------- */
+/* Fixed to the top on every screen (chat and admin): a visitor should never be somewhere that
+   doesn't say this is a temporary sandbox. The app gets top padding via .has-demo-banner so the
+   banner never covers the header. */
+.demo-banner {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 9000;
+  display: flex; align-items: center; gap: 12px; padding: 8px 16px;
+  background: rgba(10, 20, 30, 0.97); border-bottom: 1px solid rgba(103, 199, 235, 0.35);
+  font-family: var(--font-data); font-size: 0.72rem; color: rgba(103, 199, 235, 0.75);
+  backdrop-filter: blur(6px);
+}
+.demo-banner-tag { flex: none; padding: 2px 8px; background: rgba(103, 199, 235, 0.15); border: 1px solid rgba(103, 199, 235, 0.5); color: var(--holo-cyan); font-weight: 700; letter-spacing: 0.18em; font-size: 0.62rem; }
+.demo-banner-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.demo-banner-clock { flex: none; font-variant-numeric: tabular-nums; letter-spacing: 0.1em; color: rgba(103, 199, 235, 0.9); }
+.demo-banner-btn { flex: none; padding: 4px 10px; font-size: 0.65rem; }
+
+/* Amber under five minutes — a real interaction slides the expiry, so this is a nudge, not a
+   deadline the visitor can do nothing about. */
+.demo-banner.urgent { border-bottom-color: rgba(249, 115, 22, 0.6); }
+.demo-banner.urgent .demo-banner-clock { color: var(--alert-orange, #f97316); }
+
+.app-container.has-demo-banner { padding-top: 38px; }
+
+@media (max-width: 640px) {
+  /* The explanatory sentence is the first thing to go — the DEMO tag and the countdown carry the
+     meaning, and the End & erase button must stay reachable. */
+  .demo-banner-text { display: none; }
+  .demo-banner { gap: 8px; padding: 7px 10px; }
+}
+
 /* --- Error Toast --- */
 .error-toast { position: fixed; top: 30px; left: 50%; transform: translateX(-50%) translateY(-20px); background: rgba(229, 32, 32, 0.9); border: 1px solid var(--action-red); color: #fff; padding: 12px 30px; font-size: 0.8rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.15em; clip-path: var(--clip-angle-sm); opacity: 0; pointer-events: none; transition: 0.4s; z-index: 10000; box-shadow: 0 0 20px var(--action-red); }
 .error-toast.visible { opacity: 1; transform: translateX(-50%) translateY(0); }
@@ -860,6 +906,10 @@ body { width: 100%; height: 100vh; height: 100dvh; }
   .top-title { font-size: 0.78rem; letter-spacing: 0.08em; white-space: nowrap; }
   .top-speed { display: none; }               /* tok/s readout — desktop nicety */
   .cmd-btn { display: none; }                 /* ⌘K palette hint — keyboard-only concept */
+  /* Reasoning + voice keep their toggles but shed their captions — the emoji carries the
+     state, and two full-width pills would push the title off the bar. */
+  .pill-label { display: none; }
+  .reasoning-pill { margin-left: 4px; padding: 3px 7px; }
 }
 @media (max-width: 480px) {
   .top-model { display: none; }               /* model badge — visible in Admin instead */
@@ -937,6 +987,10 @@ html[data-theme="clean"] .send-btn {
 }
 .reasoning-pill:hover { background: rgba(255, 255, 255, 0.1); border-color: rgba(255, 255, 255, 0.3); }
 .reasoning-pill.active { background: rgba(161, 161, 170, 0.2); border-color: #a1a1aa; font-weight: 600; }
+/* Voice/speaker toggle sits beside the reasoning pill; cyan-on so the two states of the two
+   pills stay distinguishable at a glance. */
+.voice-pill { margin-left: 6px; }
+.voice-pill.active { background: rgba(103, 199, 235, 0.18); border-color: var(--holo-cyan); color: var(--holo-cyan); }
 
 .think-box {
   margin-bottom: 16px; border: 1px solid rgba(59, 130, 246, 0.25);
@@ -1887,3 +1941,124 @@ button.clickable-model:hover {
 .model-card-path { font-size: 0.75rem; color: #71717a; font-family: monospace; margin: 6px 0; word-break: break-all; }
 .model-card-meta { font-size: 0.75rem; color: #a1a1aa; }
 .model-switching-status { font-size: 0.82rem; color: #38bdf8; text-align: center; padding: 8px; background: rgba(56,189,248,.1); border-radius: 6px; }
+
+/* -------------------------------------------------------------------------- */
+/* In-app notifications (Notify.jsx) — replaces alert/confirm/prompt chrome     */
+/* -------------------------------------------------------------------------- */
+
+/* Bottom-right so the stack never fights the due-reminder banner (top-right).
+   The container is click-through; only the toasts themselves take pointer events. */
+.toast-stack {
+  /* Above every other layer (boot overlay and the plus-menu both sit at 10000–10001) —
+     a notification the user can't see is worse than one that covers something. */
+  position: fixed; right: 24px; bottom: 20px; z-index: 10050;
+  display: flex; flex-direction: column; align-items: flex-end; gap: 10px;
+  pointer-events: none;
+}
+.app-toast {
+  pointer-events: auto;
+  display: flex; align-items: flex-start; gap: 10px;
+  min-width: 240px; max-width: min(380px, calc(100vw - 48px));
+  padding: 11px 12px;
+  background: rgba(10, 18, 26, 0.94);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(103, 199, 235, 0.35); border-left-width: 3px;
+  border-radius: 10px;
+  box-shadow: 0 6px 26px rgba(0, 0, 0, 0.55);
+  font-size: 0.8rem; line-height: 1.4; color: #dff3fd;
+  animation: toast-in 0.22s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+@keyframes toast-in { from { opacity: 0; transform: translateY(8px) scale(0.98); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .app-toast { animation: none; } }
+
+.toast-icon { flex-shrink: 0; width: 16px; text-align: center; font-weight: 700; line-height: 1.4; }
+.toast-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
+.toast-title { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.12em; opacity: 0.75; }
+.toast-close {
+  flex-shrink: 0; background: none; border: 0; color: inherit; opacity: 0.5;
+  font-size: 1rem; line-height: 1; padding: 0 2px; cursor: pointer;
+}
+.toast-close:hover { opacity: 1; }
+
+.toast-info    { border-color: rgba(103, 199, 235, 0.5); }
+.toast-info .toast-icon { color: var(--holo-cyan); }
+.toast-success { border-color: rgba(52, 211, 153, 0.6); }
+.toast-success .toast-icon { color: #34d399; }
+.toast-warn    { border-color: rgba(251, 202, 3, 0.6); }
+.toast-warn .toast-icon { color: var(--alert-orange); }
+.toast-error   { border-color: rgba(229, 32, 32, 0.75); }
+.toast-error .toast-icon { color: #ff6b6b; }
+
+.app-dialog-backdrop {
+  position: fixed; inset: 0; z-index: 10060;
+  background: rgba(2, 4, 8, 0.6);
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+}
+.app-dialog {
+  width: min(420px, 100%);
+  background: var(--bg-glass-heavy, rgba(4, 10, 16, 0.85));
+  border: 1px solid rgba(103, 199, 235, 0.35); border-radius: 14px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.65);
+  padding: 20px; color: #dff3fd;
+}
+.app-dialog-title { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.15em; color: var(--holo-cyan); margin-bottom: 10px; }
+.app-dialog-msg { font-size: 0.85rem; line-height: 1.5; overflow-wrap: anywhere; }
+.app-dialog-input { margin-top: 14px; font-size: 0.8rem; padding: 10px; }
+.app-dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+/* .hud-btn stretches to fill its sidebar row; in a dialog the pair should hug its label. */
+.app-dialog-actions .hud-btn { flex: 0 0 auto; padding: 8px 16px; border-radius: 8px; }
+.hud-btn.primary { background: rgba(103, 199, 235, 0.15); }
+.hud-btn.danger { border-color: var(--action-red); color: #ff6b6b; }
+.hud-btn.danger:hover { background: rgba(229, 32, 32, 0.15); box-shadow: inset 0 0 15px rgba(229, 32, 32, 0.3); }
+
+@media (max-width: 768px) {
+  /* Clear of the composer, and full width so long messages stay readable. */
+  .toast-stack { left: 12px; right: 12px; bottom: 96px; align-items: stretch; }
+  .app-toast { max-width: none; }
+}
+
+/* --- Face enrollment (FaceEnroll.jsx) -------------------------------------- */
+/* Everything here is on-device: the video never leaves the browser, so the panel is styled to make
+   the local-only nature obvious rather than looking like an upload form. */
+.face-modal { max-width: 560px; width: min(560px, 94vw); }
+
+.face-consent .jm-desc { margin-bottom: 12px; }
+.face-facts { list-style: none; margin: 0 0 14px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.face-facts li { font-family: var(--font-data); font-size: 0.72rem; line-height: 1.6; color: rgba(103,199,235,0.6); padding-left: 14px; position: relative; }
+.face-facts li::before { content: "▸"; position: absolute; left: 0; color: rgba(103,199,235,0.4); }
+.face-facts strong { color: rgba(103,199,235,0.9); }
+.face-consent-ask { font-family: var(--font-data); font-size: 0.72rem; color: rgba(103,199,235,0.75); margin: 0 0 12px; }
+
+.face-loading { padding: 28px 4px; text-align: center; font-family: var(--font-data); font-size: 0.78rem; color: rgba(103,199,235,0.75); }
+.face-progress { margin-top: 12px; height: 4px; background: rgba(103,199,235,0.12); overflow: hidden; }
+.face-progress > div { height: 100%; background: var(--holo-cyan); transition: width 0.2s; }
+
+/* aspect-ratio is set INLINE from the real frame dimensions (see FaceEnroll.jsx). With the box
+   matching the frame, `contain` neither crops nor letterboxes, so the overlay's percentage
+   coordinates map exactly onto what is displayed. */
+.face-viewport { position: relative; width: 100%; background: #000; overflow: hidden; border: 1px solid rgba(103,199,235,0.25); }
+.face-video { width: 100%; height: 100%; object-fit: contain; transform: scaleX(-1); }   /* mirrored: a selfie view is what people expect */
+/* No transform here. The box is a SIBLING of the video, so the video's flip does not move it —
+   mirroring is done on the left coordinate in JS. A scaleX(-1) here would only flip the box about
+   its own centre and leave it on the wrong side of the frame. */
+.face-box { position: absolute; border: 2px solid var(--holo-cyan); box-shadow: 0 0 12px var(--holo-cyan-glow); pointer-events: none; }
+.face-box-label { position: absolute; top: -20px; left: 0; font-family: var(--font-data); font-size: 0.62rem; letter-spacing: 0.08em; color: var(--holo-cyan); background: rgba(0,0,0,0.7); padding: 1px 6px; white-space: nowrap; }
+.face-saved { color: var(--active-green, #4ade80); }
+
+.face-controls { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.face-controls .hud-input { flex: 1; min-width: 140px; }
+.face-save { width: auto; padding: 8px 16px; font-size: 0.72rem; }
+.face-hint { font-family: var(--font-data); font-size: 0.68rem; color: rgba(103,199,235,0.5); margin: 10px 0 0; line-height: 1.5; }
+
+.face-enrolled { margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(103,199,235,0.15); }
+.face-enrolled-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-family: var(--font-data); font-size: 0.7rem; color: rgba(103,199,235,0.6); flex-wrap: wrap; }
+.hud-btn.danger { border-color: rgba(229,32,32,0.6); color: #ff8a8a; }
+.hud-btn.danger:hover { background: var(--action-red); color: #fff; }
+
+.face-error { margin-top: 12px; padding: 8px 10px; border: 1px solid rgba(229,32,32,0.5); color: #ff8a8a; font-family: var(--font-data); font-size: 0.7rem; }
+
+@media (max-width: 640px) {
+  .face-controls { flex-direction: column; }
+  .face-controls .hud-input, .face-controls .hud-btn, .face-save { width: 100%; }
+}

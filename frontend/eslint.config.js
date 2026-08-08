@@ -12,7 +12,7 @@ export default defineConfig([
   },
   {
     // Injected at build time by vite's `define` (see vite.config.js).
-    files: ['src/whisper-worker.js'],
+    files: ['src/whisper-worker.js', 'src/face-worker.js'],
     languageOptions: { globals: { __ORT_VERSION__: 'readonly' } },
   },
   {

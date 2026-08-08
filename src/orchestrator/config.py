@@ -191,6 +191,11 @@ STATIC_DIR = Path(__file__).parent / "static"
 # Failsafe copy of the in-browser speech-to-text model (official HF is tried first). Populated by
 # src/scripts/download_models.sh; served read-only at /stt-models when present.
 STT_MODELS_DIR = BASE_DIR / "models" / "stt"
+# YuNet + SFace for BROWSER-side face detection/recognition, served read-only at /face-models.
+# Unlike the STT bundle there is no upstream fallback: the OpenCV Zoo serves these through git-LFS
+# without permissive CORS, so a browser cannot fetch them cross-origin — we host or the feature is
+# simply off. Populated (and SHA-256-verified) by src/scripts/download_models.sh.
+FACE_MODELS_DIR = BASE_DIR / "models" / "face"
 INDEX_HTML = REACT_DIST_DIR / "index.html"
 SCHEMA_PATH = BASE_DIR / "config" / "schema.sql"
 ADMIN_MAX_INPUT = 10000

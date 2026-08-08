@@ -69,3 +69,8 @@ frontend/dist/
 
 # Voice-listener API key (mint with manage.py)
 config/voice_listener.key
+
+# Local-only fixture photo for the face-alignment cross-check (see
+# src/scripts/gen_align_fixture.py). Deliberately NOT committed: any suitable portrait
+# works, and the derived JSON fixtures — which ARE committed — are what the tests read.
+frontend/test/fixtures/face_sample.jpg

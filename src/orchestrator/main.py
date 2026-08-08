@@ -48,7 +48,8 @@ from config import (ADMIN_MAX_INPUT, ALLOWED_ORIGINS, APP_VERSION, BASE_DIR, CHR
                     HA_TOKEN_FROM_ENV, HA_URL_FROM_ENV,
                     INDEX_HTML, LLM_URL, PIPER_BIN, PIPER_MODEL,
                     RATE_LIMIT_RPM, REACT_DIST_DIR, REGULAR_MAX_INPUT, REQUIRE_PRESENCE_FOR_CONTROL,
-                    STATIC_DIR, STT_MODELS_DIR, VALID_FACT_CATEGORIES, JARVIS_MODE, logger)
+                    FACE_MODELS_DIR, STATIC_DIR, STT_MODELS_DIR, VALID_FACT_CATEGORIES,
+                    JARVIS_MODE, logger)
 import ha
 import intent_router
 import mcp
@@ -163,6 +164,15 @@ _last_sweep = [0.0]
 _demo_mint_store: Dict[str, List[float]] = defaultdict(list)
 
 
+# Endpoints the UI polls on a timer rather than because the user did something. They must NOT
+# count as activity: the app polls /system every 5s, /arrivals every 15s and /reminders/due every
+# 20s while a tab is open, so treating those as activity would slide a demo session's expiry
+# forever and an ABANDONED OPEN TAB would never be reclaimed — precisely the case the TTL sweeper
+# exists for. test_demo.py pins this, so adding a new poller without listing it here fails the
+# suite rather than silently resurrecting the bug.
+_PASSIVE_PATHS = frozenset({"/system", "/arrivals", "/reminders/due", "/demo/status"})
+
+
 def _touch_demo_session(conn, household_id: int, token_hash: str) -> None:
     """Push a demo household's (and its token's) expiry out to now + TTL. Best-effort: a failed
     refresh only means the session expires earlier, never that it outlives its TTL."""
@@ -266,6 +276,7 @@ async def security_middleware(request: Request, call_next):
                         "/favicon.svg", "/favicon.png", "/favicon.ico", "/ca.crt"]
             or path.endswith("/favicon.svg") or path.endswith("/favicon.png") or path.endswith("/favicon.ico") or path.endswith("/ca.crt")
             or "/static/" in path or "/assets/" in path or "/stt-models/" in path
+            or "/face-models/" in path
             or "/ort/" in path):
         resp = await call_next(request)
         # Vite emits content-hashed bundles under /assets — safe to cache forever.
@@ -282,7 +293,9 @@ async def security_middleware(request: Request, call_next):
         # normal case is a cheap 304 rather than a re-download.
         if "/ort/" in path:
             return _apply_security_headers(resp, "public, max-age=31536000, immutable", csp=False)
-        if "/stt-models/" in path:
+        # Same reasoning as /stt-models: fixed filenames, so `immutable` would be a lie if the
+        # pinned weights were ever re-pinned. Revalidate; StaticFiles' ETag makes that a cheap 304.
+        if "/stt-models/" in path or "/face-models/" in path:
             return _apply_security_headers(resp, "public, no-cache", csp=False)
         return _apply_security_headers(resp)
 
@@ -306,10 +319,11 @@ async def security_middleware(request: Request, call_next):
             request.state.device_id = None     # web session → not a device-scoped principal
             request.state.is_demo = bool(row["is_demo"])
             is_authenticated = True
-            if row["is_demo"]:
-                # Slide the expiry forward on activity, so the TTL measures IDLE time. A visitor
-                # reading a long answer shouldn't have the session vanish underneath them, and the
-                # token's own expiry is moved in step so the two can't disagree.
+            if row["is_demo"] and path not in _PASSIVE_PATHS:
+                # Slide the expiry forward on REAL activity, so the TTL measures idle time. A
+                # visitor reading a long answer shouldn't have the session vanish underneath them.
+                # Background polls are excluded (see _PASSIVE_PATHS) or an open tab would never
+                # expire. The token's expiry moves in step so the two can't disagree.
                 _touch_demo_session(conn, row["household_id"], hash_token(token))
         else:
             # 2. Per-user API key (machine integrations, e.g. the voice listener / device agents).
@@ -713,6 +727,29 @@ def _mint_demo_session(request: Request) -> Dict[str, Any]:
 def demo_session(request: Request):
     """Start a demo session ("Try the demo"). 404 on any runtime that isn't the public demo."""
     return _mint_demo_session(request)
+
+
+@app.get("/demo/status")
+def demo_status(request: Request):
+    """Time left in the caller's demo session, for the countdown banner.
+
+    Listed in _PASSIVE_PATHS: the banner polls this, and if polling counted as activity the
+    countdown would top itself up simply by being watched.
+    """
+    if not getattr(request.state, "is_demo", False):
+        return {"demo": False}
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT expires_at, CAST((julianday(expires_at) - julianday('now')) * 86400 AS INTEGER) "
+            "AS remaining FROM households WHERE id = ?", (_household(request),)).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return {"demo": False}
+    return {"demo": True, "expires_at": row["expires_at"],
+            "seconds_remaining": max(0, row["remaining"] or 0),
+            "ttl_minutes": DEMO_TTL_MINUTES}
 
 
 @app.post("/auth/logout")
@@ -3073,6 +3110,10 @@ if STATIC_DIR.exists():
 # skipped rather than erroring, and the worker simply has no fallback if the official source fails.
 if STT_MODELS_DIR.exists():
     app.mount("/stt-models", StaticFiles(directory=str(STT_MODELS_DIR)), name="stt-models")
+# Face models, same posture as the STT bundle: public, SHA-256-pinned upstream weights — no secret
+# — and the Web Worker that fetches them cannot attach a Bearer token.
+if FACE_MODELS_DIR.exists():
+    app.mount("/face-models", StaticFiles(directory=str(FACE_MODELS_DIR)), name="face-models")
 # ONNX Runtime WASM backend, vendored into the SPA build by frontend/scripts/copy-ort.mjs.
 # Served from our own origin so the runtime never reaches for a CDN (see whisper-worker.js).
 _ORT_DIR = REACT_DIST_DIR / "ort"

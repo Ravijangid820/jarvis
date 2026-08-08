@@ -292,3 +292,47 @@ def test_demo_login_is_still_rate_limited(client):
     for _ in range(12):
         client.post("/auth/login", json={"username": "demo", "password": "demo"})
     assert client.post("/auth/login", json={"username": "demo", "password": "demo"}).status_code == 429
+
+
+# --- the idle TTL must actually measure IDLE ---------------------------------------------------
+
+def test_background_polling_does_not_extend_the_session(client):
+    """The UI polls /system (5s), /arrivals (15s) and /reminders/due (20s) while a tab is open.
+    If those counted as activity, an ABANDONED OPEN TAB would never expire and the sweeper would
+    never reclaim it — so they must not slide the expiry."""
+    body, h = _mint(client)
+    hh = _household_of(body["username"])
+    _c = sqlite3.connect(_DB)
+    _c.execute("UPDATE households SET expires_at = datetime('now', '+3 minutes') WHERE id = ?", (hh,))
+    _c.commit()
+    _c.close()
+    before = _q("SELECT expires_at FROM households WHERE id = ?", (hh,))[0]["expires_at"]
+
+    for path in ("/system", "/arrivals", "/reminders/due", "/demo/status"):
+        client.get(path, headers=h)
+
+    after = _q("SELECT expires_at FROM households WHERE id = ?", (hh,))[0]["expires_at"]
+    assert after == before, f"a polled endpoint slid the demo expiry ({before} -> {after})"
+
+
+def test_real_activity_still_extends_the_session(client):
+    """The other half: a deliberate action must keep the session alive."""
+    body, h = _mint(client)
+    hh = _household_of(body["username"])
+    _c = sqlite3.connect(_DB)
+    _c.execute("UPDATE households SET expires_at = datetime('now', '+3 minutes') WHERE id = ?", (hh,))
+    _c.commit()
+    _c.close()
+    before = _q("SELECT expires_at FROM households WHERE id = ?", (hh,))[0]["expires_at"]
+
+    client.get("/sessions", headers=h)          # a real interaction, not a poll
+
+    after = _q("SELECT expires_at FROM households WHERE id = ?", (hh,))[0]["expires_at"]
+    assert after > before
+
+
+def test_demo_status_reports_time_remaining(client):
+    body, h = _mint(client)
+    st = client.get("/demo/status", headers=h).json()
+    assert st["demo"] is True
+    assert 0 < st["seconds_remaining"] <= 60 * 60

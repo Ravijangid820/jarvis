@@ -117,4 +117,41 @@ else
   else warn "GGUF download failed from $LLM_GGUF_URL"; fi
 fi
 
+# 5) Browser-side FACE models (YuNet detector + SFace recognizer) — served at /face-models so the
+#    web UI can enroll and recognise faces in the browser, with imagery never leaving the device.
+#    These are the SAME two files (and the same pinned hashes) the camera agent uses, from the
+#    OFFICIAL OpenCV Zoo — identical weights on both sides is what makes a face enrolled in a
+#    browser comparable with one enrolled by a Pi. Unlike the STT model there is no upstream CDN
+#    fallback: the Zoo serves these via git-LFS without permissive CORS, so a browser cannot fetch
+#    them cross-origin. We must host them. Skip with SKIP_FACE_MODELS=1 (saves ~38 MB).
+FACE_DIR="$REPO/models/face"
+FACE_ZOO="${FACE_ZOO:-https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models}"
+if [ "${SKIP_FACE_MODELS:-0}" = "1" ]; then
+  warn "SKIP_FACE_MODELS=1 — browser face enrollment/recognition will be unavailable"
+else
+  cyan "Browser face models: YuNet + SFace (~38 MB)"
+  mkdir -p "$FACE_DIR"
+  fetch_face() {  # $1=dest name  $2=zoo subpath  $3=sha256
+    f="$FACE_DIR/$1"
+    if [ -f "$f" ] && echo "$3  $f" | sha256sum -c - >/dev/null 2>&1; then return 0; fi
+    curl -L --fail --retry 5 --retry-all-errors --retry-delay 5 -C - -o "$f" "$FACE_ZOO/$2" || return 1
+    echo "$3  $f" | sha256sum -c - >/dev/null 2>&1 || { warn "$1 SHA-256 MISMATCH — deleting"; rm -f "$f"; return 1; }
+  }
+  # A local copy already exists under camera/models on a machine that ran the camera setup —
+  # hard-link/copy it rather than re-downloading 38 MB.
+  for m in face_detection_yunet_2023mar.onnx face_recognition_sface_2021dec.onnx; do
+    [ -f "$FACE_DIR/$m" ] || { [ -f "$REPO/camera/models/$m" ] && cp "$REPO/camera/models/$m" "$FACE_DIR/$m"; }
+  done
+  if fetch_face face_detection_yunet_2023mar.onnx \
+       face_detection_yunet/face_detection_yunet_2023mar.onnx \
+       8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4 \
+  && fetch_face face_recognition_sface_2021dec.onnx \
+       face_recognition_sface/face_recognition_sface_2021dec.onnx \
+       0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79; then
+    ok "face models present + verified ($FACE_DIR)"
+  else
+    warn "face models incomplete — browser face features stay off until they download (re-run this script)"
+  fi
+fi
+
 cyan "Model setup pass complete (review any ! warnings above)."

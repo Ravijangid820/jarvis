@@ -1,6 +1,11 @@
 import { useState, useEffect, useRef, useId, useMemo, memo } from 'react'
 import './index.css'
 import Admin from './Admin'
+import { lazy, Suspense } from 'react'
+// Lazy: this panel pulls in onnxruntime-web and the face worker. Keeping it out of the main
+// bundle means visitors who never open it never download any of it.
+const FaceEnroll = lazy(() => import('./FaceEnroll'))
+import { notifyError, notifyOk, confirmDialog, promptDialog } from './notify.js'
 
 const API = import.meta.env.VITE_API_URL || ""
 const BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "")
@@ -352,6 +357,16 @@ function App() {
   const [isOnline, setIsOnline] = useState(false)
   const [modelName, setModelName] = useState("—")
   const [appMode, setAppMode] = useState("production")
+  // Whether THIS backend is the public demo runtime. Comes from /health (unauthenticated,
+  // so it is available on the login screen). A lab/production container reports false and
+  // no demo affordance is rendered at all — the credential hints included.
+  const [demoSignup, setDemoSignup] = useState(false)
+  const [demoTtl, setDemoTtl] = useState(null)
+  // Whether the CURRENT session is a demo sandbox, and its remaining seconds. Seeded from
+  // localStorage so the banner renders immediately on a refresh, then corrected by the server.
+  const [isDemoSession, setIsDemoSession] = useState(() => localStorage.getItem("jarvis_demo") === "1")
+  const [demoSecondsLeft, setDemoSecondsLeft] = useState(null)
+  const [faceOpen, setFaceOpen] = useState(false)
   const [uplink, setUplink] = useState("N/A")
   const [nCtx, setNCtx] = useState(4096)
   const [allTurnsUsage, setAllTurnsUsage] = useState({ prompt: 0, cached: 0, generated: 0 })
@@ -780,6 +795,28 @@ function App() {
     return () => clearInterval(id)
   }, [token, sound])   // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Demo countdown. Ticks locally every second (cheap, smooth) and re-syncs with the server every
+  // 60s, because the real expiry slides forward whenever the visitor actually does something —
+  // a purely local countdown would drift steadily wrong. /demo/status is a PASSIVE endpoint
+  // server-side, so this poll doesn't itself keep the session alive.
+  useEffect(() => {
+    if (!token || !isDemoSession) return
+    let alive = true
+    const sync = async () => {
+      try {
+        const res = await fetch(API + "/demo/status", { headers: { Authorization: "Bearer " + token } })
+        if (!res.ok || !alive) return
+        const data = await res.json()
+        if (data.demo) setDemoSecondsLeft(data.seconds_remaining)
+        else { setIsDemoSession(false); localStorage.removeItem("jarvis_demo") }
+      } catch { /* offline — keep counting down locally */ }
+    }
+    sync()
+    const syncId = setInterval(sync, 60000)
+    const tickId = setInterval(() => setDemoSecondsLeft(v => (v === null ? v : Math.max(0, v - 1))), 1000)
+    return () => { alive = false; clearInterval(syncId); clearInterval(tickId) }
+  }, [token, isDemoSession])
+
   // Boot progress counter, synced to the ~2.1s boot bar.
   useEffect(() => {
     if (!booting) return
@@ -946,6 +983,8 @@ function App() {
         setModelName(data.model || "active")
         if (data.n_ctx) setNCtx(data.n_ctx)
         if (data.mode) setAppMode(data.mode)
+        setDemoSignup(!!data.demo_signup)
+        setDemoTtl(data.demo_ttl_minutes || null)
         setUplink("Stable")
       } else {
         setIsOnline(false)
@@ -958,6 +997,32 @@ function App() {
   }
 
   // --- Auth ---
+  /** Start a demo session: mints an isolated, expiring sandbox on the server and stores its token
+   *  exactly like a normal login, so refreshing the page keeps the session. */
+  const startDemo = async () => {
+    try {
+      setLoginError("")
+      setLoginStatus("Starting demo...")
+      const res = await fetch(API + "/demo/session", { method: "POST" })
+      if (res.status === 429) throw new Error("Too many demo sessions from here — try again later.")
+      if (!res.ok) throw new Error("Demo is not available right now.")
+      const data = await res.json()
+      localStorage.setItem("jarvis_token", data.token)
+      localStorage.setItem("jarvis_role", data.role)
+      localStorage.setItem("jarvis_user", data.username)
+      localStorage.setItem("jarvis_demo", "1")
+      setIsDemoSession(true)
+      setToken(data.token)
+      setRole(data.role)
+      setUsername("")
+      setPassword("")
+    } catch (e) {
+      setLoginError(e.message)
+    } finally {
+      setLoginStatus("Initialize")
+    }
+  }
+
   const doLogin = async () => {
     if (!username || !password) return
     try {
@@ -974,7 +1039,10 @@ function App() {
       localStorage.setItem("jarvis_role", data.role)
       setToken(data.token)
       setRole(data.role)
-      localStorage.setItem("jarvis_user", username.trim())
+      localStorage.setItem("jarvis_user", data.demo ? data.username : username.trim())
+      if (data.demo) localStorage.setItem("jarvis_demo", "1")
+      else localStorage.removeItem("jarvis_demo")
+      setIsDemoSession(!!data.demo)
       if (sound) { greetSpokenRef.current = true; speak(jarvisGreeting(username.trim()), data.token) }
       setUsername("")
       setPassword("")
@@ -1007,6 +1075,9 @@ function App() {
     localStorage.removeItem("jarvis_token")
     localStorage.removeItem("jarvis_role")
     localStorage.removeItem("jarvis_user")
+    localStorage.removeItem("jarvis_demo")
+    setIsDemoSession(false)
+    setDemoSecondsLeft(null)
     setToken(null)
     setSessions([])
     setMessages([])
@@ -1059,10 +1130,12 @@ function App() {
     } catch { /* ignore */ }
   }
 
-  const renameSession = async (e, sid) => {
+  const renameSession = async (e, sid, current = "") => {
     e.stopPropagation()
-    const newName = prompt("Enter new name:")
-    if (!newName) return
+    const entered = await promptDialog("Enter a new name for this session.", current,
+      { title: "Rename session", confirmLabel: "Rename", placeholder: "Session name" })
+    const newName = entered?.trim()
+    if (!newName || newName === current) return
     try {
       await fetch(API + "/sessions/" + sid, {
         method: "PUT",
@@ -1071,17 +1144,19 @@ function App() {
       })
       if (sid === currentSessionId) setCurrentTitle(newName)
       loadSessions()
-    } catch { /* ignore */ }
+    } catch { notifyError("Could not rename the session.") }
   }
 
   const deleteSession = async (e, sid) => {
     e.stopPropagation()
-    if (!confirm("Delete this session?")) return
+    const ok = await confirmDialog("This session and its messages will be deleted permanently.",
+      { title: "Delete session", confirmLabel: "Delete", danger: true })
+    if (!ok) return
     try {
       await fetch(API + "/sessions/" + sid, { method: "DELETE", headers: { "Authorization": "Bearer " + token } })
       if (sid === currentSessionId) loadHistory("default")
       loadSessions()
-    } catch { /* ignore */ }
+    } catch { notifyError("Could not delete the session.") }
   }
 
   const handleMessageAction = async (action, idx, newText) => {
@@ -1493,9 +1568,28 @@ function App() {
             }} />
             <span>{isOnline ? "Backend Container Online" : "Backend Standby / Offline"}</span>
           </div>
-          <input className="login-input" value={username} onChange={e=>setUsername(e.target.value)} placeholder="Identifier" />
-          <input className="login-input" type="password" value={password} onChange={e=>setPassword(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')doLogin()}} placeholder="Access Code" />
+          {/* Credential hints are shown ONLY on the public demo runtime. On the lab/production
+              container demoSignup is false and these placeholders stay generic, so nothing on
+              screen suggests a shared login exists. */}
+          <input className={`login-input${demoSignup ? " demo-hint" : ""}`} value={username}
+                 onChange={e=>setUsername(e.target.value)}
+                 placeholder={demoSignup ? "demo" : "Identifier"} />
+          <input className={`login-input${demoSignup ? " demo-hint" : ""}`} type="password" value={password}
+                 onChange={e=>setPassword(e.target.value)}
+                 onKeyDown={e=>{if(e.key==='Enter')doLogin()}}
+                 placeholder={demoSignup ? "demo" : "Access Code"} />
           <button className="login-btn" onClick={doLogin}>{loginStatus}</button>
+          {demoSignup && (
+            <>
+              <div className="demo-divider"><span>or</span></div>
+              <button className="login-btn demo-btn" onClick={startDemo}>Try the Demo</button>
+              <div className="demo-note">
+                Sign in with <strong>demo</strong> / <strong>demo</strong>, or start a session above.
+                You get your own private sandbox{demoTtl ? ` for ${demoTtl} minutes` : ""} — it is
+                erased when you log out. Smart-home control is not part of the demo.
+              </div>
+            </>
+          )}
           <button className="hud-btn" style={{ width: "100%", marginTop: "8px", padding: "8px", fontSize: "0.8rem", letterSpacing: "1px", opacity: 0.85 }} onClick={() => {
             localStorage.setItem("jarvis_token", "offline-demo-token")
             localStorage.setItem("jarvis_role", "admin")
@@ -1513,10 +1607,45 @@ function App() {
 
   // Admin console lives at /admin within the SPA (so it inherits HUD styling + theme).
   const isAppAdminPath = window.location.pathname.endsWith("/admin") || window.location.pathname.endsWith("/admin/")
+  /** Persistent banner for a demo sandbox: what this is, how long is left, and a one-click way to
+   *  erase it. Rendered on both the chat view and the admin console — the visitor should never be
+   *  in a screen that doesn't say "this is a temporary sandbox". Returns null for real accounts. */
+  const renderDemoBanner = () => {
+    if (!isDemoSession) return null
+    const s = demoSecondsLeft
+    const mm = s === null ? null : String(Math.floor(s / 60)).padStart(2, "0")
+    const ss = s === null ? null : String(s % 60).padStart(2, "0")
+    // Under five minutes the countdown turns amber — enough warning to finish a thought or, since
+    // any real interaction slides the expiry, simply to carry on and keep the session alive.
+    const urgent = s !== null && s <= 300
+    return (
+      <div className={`demo-banner ${urgent ? "urgent" : ""}`}>
+        <span className="demo-banner-tag">DEMO</span>
+        <span className="demo-banner-text">
+          Temporary sandbox — your own private copy. Nothing here is real data.
+        </span>
+        {s !== null && (
+          <span className="demo-banner-clock" title="Resets after this much inactivity">
+            {s <= 0 ? "expired" : `${mm}:${ss}`}
+          </span>
+        )}
+        <button className="hud-btn demo-banner-btn" onClick={doLogout}
+                title="Ends the session and erases everything in it">
+          End &amp; erase
+        </button>
+      </div>
+    )
+  }
+
   if (isAppAdminPath) {
     const homeUrl = BASE ? `${BASE}/` : "/"
     if (role !== "admin") { window.location.href = homeUrl; return null }
-    return <Admin token={token} onExit={() => { window.location.href = homeUrl }} apiBase={API} />
+    return (
+      <>
+        {renderDemoBanner()}
+        <Admin token={token} onExit={() => { window.location.href = homeUrl }} apiBase={API} />
+      </>
+    )
   }
 
   const renderPlusMenu = () => {
@@ -1535,6 +1664,11 @@ function App() {
           {menuItem("system", "▭", "System Message", () => setPlusPanel("system"))}
           {menuItem("tools", "🛠", "Tools", () => setPlusPanel("tools"))}
           {menuItem("mcp", "📎", "MCP Servers", () => setPlusPanel("mcp"))}
+          {/* Admin-only because /faces/enroll is: a face can drive device authorization, so
+              enrolment is privileged. A demo visitor is an admin of their own household, so the
+              demo still gets the full flow — a regular member of a real household would only have
+              hit a 403 on save. */}
+          {role === "admin" && menuItem(null, "🙂", "Face ID", () => { setFaceOpen(true); closePlusMenu() })}
         </div>
         {plusPanel === "reasoning" && <div className="lpm-submenu">
           <div className="lpm-subhead">Reasoning</div>
@@ -1657,9 +1791,9 @@ function App() {
                 fetchMcpServers();
               } else {
                 const d = await res.json();
-                alert(d.detail || "Failed to add server");
+                notifyError(d.detail || "Failed to add server");
               }
-            } catch { alert("Error adding MCP server"); }
+            } catch { notifyError("Error adding MCP server"); }
           }}>
             <h4>Add New Endpoint</h4>
             <div className="mcp-form-inputs">
@@ -1700,12 +1834,12 @@ function App() {
                       const d = await res.json();
                       fetchAvailableModels();
                       checkHealth();
-                      alert(d.message || "Model selection saved.");
+                      notifyOk(d.message || "Model selection saved.", { title: "Model switcher" });
                     } else {
                       const d = await res.json();
-                      alert(d.detail || "Failed to switch model");
+                      notifyError(d.detail || "Failed to switch model");
                     }
-                  } catch { alert("Error switching model"); }
+                  } catch { notifyError("Error switching model"); }
                   finally { setSwitchingModel(false); }
                 }}>
                   <div className="model-card-top">
@@ -1804,7 +1938,13 @@ function App() {
   }
 
   return (
-    <div className={`app-container ${processing ? 'thinking' : ''} ${sidebarCollapsed ? 'sidebar-collapsed' : 'sidebar-expanded'} ${sidebarOpen ? 'mobile-sidebar-open' : ''}`}>
+    <div className={`app-container ${processing ? 'thinking' : ''} ${sidebarCollapsed ? 'sidebar-collapsed' : 'sidebar-expanded'} ${sidebarOpen ? 'mobile-sidebar-open' : ''} ${isDemoSession ? 'has-demo-banner' : ''}`}>
+      {renderDemoBanner()}
+      {faceOpen && (
+        <Suspense fallback={null}>
+          <FaceEnroll token={token} apiBase={API} onClose={() => setFaceOpen(false)} />
+        </Suspense>
+      )}
       {dueReminders.length > 0 && (
         <div style={{ position: "fixed", top: 12, right: 12, zIndex: 1000, display: "flex", flexDirection: "column", gap: 8, maxWidth: 360 }}>
           {dueReminders.map(r => (
@@ -2016,7 +2156,7 @@ function App() {
               <div key={s.id} className={`history-item ${s.id === currentSessionId ? 'active' : ''}`} onClick={() => loadHistory(s.id)}>
                 <span className="history-item-title">{s.title}</span>
                 <div className="history-actions">
-                  <button className="hist-btn" onClick={(e) => renameSession(e, s.id)}>[R]</button>
+                  <button className="hist-btn" onClick={(e) => renameSession(e, s.id, s.title)}>[R]</button>
                   <button className="hist-btn" onClick={(e) => deleteSession(e, s.id)}>[D]</button>
                 </div>
               </div>
@@ -2066,7 +2206,11 @@ function App() {
             </span>
           )}
           <button className={`reasoning-pill ${reasoning ? 'active' : ''}`} onClick={() => setReasoning(r => !r)} title="Toggle Deep Reasoning (<think> mode)">
-            🧠 {reasoning ? 'Reasoning ON' : 'Reasoning OFF'}
+            🧠 <span className="pill-label">{reasoning ? 'Reasoning ON' : 'Reasoning OFF'}</span>
+          </button>
+          <button className={`reasoning-pill voice-pill ${sound ? 'active' : ''}`} onClick={() => setSound(s => !s)}
+            aria-pressed={sound} title="Toggle JARVIS voice (spoken replies, greeting, and reminder announcements)">
+            {sound ? '🔊' : '🔇'} <span className="pill-label">{sound ? 'Voice ON' : 'Voice OFF'}</span>
           </button>
           <span className="top-speed">{speed}</span>
           <div className="top-spacer"></div>
