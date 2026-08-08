@@ -202,3 +202,33 @@ JARVIS_MODE: str = (os.environ.get("JARVIS_MODE") or CONFIG.get("mode") or "prod
 if JARVIS_MODE not in ("production", "development", "demo"):
     logger.warning("Unknown JARVIS_MODE '%s', defaulting to 'production'", JARVIS_MODE)
     JARVIS_MODE = "production"
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name) or default)
+    except (TypeError, ValueError):
+        logger.warning("%s is not an integer; using %d", name, default)
+        return default
+
+
+# --- Public demo -------------------------------------------------------------
+# Independent of JARVIS_MODE: demo households can be offered by a normal production instance
+# alongside the real one, because they are isolated by the household boundary rather than by a
+# process-wide mode. DEMO_PUBLIC_SIGNUP is the master switch — off by default, so no deployment
+# starts handing out accounts by upgrading.
+DEMO_PUBLIC_SIGNUP: bool = (os.environ.get("DEMO_PUBLIC_SIGNUP", "") or "").strip().lower() in ("1", "true", "yes")
+
+# How long a demo household lives from its LAST activity. Refreshing the page must not lose the
+# session, so the token outlives a reload; an abandoned tab is reclaimed by this instead.
+DEMO_TTL_MINUTES: int = _env_int("DEMO_TTL_MINUTES", 60)
+
+# Per-IP cap on how many demo households one client may mint per hour. Not a throughput control —
+# it stops a script from growing the households/users tables without bound.
+DEMO_MINT_PER_IP_HOURLY: int = _env_int("DEMO_MINT_PER_IP_HOURLY", 10)
+
+# Demo accounts get ids from their own high range so a purged demo id is never recycled into a
+# real account. _lowest_free_user_id checks SQLite for residue but cannot see ChromaDB, so a
+# recycled id whose vector delete had failed would serve the previous holder's RAG memories to
+# whoever got the id next. Separating the ranges removes that class of bug entirely.
+DEMO_USER_ID_BASE: int = 100_000

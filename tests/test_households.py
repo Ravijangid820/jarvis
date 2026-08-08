@@ -43,9 +43,12 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 _DB = config.DB_PATH
 
-# Household 1 is the primary ("Home") — the one that owns the smart home. Household 2 stands in
-# for a demo visitor's household: same structure, no smart home, and it must see none of A's data.
-HH_A, HH_B = 1, 2
+# Household 1 is the primary ("Home") — the one that owns the smart home. Household B stands in for
+# a demo visitor's: same structure, no smart home, and it must see none of A's data. B's id is
+# allocated at fixture time rather than hardcoded, because other test modules mint households into
+# the same database and a fixed id would silently land on one of theirs.
+HH_A = 1
+HH_B = None       # set by the client fixture
 
 # Distinctive values: if any of these strings reaches the other household, the test names the leak.
 A_SECRET_FACT = "The house key is under the third flowerpot at 12 Aster Lane"
@@ -63,14 +66,22 @@ def _sql(*statements):
 
 @pytest.fixture(scope="module")
 def client():
+    global HH_B
     with TestClient(main.app) as c:      # lifespan → init_db on the temp DB
         conn = sqlite3.connect(_DB)
+        conn.row_factory = sqlite3.Row
+        # Clear every household-scoped row so assertions about what A and B can see aren't
+        # confounded by whatever earlier test modules left in the shared database.
         conn.execute("DELETE FROM users")
+        for t in ("global_knowledge", "persons", "vision_events", "enroll_requests",
+                  "device_heartbeats", "audit_log", "household_settings"):
+            conn.execute(f"DELETE FROM {t}")
+        conn.execute("DELETE FROM households WHERE id != ?", (HH_A,))
         conn.execute("INSERT INTO households (id, name, is_demo) VALUES (?, 'Home', 0) "
                      "ON CONFLICT(id) DO NOTHING", (HH_A,))
-        conn.execute("INSERT INTO households (id, name, is_demo, expires_at) "
-                     "VALUES (?, 'Demo', 1, datetime('now','+1 hour')) "
-                     "ON CONFLICT(id) DO NOTHING", (HH_B,))
+        HH_B = conn.execute(
+            "INSERT INTO households (name, is_demo, expires_at) "
+            "VALUES ('Demo', 1, datetime('now','+1 hour')) RETURNING id").fetchone()["id"]
         for name, role, hh in (("alice", "admin", HH_A), ("bob", "admin", HH_B)):
             conn.execute(
                 "INSERT INTO users (username, password_hash, role, household_id) VALUES (?, ?, ?, ?)",
@@ -136,10 +147,7 @@ def test_faces_are_not_shared(client, a, b):
 
 
 def test_vision_events_are_not_shared(client, a, b):
-    # Household A's own count isn't pinned: earlier test modules post events into household 1 too.
-    # The invariant under test is that NONE of them reach household B.
-    a_devices = [e["device_id"] for e in client.get("/admin/events", headers=a).json()["events"]]
-    assert "pi-a" in a_devices
+    assert client.get("/admin/events", headers=a).json()["count"] == 1
     assert client.get("/admin/events", headers=b).json()["count"] == 0
 
 
@@ -175,8 +183,8 @@ def test_stats_do_not_count_other_households(client, a, b):
 def test_enroll_requests_are_not_shared(client, a, b):
     a_reqs = client.get("/admin/faces/enroll-requests", headers=a).json()["requests"]
     b_reqs = client.get("/admin/faces/enroll-requests", headers=b).json()["requests"]
-    assert A_PERSON in [r["name"] for r in a_reqs]
-    assert b_reqs == []          # B must see none of A's, whatever else A accumulated
+    assert len(a_reqs) == 1 and a_reqs[0]["name"] == A_PERSON
+    assert b_reqs == []
 
 
 def test_camera_roster_is_not_shared(client, a, b):
@@ -262,7 +270,7 @@ def test_smart_home_entities_cannot_be_listed_by_a_non_owner(client, b):
     assert client.get("/admin/home-assistant/entities", headers=b).status_code == 403
 
 
-def test_home_tools_are_not_offered_to_a_household_without_a_smart_home(monkeypatch):
+def test_home_tools_are_not_offered_to_a_household_without_a_smart_home(client, monkeypatch):
     """The model is never given the vocabulary — a demo session cannot emit home_control at all."""
     import ha
     monkeypatch.setattr(ha, "HA_URL", "http://ha.test:8123")

@@ -1,6 +1,6 @@
 # Public Demo — design plan
 
-**Status:** Phase 1 landed (households + scoping + isolation tests) · **Date:** 2026-08-08
+**Status:** Phases 1–2 landed (households + scoping + demo lifecycle) · **Date:** 2026-08-08
 
 Goal: let anyone at `https://ravi-mk42.me/jarvis/` try chat, RAG, the admin panel and face
 recognition, without any path from a visitor to a real user's data, and without smart-home
@@ -163,9 +163,9 @@ matching the existing on-edge design.
 | Phase | Deliverable | Gate | Status |
 |---|---|---|---|
 | **0/1** | `households` table + `household_id` scoping + isolation tests | full suite green | **done** |
-| **2** | Demo lifecycle: mint, purge-on-logout, TTL sweeper | reset matrix (§2) covered by tests | next |
-| **3** | Seed content so panels look alive | manual review of each panel | |
-| **4** | Browser webcam enrollment (YuNet + SFace via onnxruntime-web) | consent flow + purge test | |
+| **2** | Demo lifecycle: mint, purge-on-logout, TTL sweeper | reset matrix (§2) covered by tests | **done** |
+| **3** | Seed content so panels look alive | manual review of each panel | **done** (backend) |
+| **4** | Browser webcam enrollment (YuNet + SFace via onnxruntime-web) | consent flow + purge test | next |
 
 Phases 0/1 merged in practice: leaks 1 and 2 in §4 are *fixed by* the household scoping rather
 than being separable from it. What landed:
@@ -189,6 +189,27 @@ than being separable from it. What landed:
 Still open from this phase: `ha.py` keeps ONE live connection in module globals, so the
 deployment supports one smart home owned by one household (§1). Several *different* real smart
 homes needs ha.py made stateless and the router's exemplar cache keyed by household.
+
+**Phase 2/3** (`tests/test_demo.py`, 15 tests):
+
+- `POST /demo/session` mints an isolated household + its admin, seeded with fictional knowledge
+  and people so the panels aren't empty. Gated behind `DEMO_PUBLIC_SIGNUP` (**off by default** —
+  no deployment starts handing out accounts by upgrading).
+- Logout purges the whole household; the TTL sweeper (60 s tick) reclaims abandoned tabs; the
+  expiry slides forward on activity, so the TTL measures *idle* time.
+- Face embeddings are **destroyed** with a demo household, not unlinked the way `_purge_user`
+  treats a departing member of a continuing home — it's biometric data from a member of the
+  public.
+- Vectors are dropped both by message id and by a `user_id` metadata sweep, so an embedding still
+  in the worker queue at purge time can't outlive the session.
+- Demo user ids come from `DEMO_USER_ID_BASE` (100 000+) so a purged demo id is never recycled
+  into a real account — closing the ChromaDB-residue path noted in §2.
+
+Verified end-to-end against a running server: a visitor sees only seeded fiction, the real
+household's private facts do not appear, HA writes 403, a refresh keeps the session, logout
+zeroes every table, and the sweeper reclaimed a force-expired household in ~33 s while
+household 1 was untouched. Both the sweeper's `is_demo` guard and the logout purge were checked
+by sabotage — remove either and the suite goes red.
 
 Throughput is explicitly **not** a gate on this work: the box is slow and known to be slow, and
 if demo traffic makes it too slow that's a signal to act on then, not a constraint to design

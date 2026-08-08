@@ -205,6 +205,23 @@ def delete_vectors(ids: List[str]):
         logger.error("ChromaDB cleanup error: %s", e)
 
 
+def delete_vectors_for_users(user_ids: List[int]) -> None:
+    """Remove every vector belonging to these users, by metadata rather than by id.
+
+    delete_vectors(ids) is precise but only covers rows that still existed when the id list was
+    taken; an embedding still sitting in the worker queue lands in Chroma *after* the purge and
+    would survive it. This sweeps by user_id so a purged account leaves nothing recallable — which
+    is what makes a demo reset actually a reset, and what stops a recycled id from serving the
+    previous holder's memories.
+    """
+    if not (memory_collection and user_ids):
+        return
+    try:
+        memory_collection.delete(where={"user_id": {"$in": [int(u) for u in user_ids]}})
+    except Exception as e:
+        logger.error("ChromaDB per-user cleanup error: %s", e)
+
+
 # --- Request-activity / in-flight tracking ----------------------------------
 # The fact-extraction worker shares the single LLM slot and 2 CPU cores, so it must
 # NOT run while a (possibly multi-minute) generation is active. Idle time alone isn't

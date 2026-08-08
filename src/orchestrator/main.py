@@ -42,7 +42,9 @@ import memory
 from auth import hash_password, hash_token, verify_password
 from intents import HOME_CONTROL_VERB, is_gesture_volume, parse_home_command, parse_reminder, parse_volume
 from config import (ADMIN_MAX_INPUT, ALLOWED_ORIGINS, APP_VERSION, BASE_DIR, CHROMA_DB_PATH,
-                    COMPLETION_RESERVE_DEFAULT, CONFIG, HA_TOKEN_FROM_ENV, HA_URL_FROM_ENV,
+                    COMPLETION_RESERVE_DEFAULT, CONFIG, DEMO_MINT_PER_IP_HOURLY,
+                    DEMO_PUBLIC_SIGNUP, DEMO_TTL_MINUTES, DEMO_USER_ID_BASE,
+                    HA_TOKEN_FROM_ENV, HA_URL_FROM_ENV,
                     INDEX_HTML, LLM_URL, PIPER_BIN, PIPER_MODEL,
                     RATE_LIMIT_RPM, REACT_DIST_DIR, REGULAR_MAX_INPUT, REQUIRE_PRESENCE_FOR_CONTROL,
                     STATIC_DIR, STT_MODELS_DIR, VALID_FACT_CATEGORIES, JARVIS_MODE, logger)
@@ -102,6 +104,13 @@ async def lifespan(app: FastAPI):
     _rebuild_intent_router()   # semantic device-intent index (needs both of the above)
     memory.start_embedding_worker()
     memory.start_memory_worker()
+    if DEMO_PUBLIC_SIGNUP:
+        # Purge anything left over from a previous run before serving: a crash mid-session must not
+        # leave a demo visitor's data sitting in the database until the first sweep.
+        _sweep_expired_demo_households()
+        threading.Thread(target=_demo_sweeper_loop, daemon=True).start()
+        logger.info("Public demo signup ENABLED (TTL %d min, %d mints/hour/IP)",
+                    DEMO_TTL_MINUTES, DEMO_MINT_PER_IP_HOURLY)
     logger.info("Jarvis Orchestrator started with Auth + Memory Core")
     yield
     memory.embed_queue.put(None)  # signal the embedding worker to drain and exit
@@ -148,19 +157,38 @@ LOGIN_MAX_PER_MIN = 8
 _last_sweep = [0.0]
 
 
+# Demo-session minting, keyed on client IP over an HOUR (not a minute) — see _client_ip for why
+# this is a bound on table growth rather than a security control.
+_demo_mint_store: Dict[str, List[float]] = defaultdict(list)
+
+
+def _touch_demo_session(conn, household_id: int, token_hash: str) -> None:
+    """Push a demo household's (and its token's) expiry out to now + TTL. Best-effort: a failed
+    refresh only means the session expires earlier, never that it outlives its TTL."""
+    try:
+        window = f"+{int(DEMO_TTL_MINUTES)} minutes"
+        conn.execute("UPDATE households SET expires_at = datetime('now', ?) WHERE id = ?",
+                     (window, household_id))
+        conn.execute("UPDATE auth_sessions SET expires_at = datetime('now', ?) WHERE token = ?",
+                     (window, token_hash))
+        conn.commit()
+    except Exception as e:
+        logger.debug("demo session touch failed for household %s: %s", household_id, e)
+
+
 def _sweep_rate_stores(now: float) -> None:
     """Drop fully-expired buckets so the dicts don't grow unbounded with distinct keys."""
-    for store in (_rate_store, _login_store):
-        for k in [k for k, v in store.items() if not any(t > now - 60.0 for t in v)]:
+    for store, window in ((_rate_store, 60.0), (_login_store, 60.0), (_demo_mint_store, 3600.0)):
+        for k in [k for k, v in store.items() if not any(t > now - window for t in v)]:
             del store[k]
 
 
-def _allow(store: Dict[str, List[float]], key: str, limit: int) -> bool:
+def _allow(store: Dict[str, List[float]], key: str, limit: int, window_s: float = 60.0) -> bool:
     now = time.time()
     if now - _last_sweep[0] > 300.0:
         _sweep_rate_stores(now)
         _last_sweep[0] = now
-    bucket = [t for t in store[key] if t > now - 60.0]
+    bucket = [t for t in store[key] if t > now - window_s]
     if len(bucket) >= limit:
         store[key] = bucket
         return False
@@ -230,7 +258,11 @@ def _apply_security_headers(response: Response, cache: str = "no-store", csp: bo
 async def security_middleware(request: Request, call_next):
     path = request.url.path
     if (request.method == "OPTIONS" 
-            or path in ["/health", "/", "/admin", "/auth/login", "/favicon.svg", "/favicon.png", "/favicon.ico", "/ca.crt"]
+            # /demo/session is unauthenticated by design — it is how a visitor GETS a credential,
+            # exactly like /auth/login. It creates its own isolated household and can reach no
+            # existing data; its own per-IP limit stands in for the auth check.
+            or path in ["/health", "/", "/admin", "/auth/login", "/demo/session",
+                        "/favicon.svg", "/favicon.png", "/favicon.ico", "/ca.crt"]
             or path.endswith("/favicon.svg") or path.endswith("/favicon.png") or path.endswith("/favicon.ico") or path.endswith("/ca.crt")
             or "/static/" in path or "/assets/" in path or "/stt-models/" in path
             or "/ort/" in path):
@@ -263,14 +295,21 @@ async def security_middleware(request: Request, call_next):
     try:
         # 1. Web-login session token (stored hashed at rest; look up by hash).
         row = conn.execute(
-            "SELECT user_id, u.role, u.household_id FROM auth_sessions s JOIN users u ON s.user_id = u.id "
+            "SELECT user_id, u.role, u.household_id, h.is_demo FROM auth_sessions s "
+            "JOIN users u ON s.user_id = u.id LEFT JOIN households h ON u.household_id = h.id "
             "WHERE s.token = ? AND s.expires_at > datetime('now')", (hash_token(token),)).fetchone()
         if row:
             request.state.user_id = row["user_id"]
             request.state.is_admin = (row["role"] == "admin")
             request.state.household_id = row["household_id"]
             request.state.device_id = None     # web session → not a device-scoped principal
+            request.state.is_demo = bool(row["is_demo"])
             is_authenticated = True
+            if row["is_demo"]:
+                # Slide the expiry forward on activity, so the TTL measures IDLE time. A visitor
+                # reading a long answer shouldn't have the session vanish underneath them, and the
+                # token's own expiry is moved in step so the two can't disagree.
+                _touch_demo_session(conn, row["household_id"], hash_token(token))
         else:
             # 2. Per-user API key (machine integrations, e.g. the voice listener / device agents).
             #    Stored hashed at rest, like session tokens — look up by hash. `device_id`, if set,
@@ -508,11 +547,173 @@ def login(req: LoginRequest, request: Request):
         conn.close()
 
 
+def _demo_household_for_token(token: str) -> Optional[int]:
+    """The demo household this session token belongs to, or None (expired, unknown, or a real
+    account). Used by logout to decide between 'revoke the token' and 'destroy the household'."""
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT h.id FROM auth_sessions s JOIN users u ON s.user_id = u.id "
+            "JOIN households h ON u.household_id = h.id "
+            "WHERE s.token = ? AND h.is_demo = 1", (hash_token(token),)).fetchone()
+        return row["id"] if row else None
+    finally:
+        conn.close()
+
+
+# Content every new demo household starts with, so the panels show something instead of empty
+# tables. Entirely fictional — a demo visitor must never see a real person's name or address.
+_DEMO_KNOWLEDGE = [
+    ("home", "The flat has a living room, a kitchen, a study and two bedrooms."),
+    ("home", "The study is upstairs at the end of the hall."),
+    ("people", "Sam works from the study most weekdays."),
+    ("preferences", "The household prefers the lights dim after 9pm."),
+]
+_DEMO_PEOPLE = ("Sam", "Alex")
+
+
+def _seed_demo_household(household_id: int, owner_user_id: int) -> None:
+    """Populate a fresh demo household with fictional content.
+
+    Best-effort: a demo that starts with empty panels is worse than a demo, but it is not worth
+    failing the mint over. Everything written here is destroyed with the household.
+    """
+    try:
+        conn = get_db()
+        try:
+            for category, content in _DEMO_KNOWLEDGE:
+                conn.execute(
+                    "INSERT INTO global_knowledge (household_id, category, content, source) "
+                    "VALUES (?, ?, ?, 'demo-seed')", (household_id, category, content))
+            for name in _DEMO_PEOPLE:
+                conn.execute("INSERT INTO persons (household_id, name) VALUES (?, ?)",
+                             (household_id, name))
+            conn.execute(
+                "INSERT INTO audit_log (household_id, user_id, username, action, detail) "
+                "VALUES (?, ?, 'system', 'demo.start', 'Demo household created')",
+                (household_id, owner_user_id))
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning("demo seed for household %s failed: %s", household_id, e)
+
+
+def _sweep_expired_demo_households() -> int:
+    """Destroy demo households past their expires_at. Returns how many were purged.
+
+    This is the backstop for the case the UI cannot signal: a visitor who closes the tab without
+    logging out. It is deliberately NOT driven from the browser — a pagehide/sendBeacon hook would
+    also fire on a page REFRESH, destroying exactly the session a refresh has to preserve.
+    """
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT id FROM households WHERE is_demo = 1 AND expires_at IS NOT NULL "
+            "AND expires_at <= datetime('now')").fetchall()
+        ids = [r["id"] for r in rows]
+    finally:
+        conn.close()
+    for hid in ids:
+        _purge_household_now(hid)
+    if ids:
+        logger.info("Demo sweeper purged %d expired household(s): %s", len(ids), ids)
+    return len(ids)
+
+
+def _demo_sweeper_loop() -> None:
+    """Background sweeper. Runs every minute; a demo household therefore outlives its TTL by at
+    most that, and its auth_sessions row has already expired regardless."""
+    while True:
+        time.sleep(60.0)
+        try:
+            _sweep_expired_demo_households()
+        except Exception as e:
+            logger.warning("demo sweeper iteration failed: %s", e)
+
+
+def _client_ip(request: Request) -> str:
+    """Best-effort client identity for the demo mint limit only.
+
+    Deliberately NOT used for anything security-critical: behind the Tailscale subnet router (and
+    behind Pages/Cloudflare) many clients share a source IP, and X-Forwarded-For is caller-supplied
+    and trivially spoofed. It is good enough to stop a naive script from minting households in a
+    loop, which is all it is for.
+    """
+    xff = (request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+    return xff or (request.client.host if request.client else "unknown")
+
+
+@app.post("/demo/session")
+def demo_session(request: Request):
+    """Mint a throwaway demo household and return a token for its admin.
+
+    The visitor becomes an admin OF THEIR OWN, EMPTY household, so the admin console is fully
+    usable and contains nothing real. The token is an ordinary session token, stored in
+    localStorage like a normal login — which is what makes a page refresh keep the session while
+    logout and expiry destroy it.
+    """
+    if not DEMO_PUBLIC_SIGNUP:
+        raise HTTPException(status_code=404, detail="Not found")
+    if not _allow(_demo_mint_store, f"demo:{_client_ip(request)}", DEMO_MINT_PER_IP_HOURLY,
+                  window_s=3600.0):
+        raise HTTPException(status_code=429,
+                            detail="Too many demo sessions from this address; try again later.")
+    suffix = secrets.token_hex(4)
+    username = f"demo_{suffix}"
+    # A random password that is never returned: the account is reachable only via the token minted
+    # here, so there is no guessable credential and no way to log back into a demo account later.
+    password_hash = hash_password(secrets.token_hex(32))
+    token = secrets.token_hex(32)
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=DEMO_TTL_MINUTES)
+    expires_s = expires_at.strftime("%Y-%m-%d %H:%M:%S")
+    conn = get_db()
+    try:
+        conn.execute("BEGIN IMMEDIATE")      # serialize id selection against concurrent mints
+        hh_id = conn.execute(
+            "INSERT INTO households (name, is_demo, expires_at) VALUES (?, 1, ?) RETURNING id",
+            (f"Demo {suffix}", expires_s)).fetchone()["id"]
+        # Demo ids live above DEMO_USER_ID_BASE so they are never recycled into real accounts —
+        # see the note on DEMO_USER_ID_BASE in config.py.
+        row = conn.execute("SELECT MAX(id) AS m FROM users WHERE id >= ?",
+                           (DEMO_USER_ID_BASE,)).fetchone()
+        new_id = max(DEMO_USER_ID_BASE, (row["m"] or 0) + 1)
+        conn.execute(
+            "INSERT INTO users (id, username, password_hash, role, can_control_devices, household_id) "
+            "VALUES (?, ?, ?, 'admin', 0, ?)",
+            (new_id, username, password_hash, hh_id))
+        # The auth session expires WITH the household, so an abandoned tab's token dies on schedule
+        # even if the sweeper has not run yet.
+        conn.execute("INSERT INTO auth_sessions (token, user_id, expires_at) VALUES (?, ?, ?)",
+                     (hash_token(token), new_id, expires_s))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        logger.error("demo session mint failed: %s", e)
+        raise HTTPException(status_code=500, detail="Could not start a demo session")
+    finally:
+        conn.close()
+    _seed_demo_household(hh_id, new_id)
+    logger.info("Demo session minted: household=%d user=%s expires=%s", hh_id, username, expires_s)
+    return {"token": token, "role": "admin", "demo": True, "username": username,
+            "expires_at": expires_s, "ttl_minutes": DEMO_TTL_MINUTES}
+
+
 @app.post("/auth/logout")
 def logout(request: Request):
-    """Revoke the caller's current session token server-side (real logout)."""
+    """Revoke the caller's current session token server-side (real logout).
+
+    For a DEMO household this is also the reset: logging out destroys the household and everything
+    in it, which is the behaviour the demo promises. A refresh does not come through here (the
+    token simply persists in localStorage), so the two cases stay properly distinct.
+    """
     auth_header = request.headers.get("Authorization", "")
     token = auth_header[7:] if auth_header.startswith("Bearer ") else ""
+    demo_household = _demo_household_for_token(token) if token else None
+    if demo_household is not None:
+        _purge_household_now(demo_household)
+        logger.info("Demo household %d purged on logout", demo_household)
+        return {"status": "ok", "demo_reset": True}
     if token:
         conn = get_db()
         try:
@@ -2225,6 +2426,61 @@ def _purge_user(conn, user_id: int) -> List[str]:
     conn.execute("UPDATE vision_events SET user_id = NULL WHERE user_id = ?", (user_id,))
     conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
     return msg_ids
+
+
+# Tables carrying household_id that a household purge must clear. persons is listed even though
+# _purge_user unlinks (rather than deletes) faces: unlinking is right when ONE member leaves a home
+# that continues to exist, but a demo household's faces belong to a member of the public and must
+# actually be destroyed with it.
+_HOUSEHOLD_REF_TABLES = ("global_knowledge", "persons", "vision_events", "enroll_requests",
+                         "device_commands", "device_heartbeats", "audit_log", "household_settings")
+
+
+def _purge_household(conn, household_id: int) -> tuple:
+    """Delete a household and everything in it. Returns (chroma message ids, member user ids) so
+    the caller can clear the vector store both ways.
+
+    This is the demo reset primitive: logout and TTL expiry both route here, so "reset" means the
+    same thing however it was triggered. Every member is purged through _purge_user first (which
+    owns the user-scoped tables), then the household-scoped rows, then the household itself.
+    """
+    member_ids = [r["id"] for r in conn.execute(
+        "SELECT id FROM users WHERE household_id = ?", (household_id,)).fetchall()]
+    msg_ids: List[str] = []
+    for uid in member_ids:
+        msg_ids.extend(_purge_user(conn, uid))
+    # Faces are DESTROYED here, not unlinked: face_embeddings is biometric data belonging to a
+    # member of the public, and _purge_user's unlink semantics would leave it behind with a NULL
+    # user_id. Delete the embeddings before the persons rows they hang off.
+    conn.execute("DELETE FROM face_embeddings WHERE person_id IN "
+                 "(SELECT id FROM persons WHERE household_id = ?)", (household_id,))
+    for table in _HOUSEHOLD_REF_TABLES:      # fixed allowlist, not user input
+        conn.execute(f"DELETE FROM {table} WHERE household_id = ?", (household_id,))
+    conn.execute("DELETE FROM households WHERE id = ?", (household_id,))
+    return msg_ids, member_ids
+
+
+def _purge_household_now(household_id: int) -> int:
+    """Purge a household in its own transaction and drop its vectors. Returns the number of
+    messages removed. Used by demo logout and the TTL sweeper."""
+    conn = get_db()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        msg_ids, member_ids = _purge_household(conn, household_id)
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        logger.error("purge of household %s failed: %s", household_id, e)
+        return 0
+    finally:
+        conn.close()
+    # Both deletes, deliberately. The id list is precise but only covers what existed when it was
+    # taken; an embedding still in the worker queue lands in Chroma AFTER the purge and would
+    # survive it. The per-user sweep catches those, so a demo visitor's utterances are not
+    # recallable once their session ends.
+    memory.delete_vectors(msg_ids)
+    memory.delete_vectors_for_users(member_ids)
+    return len(msg_ids)
 
 
 def _id_has_residue(conn, uid: int) -> bool:
