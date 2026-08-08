@@ -178,7 +178,8 @@ def delete_session(session_id: str, user_id: int):
 
 
 # --- Prompt assembly --------------------------------------------------------
-def build_messages(session_id: str, user_id: int, user_text: str, custom_sys_prompt: Optional[str] = None,
+def build_messages(session_id: str, user_id: int, household_id: int, user_text: str,
+                   custom_sys_prompt: Optional[str] = None,
                    completion_reserve: int = COMPLETION_RESERVE_DEFAULT,
                    reasoning: Optional[bool] = None) -> List[Dict[str, str]]:
     """Assemble the prompt within the model's context window.
@@ -200,9 +201,10 @@ def build_messages(session_id: str, user_id: int, user_text: str, custom_sys_pro
         sys_prompt = (sys_prompt + " /no_think").strip()
     system_parts = [sys_prompt]
 
-    # Household/global knowledge — shared by everyone, admin-curated. Stable across turns, so it stays
-    # in the cache-friendly system prefix. (Capped; if it ever outgrows the cap we'd switch to RAG.)
-    global_kb = memory.get_global_knowledge()
+    # Household knowledge — shared by everyone IN THIS HOUSEHOLD, admin-curated. Stable across
+    # turns, so it stays in the cache-friendly system prefix. (Capped; if it ever outgrows the cap
+    # we'd switch to RAG.)
+    global_kb = memory.get_global_knowledge(household_id)
     if global_kb:
         global_kb = truncate_to_tokens(global_kb, KNOWLEDGE_TOKEN_CAP)
         system_parts.append(
@@ -223,7 +225,7 @@ def build_messages(session_id: str, user_id: int, user_text: str, custom_sys_pro
     context_ids = _get_recent_message_ids(session_id)
     memories = memory.retrieve_long_term_memory(user_id, session_id, user_text, recent_context_ids=context_ids)
     turn_parts: List[str] = []
-    present = memory.get_present_people()
+    present = memory.get_present_people(household_id)
     if present:
         turn_parts.append(f"[Seen by cameras: {', '.join(present)}]")
     if memories:

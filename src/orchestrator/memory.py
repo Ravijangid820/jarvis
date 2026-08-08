@@ -278,15 +278,20 @@ def get_user_knowledge_list(user_id: int) -> List[Dict[str, Any]]:
 
 
 # ---- Presence (who the cameras have recognized recently) ------------------------------------------
-def get_present_people(ttl_s: int = 180) -> List[str]:
-    """Recognized people seen by any camera within the last ttl_s seconds (deduped, most-recent first).
-    Derived from face_seen vision events; 'unknown' faces are ignored."""
+def get_present_people(household_id: int, ttl_s: int = 180) -> List[str]:
+    """Recognized people seen by one household's cameras within the last ttl_s seconds (deduped,
+    most-recent first). Derived from face_seen vision events; 'unknown' faces are ignored.
+
+    household_id is required: the result is injected into the prompt as "[Seen by cameras: …]", so
+    an unscoped query would tell every user of the deployment who is currently inside someone
+    else's home, by name, in real time.
+    """
     conn = get_db()
     try:
         rows = conn.execute(
-            "SELECT data FROM vision_events WHERE type='face_seen' "
+            "SELECT data FROM vision_events WHERE household_id = ? AND type='face_seen' "
             "AND created_at > datetime('now', ?) ORDER BY id DESC",
-            (f"-{int(ttl_s)} seconds",)).fetchall()
+            (household_id, f"-{int(ttl_s)} seconds")).fetchall()
         seen, names = set(), []
         for r in rows:
             try:
@@ -301,13 +306,17 @@ def get_present_people(ttl_s: int = 180) -> List[str]:
         conn.close()
 
 
-# ---- Global / household knowledge (shared by all users; admin-curated) ----------------------------
-def get_global_knowledge() -> str:
-    """All household/global facts, formatted for system-prompt injection (shared by every user)."""
+# ---- Household knowledge (shared by every user IN ONE HOUSEHOLD; admin-curated) -------------------
+# Every function here takes household_id and there is no unscoped variant on purpose: this table
+# holds the home address, family names and room layout, and it is injected verbatim into the system
+# prompt. An unscoped read would put one household's private facts into another's conversation.
+def get_global_knowledge(household_id: int) -> str:
+    """This household's facts, formatted for system-prompt injection."""
     conn = get_db()
     try:
         rows = conn.execute(
-            "SELECT category, content FROM global_knowledge ORDER BY category, updated_at DESC").fetchall()
+            "SELECT category, content FROM global_knowledge WHERE household_id = ? "
+            "ORDER BY category, updated_at DESC", (household_id,)).fetchall()
         if not rows:
             return ""
         by_cat: Dict[str, List[str]] = {}
@@ -323,53 +332,62 @@ def get_global_knowledge() -> str:
         conn.close()
 
 
-def get_global_knowledge_list() -> List[Dict[str, Any]]:
+def get_global_knowledge_list(household_id: int) -> List[Dict[str, Any]]:
     conn = get_db()
     try:
         rows = conn.execute(
             "SELECT id, category, content, source, created_at, updated_at FROM global_knowledge "
-            "ORDER BY category, updated_at DESC").fetchall()
+            "WHERE household_id = ? ORDER BY category, updated_at DESC", (household_id,)).fetchall()
         return [dict(r) for r in rows]
     finally:
         conn.close()
 
 
-def store_global_fact(category: str, content: str, source: str = "manual") -> int:
+def store_global_fact(household_id: int, category: str, content: str, source: str = "manual") -> int:
     """Add a household fact (admin-curated). Exact duplicates within a category are coalesced."""
     conn = get_db()
     try:
-        dup = conn.execute("SELECT id FROM global_knowledge WHERE category = ? AND content = ?",
-                           (category, content)).fetchone()
+        dup = conn.execute(
+            "SELECT id FROM global_knowledge WHERE household_id = ? AND category = ? AND content = ?",
+            (household_id, category, content)).fetchone()
         if dup:
             return dup["id"]
-        cur = conn.execute("INSERT INTO global_knowledge (category, content, source) VALUES (?, ?, ?)",
-                           (category, content, source))
+        cur = conn.execute(
+            "INSERT INTO global_knowledge (household_id, category, content, source) VALUES (?, ?, ?, ?)",
+            (household_id, category, content, source))
         conn.commit()
-        logger.info("Memory Core: stored GLOBAL fact #%d in [%s]: %s", cur.lastrowid, category, content[:80])
+        logger.info("Memory Core: stored household fact #%d in [%s] for household %d: %s",
+                    cur.lastrowid, category, household_id, content[:80])
         return cur.lastrowid
     finally:
         conn.close()
 
 
-def update_global_fact(fact_id: int, content: str, category: str = None) -> bool:
+# The fact_id in update/delete comes straight from a client, so the household_id in the WHERE is
+# the authorization check, not an optimization: without it any admin could edit or delete another
+# household's facts by guessing an id (IDOR). rowcount==0 then reads as "not yours / not found",
+# which is also the right thing to tell the caller.
+def update_global_fact(household_id: int, fact_id: int, content: str, category: str = None) -> bool:
     conn = get_db()
     try:
         if category:
             cur = conn.execute("UPDATE global_knowledge SET content = ?, category = ?, "
-                               "updated_at = CURRENT_TIMESTAMP WHERE id = ?", (content, category, fact_id))
+                               "updated_at = CURRENT_TIMESTAMP WHERE id = ? AND household_id = ?",
+                               (content, category, fact_id, household_id))
         else:
             cur = conn.execute("UPDATE global_knowledge SET content = ?, updated_at = CURRENT_TIMESTAMP "
-                               "WHERE id = ?", (content, fact_id))
+                               "WHERE id = ? AND household_id = ?", (content, fact_id, household_id))
         conn.commit()
         return cur.rowcount > 0
     finally:
         conn.close()
 
 
-def delete_global_fact(fact_id: int) -> bool:
+def delete_global_fact(household_id: int, fact_id: int) -> bool:
     conn = get_db()
     try:
-        cur = conn.execute("DELETE FROM global_knowledge WHERE id = ?", (fact_id,))
+        cur = conn.execute("DELETE FROM global_knowledge WHERE id = ? AND household_id = ?",
+                           (fact_id, household_id))
         conn.commit()
         return cur.rowcount > 0
     finally:

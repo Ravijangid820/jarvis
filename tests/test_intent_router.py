@@ -12,6 +12,27 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "orchestrat
 import ha  # noqa: E402
 import intent_router as ir  # noqa: E402
 
+class _FakeState:
+    """Minimal stand-in for request.state — enough for the household/authz lookups."""
+    def __init__(self, user_id=1, household_id=1, is_admin=True):
+        self.user_id = user_id
+        self.household_id = household_id
+        self.is_admin = is_admin
+        self.device_id = None
+
+
+class _FakeRequest:
+    def __init__(self, **kw):
+        self.state = _FakeState(**kw)
+
+
+def _req(**kw):
+    """A principal in household 1 — the household that owns the smart home in these tests.
+    The home fast-path and the HA tools now require one: they check that the CALLER's household
+    actually owns the smart home before touching Home Assistant."""
+    return _FakeRequest(**kw)
+
+
 
 import zlib
 def _bow_embed(texts):
@@ -122,11 +143,11 @@ def test_confirm_then_yes_executes(monkeypatch):
     monkeypatch.setattr(main.intent_router, "route",
                         lambda text, f: {"decision": "confirm", "entity": "switch.desk_fan",
                                          "action": "on", "score": 0.7})
-    reply = main._handle_home_command("i am kind of warm", None, "s1")
+    reply = main._handle_home_command("i am kind of warm", _req(), "s1")
     assert reply is not None and reply.lower().startswith("should i turn on")
     assert main._PENDING_HOME.get("s1") is not None and actions == []   # asked, did NOT act
 
-    reply = main._handle_home_command("yes please", None, "s1")
+    reply = main._handle_home_command("yes please", _req(), "s1")
     assert "fan is now on" in reply.lower()
     assert actions == [("on", "switch.desk_fan")]
     assert "s1" not in main._PENDING_HOME                               # consumed
@@ -138,8 +159,8 @@ def test_confirm_then_no_cancels(monkeypatch):
     monkeypatch.setattr(main.intent_router, "route",
                         lambda text, f: {"decision": "confirm", "entity": "switch.desk_fan",
                                          "action": "on", "score": 0.7})
-    main._handle_home_command("i am kind of warm", None, "s1")
-    reply = main._handle_home_command("no, leave it", None, "s1")
+    main._handle_home_command("i am kind of warm", _req(), "s1")
+    reply = main._handle_home_command("no, leave it", _req(), "s1")
     assert "leaving it" in reply.lower() and actions == []
 
 
@@ -147,7 +168,7 @@ def test_unrelated_message_drops_the_proposal(monkeypatch):
     main, actions = _flow_setup(monkeypatch)
     main._PENDING_HOME["s1"] = ("switch.desk_fan", "on", time.monotonic())
     monkeypatch.setattr(main.intent_router, "ready", lambda: False)     # router quiet now
-    reply = main._handle_home_command("what is the capital of france", None, "s1")
+    reply = main._handle_home_command("what is the capital of france", _req(), "s1")
     assert reply is None and actions == []                              # goes to the LLM
     assert "s1" not in main._PENDING_HOME                               # proposal dropped
 
@@ -158,6 +179,6 @@ def test_act_decision_executes_immediately(monkeypatch):
     monkeypatch.setattr(main.intent_router, "route",
                         lambda text, f: {"decision": "act", "entity": "switch.desk_fan",
                                          "action": "on", "score": 0.85})
-    reply = main._handle_home_command("i'm melting in here", None, "s1")
+    reply = main._handle_home_command("i'm melting in here", _req(), "s1")
     assert "fan is now on" in reply.lower()
     assert actions == [("on", "switch.desk_fan")]

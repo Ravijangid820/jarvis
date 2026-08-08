@@ -49,18 +49,34 @@ from config import (ADMIN_MAX_INPUT, ALLOWED_ORIGINS, APP_VERSION, BASE_DIR, CHR
 import ha
 import intent_router
 import mcp
-from db import get_db, get_setting, init_db, set_setting
+from db import (PRIMARY_HOUSEHOLD_ID, get_db, get_household_setting, init_db,
+                set_household_setting)
 from llm import count_prompt_tokens, llm_content, request_llm, request_llm_stream, request_llm_tools, synthesize_tts
+
+
+# Which household owns the smart home this process is connected to. The HA client (ha.py) holds ONE
+# live connection in module globals — url/token/allowlist — and the intent router caches exemplar
+# embeddings derived from that allowlist. So exactly one household's Home Assistant is reachable at a
+# time, and every HA route checks the caller against this id. That is what makes "the smart home
+# belongs to one admin and the users under them" true, and it is why a demo household — which never
+# owns HA settings — has no smart home to reach rather than merely a blocked button.
+#
+# Supporting several DIFFERENT real smart homes on one box means making ha.py stateless (a per-call
+# connection) and keying the router cache by household; the household_settings table is already
+# shaped for it. Until then this is a single-smart-home deployment with hard tenant isolation.
+_HA_HOUSEHOLD_ID: Optional[int] = None
 
 
 @asynccontextmanager
 def _load_ha_settings():
     """Apply the DB-stored (admin-UI-managed) Home Assistant settings at startup. Environment vars
     win — a field set via env stays as config.py resolved it and the UI shows it read-only."""
+    global _HA_HOUSEHOLD_ID
     try:
-        url = None if HA_URL_FROM_ENV else get_setting("ha_url")
-        token = None if HA_TOKEN_FROM_ENV else get_setting("ha_token")
-        ents_raw = get_setting("ha_allowed_entities")
+        _HA_HOUSEHOLD_ID = PRIMARY_HOUSEHOLD_ID
+        url = None if HA_URL_FROM_ENV else get_household_setting(_HA_HOUSEHOLD_ID, "ha_url")
+        token = None if HA_TOKEN_FROM_ENV else get_household_setting(_HA_HOUSEHOLD_ID, "ha_token")
+        ents_raw = get_household_setting(_HA_HOUSEHOLD_ID, "ha_allowed_entities")
         allowed = None
         if ents_raw is not None:
             try:
@@ -247,11 +263,12 @@ async def security_middleware(request: Request, call_next):
     try:
         # 1. Web-login session token (stored hashed at rest; look up by hash).
         row = conn.execute(
-            "SELECT user_id, u.role FROM auth_sessions s JOIN users u ON s.user_id = u.id "
+            "SELECT user_id, u.role, u.household_id FROM auth_sessions s JOIN users u ON s.user_id = u.id "
             "WHERE s.token = ? AND s.expires_at > datetime('now')", (hash_token(token),)).fetchone()
         if row:
             request.state.user_id = row["user_id"]
             request.state.is_admin = (row["role"] == "admin")
+            request.state.household_id = row["household_id"]
             request.state.device_id = None     # web session → not a device-scoped principal
             is_authenticated = True
         else:
@@ -259,10 +276,11 @@ async def security_middleware(request: Request, call_next):
             #    Stored hashed at rest, like session tokens — look up by hash. `device_id`, if set,
             #    binds the key to one device (enforced by /devices/* and /events).
             row = conn.execute(
-                "SELECT user_id, u.role, k.device_id FROM api_keys k JOIN users u ON k.user_id = u.id "
-                "WHERE k.key_string = ?", (hash_token(token),)).fetchone()
+                "SELECT user_id, u.role, u.household_id, k.device_id FROM api_keys k "
+                "JOIN users u ON k.user_id = u.id WHERE k.key_string = ?", (hash_token(token),)).fetchone()
             if row:
                 request.state.user_id = row["user_id"]
+                request.state.household_id = row["household_id"]
                 request.state.device_id = row["device_id"]
                 # Defense-in-depth: a DEVICE-scoped key never wields admin, even if minted under an
                 # admin account. A camera/edge key is for posting events + reading the enrolled set;
@@ -291,6 +309,22 @@ async def security_middleware(request: Request, call_next):
             status_code=429, media_type="application/json", headers={"Retry-After": "5"})
 
     return _apply_security_headers(await call_next(request))
+
+
+def _household(request: Request) -> int:
+    """The caller's household id — the tenant filter every scoped query must carry.
+
+    Fails CLOSED. A principal with no household is a bug (the migration backfills every existing
+    user into household 1, and both account-creation paths set it explicitly), and the tempting
+    fallback — "assume household 1" — is precisely the leak this whole boundary exists to prevent:
+    it would hand an unscoped account the real home's address, faces and camera history.
+    """
+    hid = getattr(request.state, "household_id", None)
+    if not hid:
+        logger.error("Principal user_id=%s has no household_id; refusing to serve scoped data",
+                     getattr(request.state, "user_id", "?"))
+        raise HTTPException(status_code=403, detail="Account is not linked to a household")
+    return int(hid)
 
 
 # ----------------- Models -----------------
@@ -639,7 +673,7 @@ def _embedding_detail(emb: Dict[str, Any]) -> str:
     return " · ".join(bits) or "vector search ready"
 
 
-def _service_status() -> list:
+def _service_status(household_id: int) -> list:
     """Status of each subsystem for the admin console: green (active) / red (inactive), with a
     one-line detail. Camera/edge liveness is inferred from device_heartbeats (recent = running)."""
     def s(name, ok, detail=""):
@@ -654,7 +688,9 @@ def _service_status() -> list:
         s("Voice / TTS (Piper)", PIPER_BIN.exists() and PIPER_MODEL.exists(),
           PIPER_MODEL.name if PIPER_MODEL.exists() else "piper binary/voice missing"),
     ]
-    if ha.configured():
+    # Only the household that owns the smart home sees its row — the HA URL is infrastructure
+    # detail about someone's home network.
+    if ha.configured() and household_id == _HA_HOUSEHOLD_ID:
         services.append(s("Home Assistant", ha.ping(),
                           f"{len(ha.HA_ALLOWED_ENTITIES)} entities allowlisted · {ha.HA_URL}"))
 
@@ -662,9 +698,12 @@ def _service_status() -> list:
     # heartbeat/event is recent. This is the "is the model running on the hardware" indicator.
     conn = get_db()
     try:
+        # Scoped: the camera roster is household infrastructure — device ids and liveness of
+        # someone else's cameras are not this admin's business.
         rows = conn.execute(
             "SELECT device_id, last_seen, (julianday('now') - julianday(last_seen)) * 86400 AS age "
-            "FROM device_heartbeats ORDER BY device_id"
+            "FROM device_heartbeats WHERE household_id = ? ORDER BY device_id",
+            (household_id,)
         ).fetchall()
     finally:
         conn.close()
@@ -691,7 +730,7 @@ def admin_services(request: Request) -> Dict[str, Any]:
     """Per-subsystem health for the admin console (active/inactive + detail), plus the app version and
     an at-a-glance operational summary (how many subsystems are up)."""
     _require_admin(request)
-    services = _service_status()
+    services = _service_status(_household(request))
     up = sum(1 for x in services if x["status"] == "active")
     return {
         "services": services,
@@ -864,12 +903,14 @@ def enroll_face(req: FaceEnrollRequest, request: Request):
     drive authorization, so enrollment is privileged. Adds to the person's embeddings (creating the
     person if new); pass replace=true to start their set over."""
     _require_admin(request)
+    household_id = _household(request)
     name = req.name.strip()
     conn = get_db()
     try:
-        row = conn.execute("SELECT id FROM persons WHERE name = ?", (name,)).fetchone()
+        row = conn.execute("SELECT id FROM persons WHERE household_id = ? AND name = ?",
+                           (household_id, name)).fetchone()
         person_id = row["id"] if row else conn.execute(
-            "INSERT INTO persons (name) VALUES (?)", (name,)).lastrowid
+            "INSERT INTO persons (household_id, name) VALUES (?, ?)", (household_id, name)).lastrowid
         if req.replace:
             conn.execute("DELETE FROM face_embeddings WHERE person_id = ?", (person_id,))
         cur = conn.execute(
@@ -885,11 +926,16 @@ def enroll_face(req: FaceEnrollRequest, request: Request):
 def enrolled_faces(request: Request):
     """The enrolled set for the edge agent: {name: [embedding, ...]} (a list per person — recognition
     matches against the best of all)."""
+    household_id = _household(request)
     conn = get_db()
     try:
+        # Scoped: a camera must only ever be handed the face vectors of the household it belongs
+        # to. Unscoped, one household's agent would recognise (and greet, and authorize) people
+        # enrolled by another.
         rows = conn.execute(
             "SELECT p.name AS name, e.embedding AS embedding "
-            "FROM face_embeddings e JOIN persons p ON e.person_id = p.id").fetchall()
+            "FROM face_embeddings e JOIN persons p ON e.person_id = p.id "
+            "WHERE p.household_id = ?", (household_id,)).fetchall()
         out: Dict[str, Any] = {}
         for r in rows:
             out.setdefault(r["name"], []).append(json.loads(r["embedding"]))
@@ -912,8 +958,8 @@ def get_enroll_request(request: Request, device: Optional[str] = None):
     conn = get_db()
     try:
         row = conn.execute(
-            "SELECT id, name FROM enroll_requests WHERE device_id = ? AND status = 'pending' "
-            "ORDER BY id LIMIT 1", (device_id,)).fetchone()
+            "SELECT id, name FROM enroll_requests WHERE household_id = ? AND device_id = ? "
+            "AND status = 'pending' ORDER BY id LIMIT 1", (_household(request), device_id)).fetchone()
         return {"request": dict(row) if row else None}
     finally:
         conn.close()
@@ -930,8 +976,13 @@ def post_enroll_result(req: EnrollResult, request: Request):
         raise HTTPException(status_code=403, detail="device-scoped key (or admin) required")
     conn = get_db()
     try:
-        r = conn.execute("SELECT device_id, name, status, user_id FROM enroll_requests WHERE id = ?",
-                         (req.request_id,)).fetchone()
+        household_id = _household(request)
+        # household_id in the WHERE, not just the id: request_id is caller-supplied, so this is the
+        # check that stops an agent in one household from fulfilling (and reading the name of)
+        # another household's pending enrollment.
+        r = conn.execute(
+            "SELECT device_id, name, status, user_id FROM enroll_requests WHERE id = ? AND household_id = ?",
+            (req.request_id, household_id)).fetchone()
         if r is None:
             raise HTTPException(status_code=404, detail="No such request")
         if not is_admin and r["device_id"] != dev:
@@ -940,26 +991,31 @@ def post_enroll_result(req: EnrollResult, request: Request):
             raise HTTPException(status_code=409, detail="Request already handled")
         if req.error or not req.embedding:
             conn.execute("UPDATE enroll_requests SET status='failed', detail=?, completed_at=datetime('now') "
-                         "WHERE id=?", ((req.error or "no face captured")[:200], req.request_id))
+                         "WHERE id=? AND household_id=?",
+                         ((req.error or "no face captured")[:200], req.request_id, household_id))
             conn.commit()
             return {"status": "failed"}
         # Resolve the person: prefer the linked account (so the face maps to a user), else by name.
         prow = None
         if r["user_id"] is not None:
-            prow = conn.execute("SELECT id FROM persons WHERE user_id = ?", (r["user_id"],)).fetchone()
+            prow = conn.execute("SELECT id FROM persons WHERE household_id = ? AND user_id = ?",
+                                (household_id, r["user_id"])).fetchone()
         if prow is None:
-            prow = conn.execute("SELECT id FROM persons WHERE name = ?", (r["name"],)).fetchone()
+            prow = conn.execute("SELECT id FROM persons WHERE household_id = ? AND name = ?",
+                                (household_id, r["name"])).fetchone()
         if prow is None:
-            person_id = conn.execute("INSERT INTO persons (name, user_id) VALUES (?, ?)",
-                                     (r["name"], r["user_id"])).lastrowid
+            person_id = conn.execute(
+                "INSERT INTO persons (household_id, name, user_id) VALUES (?, ?, ?)",
+                (household_id, r["name"], r["user_id"])).lastrowid
         else:
             person_id = prow["id"]
             if r["user_id"] is not None:           # make sure an existing person is linked to the account
-                conn.execute("UPDATE persons SET user_id = ? WHERE id = ?", (r["user_id"], person_id))
+                conn.execute("UPDATE persons SET user_id = ? WHERE id = ? AND household_id = ?",
+                             (r["user_id"], person_id, household_id))
         conn.execute("INSERT INTO face_embeddings (person_id, embedding, source) VALUES (?, ?, ?)",
                      (person_id, json.dumps(req.embedding), r["device_id"]))
-        conn.execute("UPDATE enroll_requests SET status='done', completed_at=datetime('now') WHERE id=?",
-                     (req.request_id,))
+        conn.execute("UPDATE enroll_requests SET status='done', completed_at=datetime('now') "
+                     "WHERE id=? AND household_id=?", (req.request_id, household_id))
         conn.commit()
         return {"status": "ok", "person_id": person_id}
     finally:
@@ -982,7 +1038,8 @@ def post_enroll_preview(req: EnrollPreview, request: Request):
         raise HTTPException(status_code=403, detail="device-scoped key (or admin) required")
     conn = get_db()
     try:
-        r = conn.execute("SELECT device_id FROM enroll_requests WHERE id = ?", (req.request_id,)).fetchone()
+        r = conn.execute("SELECT device_id FROM enroll_requests WHERE id = ? AND household_id = ?",
+                         (req.request_id, _household(request))).fetchone()
     finally:
         conn.close()
     if r is None:
@@ -1054,8 +1111,9 @@ def _audit(request: Request, action: str, detail: str = "") -> None:
                 row = conn.execute("SELECT username FROM users WHERE id = ?", (uid,)).fetchone()
                 uname = row["username"] if row else None
             cur = conn.execute(
-                "INSERT INTO audit_log (user_id, username, action, detail) VALUES (?, ?, ?, ?)",
-                (uid, uname, action, (detail or "")[:500]))
+                "INSERT INTO audit_log (household_id, user_id, username, action, detail) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (getattr(request.state, "household_id", None), uid, uname, action, (detail or "")[:500]))
             if cur.lastrowid % 200 == 0:   # prune occasionally, not on every write
                 conn.execute("DELETE FROM audit_log WHERE id <= ?", (cur.lastrowid - _AUDIT_CAP,))
             conn.commit()
@@ -1072,9 +1130,11 @@ def admin_audit(request: Request, limit: int = 100):
     limit = max(1, min(limit, 1000))
     conn = get_db()
     try:
+        # Scoped: the audit trail names users and the devices they drove, so an admin of one
+        # household must not read another's.
         rows = conn.execute(
             "SELECT id, created_at, user_id, username, action, detail FROM audit_log "
-            "ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+            "WHERE household_id = ? ORDER BY id DESC LIMIT ?", (_household(request), limit)).fetchall()
         return {"entries": [dict(r) for r in rows]}
     finally:
         conn.close()
@@ -1163,7 +1223,7 @@ def admin_delete_backup(name: str, request: Request):
 @app.get("/presence")
 def presence(request: Request):
     """Who the cameras have recognized recently (household context). Any authenticated user."""
-    return {"present": memory.get_present_people()}
+    return {"present": memory.get_present_people(_household(request))}
 
 
 @app.get("/arrivals")
@@ -1173,8 +1233,9 @@ def arrivals(request: Request, since_id: int = 0):
     conn = get_db()
     try:
         rows = conn.execute(
-            "SELECT id, data, created_at FROM vision_events WHERE type='presence_arrival' "
-            "AND id > ? AND created_at > datetime('now', '-120 seconds') ORDER BY id", (since_id,)).fetchall()
+            "SELECT id, data, created_at FROM vision_events WHERE household_id = ? "
+            "AND type='presence_arrival' AND id > ? AND created_at > datetime('now', '-120 seconds') "
+            "ORDER BY id", (_household(request), since_id)).fetchall()
         out = []
         for r in rows:
             try:
@@ -1188,10 +1249,14 @@ def arrivals(request: Request, since_id: int = 0):
         conn.close()
 
 
-def _authorized_person_present() -> bool:
-    """True if a currently-present recognized person maps to a user allowed to control devices.
-    Used only when REQUIRE_PRESENCE_FOR_CONTROL is on."""
-    names = memory.get_present_people()
+def _authorized_person_present(household_id: int) -> bool:
+    """True if a person currently present in THIS household maps to a user of it who is allowed to
+    control devices. Used only when REQUIRE_PRESENCE_FOR_CONTROL is on.
+
+    Both sides of the join are scoped: an unscoped `persons.name IN (…)` would let a namesake in
+    another household satisfy the presence check and unlock this one's devices.
+    """
+    names = memory.get_present_people(household_id)
     if not names:
         return False
     conn = get_db()
@@ -1199,7 +1264,9 @@ def _authorized_person_present() -> bool:
         ph = ",".join("?" * len(names))
         row = conn.execute(
             f"SELECT 1 FROM persons p JOIN users u ON p.user_id = u.id WHERE p.name IN ({ph}) "
-            "AND (u.role = 'admin' OR u.can_control_devices = 1) LIMIT 1", names).fetchone()
+            "AND p.household_id = ? AND u.household_id = ? "
+            "AND (u.role = 'admin' OR u.can_control_devices = 1) LIMIT 1",
+            [*names, household_id, household_id]).fetchone()
         return row is not None
     finally:
         conn.close()
@@ -1272,7 +1339,7 @@ def _can_control_devices(request: Request) -> bool:
         conn.close()
 
 
-def _enqueue_volume(action: str, value: Optional[int], device: str) -> int:
+def _enqueue_volume(household_id: int, action: str, value: Optional[int], device: str) -> int:
     """Validate + enqueue one volume command (the tiny vocabulary set|step|mute|unmute). Shared by
     the REST endpoint and the voice fast-path. Raises HTTPException on a bad command. NOT an authz
     check — callers must gate on _can_control_devices first."""
@@ -1290,8 +1357,9 @@ def _enqueue_volume(action: str, value: Optional[int], device: str) -> int:
         raise HTTPException(status_code=400, detail="action must be set|step|mute|unmute")
     conn = get_db()
     try:
-        cur = conn.execute("INSERT INTO device_commands (device_id, action, params) VALUES (?, ?, ?)",
-                           (device, action, json.dumps(params)))
+        cur = conn.execute(
+            "INSERT INTO device_commands (household_id, device_id, action, params) VALUES (?, ?, ?, ?)",
+            (household_id, device, action, json.dumps(params)))
         # Retention: drop delivered commands older than a day so the queue doesn't grow forever.
         conn.execute("DELETE FROM device_commands WHERE status='delivered' AND delivered_at < datetime('now','-1 day')")
         conn.commit()
@@ -1313,7 +1381,7 @@ def _spoken_volume_ack(action: str, value: Optional[int]) -> str:
     return "Done."
 
 
-def _open_gesture_mode(camera: str, target: str) -> None:
+def _open_gesture_mode(household_id: int, camera: str, target: str) -> None:
     """Authorize a time-boxed gesture→volume window for `camera` and signal it via the command
     channel (long-poll). The server-side mode entry gates POST /devices/gesture."""
     now = time.time()
@@ -1322,8 +1390,10 @@ def _open_gesture_mode(camera: str, target: str) -> None:
         _GESTURE_MODES.pop(k, None)
     conn = get_db()
     try:
-        conn.execute("INSERT INTO device_commands (device_id, action, params) VALUES (?, ?, ?)",
-                     (camera, "gesture_mode", json.dumps({"mode": "volume", "ttl": int(_GESTURE_TTL_S)})))
+        conn.execute(
+            "INSERT INTO device_commands (household_id, device_id, action, params) VALUES (?, ?, ?, ?)",
+            (household_id, camera, "gesture_mode",
+             json.dumps({"mode": "volume", "ttl": int(_GESTURE_TTL_S)})))
         conn.execute("DELETE FROM device_commands WHERE status='delivered' AND delivered_at < datetime('now','-1 day')")
         conn.commit()
     finally:
@@ -1337,18 +1407,18 @@ def _handle_volume_command(user_text: str, raw_request: Request) -> Optional[str
     is_gesture = vol is None and is_gesture_volume(user_text)
     if (vol is not None or is_gesture) and JARVIS_MODE == "demo":
         return "Hardware device control is disabled in public Demo Mode."
-    if (vol is not None or is_gesture) and REQUIRE_PRESENCE_FOR_CONTROL and not _authorized_person_present():
+    if (vol is not None or is_gesture) and REQUIRE_PRESENCE_FOR_CONTROL and not _authorized_person_present(_household(raw_request)):
         return "I don't see anyone authorized in the room, so I can't change that right now."
     if vol is not None:
         if not _can_control_devices(raw_request):
             return "Sorry — you're not authorized to control devices."
-        _enqueue_volume(vol["action"], vol.get("value"), VOICE_DEVICE)
+        _enqueue_volume(_household(raw_request), vol["action"], vol.get("value"), VOICE_DEVICE)
         _audit(raw_request, "device.volume", f"{vol['action']} {vol.get('value', '')}".strip())
         return _spoken_volume_ack(vol["action"], vol.get("value"))
     if is_gesture_volume(user_text):                 # "Jarvis, volume" → hand-gesture control
         if not _can_control_devices(raw_request):
             return "Sorry — you're not authorized to control devices."
-        _open_gesture_mode(VOICE_CAMERA, VOICE_DEVICE)
+        _open_gesture_mode(_household(raw_request), VOICE_CAMERA, VOICE_DEVICE)
         _audit(raw_request, "device.gesture_mode", VOICE_CAMERA)
         return "Gesture volume control on — raise or lower your hand."
     return None
@@ -1433,8 +1503,8 @@ def _handle_home_command(user_text: str, raw_request: Request, session_id: str) 
     "toggle X", "is X on?" — instant, no LLM. Only acts when the device RESOLVES against the HA
     allowlist; anything else returns None and falls through to the LLM, so ordinary sentences
     ("turn my life around") are never hijacked. "it"/"that" refers to the session's last device."""
-    if not ha.configured():
-        return None
+    if not ha.configured() or not _owns_smart_home(raw_request):
+        return None            # no smart home for this household → fall through to the LLM
     if JARVIS_MODE == "demo":
         return "Home Assistant control is disabled in public Demo Mode."
 
@@ -1445,7 +1515,7 @@ def _handle_home_command(user_text: str, raw_request: Request, session_id: str) 
         if _YES_RE.match(user_text):
             if not _can_control_devices(raw_request):
                 return "Sorry — you're not authorized to control devices."
-            if REQUIRE_PRESENCE_FOR_CONTROL and not _authorized_person_present():
+            if REQUIRE_PRESENCE_FOR_CONTROL and not _authorized_person_present(_household(raw_request)):
                 return "I don't see anyone authorized in the room, so I can't change that right now."
             ok, eff = _ha_act(p_entity, p_action)
             if not ok:
@@ -1470,7 +1540,7 @@ def _handle_home_command(user_text: str, raw_request: Request, session_id: str) 
             return None                    # don't tease users who can't control devices anyway
         label, _, _ = _ha_label(r["entity"])
         if r["decision"] == "act":
-            if REQUIRE_PRESENCE_FOR_CONTROL and not _authorized_person_present():
+            if REQUIRE_PRESENCE_FOR_CONTROL and not _authorized_person_present(_household(raw_request)):
                 return "I don't see anyone authorized in the room, so I can't change that right now."
             ok, eff = _ha_act(r["entity"], r["action"])
             if not ok:
@@ -1513,7 +1583,7 @@ def _handle_home_command(user_text: str, raw_request: Request, session_id: str) 
         return semantic_route() or clarify_or_none()   # meaning first; then the device-y ask; else LLM
     if not _can_control_devices(raw_request):
         return "Sorry — you're not authorized to control devices."
-    if REQUIRE_PRESENCE_FOR_CONTROL and not _authorized_person_present():
+    if REQUIRE_PRESENCE_FOR_CONTROL and not _authorized_person_present(_household(raw_request)):
         return "I don't see anyone authorized in the room, so I can't change that right now."
     if cmd["action"] == "status":
         st = ha.get_state(entity)
@@ -1550,7 +1620,7 @@ TOOLS_SPEC = [
         "parameters": {"type": "object", "properties": {}}}},
 ]
 
-# HA tools are kept SEPARATE and merged per-request by _active_tools(): HA config is runtime-mutable
+# HA tools are kept SEPARATE and merged per-request by _active_tools(raw_request): HA config is runtime-mutable
 # (admin UI / DB), so an import-time `if ha.configured()` would freeze the menu — configuring HA via
 # the UI would never expose the tools to the model (the v2.5.0 bug).
 HA_TOOLS = [
@@ -1569,19 +1639,21 @@ HA_TOOLS = [
 ]
 
 
-def _active_tools():
-    """The tool menu offered to the model on THIS request — reflects live HA config."""
-    return TOOLS_SPEC + (HA_TOOLS if ha.configured() else [])
+def _active_tools(raw_request: Request):
+    """The tool menu offered to the model on THIS request — reflects live HA config AND whether the
+    caller's household owns the smart home. Withholding the tools (rather than refusing the call
+    afterwards) means a demo session has no vocabulary for home control at all."""
+    return TOOLS_SPEC + (HA_TOOLS if (ha.configured() and _owns_smart_home(raw_request)) else [])
 
 
 def _tool_set_volume(args, raw_request):
     if not _can_control_devices(raw_request):
         return "Sorry — you're not authorized to control devices."
-    if REQUIRE_PRESENCE_FOR_CONTROL and not _authorized_person_present():
+    if REQUIRE_PRESENCE_FOR_CONTROL and not _authorized_person_present(_household(raw_request)):
         return "I don't see anyone authorized in the room, so I can't change that right now."
     action, value = str(args.get("action", "set")).lower(), args.get("value")
     try:
-        _enqueue_volume(action, value, VOICE_DEVICE)
+        _enqueue_volume(_household(raw_request), action, value, VOICE_DEVICE)
     except HTTPException:
         return "I couldn't make that volume change."
     _audit(raw_request, "device.volume", f"{action} {value if value is not None else ''} (tool)".strip())
@@ -1611,15 +1683,16 @@ def _tool_create_reminder(args, raw_request):
 
 
 def _tool_get_presence(args, raw_request):
-    names = memory.get_present_people()
+    names = memory.get_present_people(_household(raw_request))
     return ("I can see " + ", ".join(names) + ".") if names else "I don't see anyone right now."
 
 
 def _tool_home_control(args, raw_request):
     if not _can_control_devices(raw_request):
         return "Sorry — you're not authorized to control devices."
-    if REQUIRE_PRESENCE_FOR_CONTROL and not _authorized_person_present():
+    if REQUIRE_PRESENCE_FOR_CONTROL and not _authorized_person_present(_household(raw_request)):
         return "I don't see anyone authorized in the room, so I can't change that right now."
+    _require_smart_home(raw_request)
     action = str(args.get("action", "")).lower()
     entity = ha.resolve_entity(str(args.get("device", "")))
     if entity is None:
@@ -1635,6 +1708,7 @@ def _tool_home_control(args, raw_request):
 def _tool_home_status(args, raw_request):
     if not _can_control_devices(raw_request):
         return "Sorry — you're not authorized to view device states."
+    _require_smart_home(raw_request)
     device = str(args.get("device") or "").strip()
     entities = [ha.resolve_entity(device)] if device else list(ha.HA_ALLOWED_ENTITIES)
     if not entities or entities[0] is None:
@@ -1698,6 +1772,24 @@ def _require_not_demo(detail: str = "Hardware & Home Assistant control is disabl
         raise HTTPException(status_code=403, detail=detail)
 
 
+def _owns_smart_home(request: Request) -> bool:
+    """True if the caller's household is the one this process's Home Assistant belongs to."""
+    return _HA_HOUSEHOLD_ID is not None and _household(request) == _HA_HOUSEHOLD_ID
+
+
+def _require_smart_home(request: Request) -> None:
+    """Gate every Home Assistant surface on owning the smart home.
+
+    This is the authorization check the whole household boundary exists to support: a household that
+    does not own the HA connection cannot read its config, enumerate its entities, or actuate
+    anything in it. Demo households never own one, so the demo has no smart home by construction —
+    not by a mode flag that someone could forget to check on a new route.
+    """
+    if not _owns_smart_home(request):
+        raise HTTPException(status_code=403,
+                            detail="No smart home is linked to your household.")
+
+
 @app.post("/devices/volume")
 def queue_volume(req: VolumeRequest, request: Request):
     """Enqueue a volume command for a device agent (e.g. the Windows volume agent).
@@ -1708,7 +1800,7 @@ def queue_volume(req: VolumeRequest, request: Request):
     _require_not_demo()
     if not _can_control_devices(request):
         raise HTTPException(status_code=403, detail="Not authorized to control devices")
-    cmd_id = _enqueue_volume(req.action, req.value, req.device)
+    cmd_id = _enqueue_volume(_household(request), req.action, req.value, req.device)
     _audit(request, "device.volume", f"{req.action} {req.value or ''} -> {req.device}".strip())
     return {"status": "ok", "id": cmd_id}
 
@@ -1734,7 +1826,7 @@ def report_gesture(req: GestureReport, request: Request):
         if abs(dy) >= _GESTURE_DEADZONE:
             step = max(-_GESTURE_STEP_CLAMP, min(int(round(dy * _GESTURE_GAIN)), _GESTURE_STEP_CLAMP))
             if step != 0:
-                _enqueue_volume("step", step, mode["target"])
+                _enqueue_volume(_household(request), "step", step, mode["target"])
     mode["last_y"] = req.y
     mode["expires"] = now + _GESTURE_TTL_S                 # refresh while the hand is active
     return {"active": True, "expires_in": int(mode["expires"] - now)}
@@ -1744,7 +1836,7 @@ def report_gesture(req: GestureReport, request: Request):
 _poll_sem = asyncio.Semaphore(16)
 
 
-def _claim_commands(device: str) -> List[Dict[str, Any]]:
+def _claim_commands(household_id: int, device: str) -> List[Dict[str, Any]]:
     """Atomically claim (mark delivered + return) pending commands for one device. A single
     UPDATE…RETURNING — not SELECT-then-UPDATE — so two concurrent pollers can't double-deliver
     the same command (the second writer finds nothing still 'pending')."""
@@ -1752,9 +1844,9 @@ def _claim_commands(device: str) -> List[Dict[str, Any]]:
     try:
         rows = conn.execute(
             "UPDATE device_commands SET status='delivered', delivered_at=datetime('now') "
-            "WHERE id IN (SELECT id FROM device_commands WHERE device_id = ? AND status='pending' "
-            "ORDER BY id LIMIT 50) RETURNING id, action, params",
-            (device,)).fetchall()
+            "WHERE id IN (SELECT id FROM device_commands WHERE household_id = ? AND device_id = ? "
+            "AND status='pending' ORDER BY id LIMIT 50) RETURNING id, action, params",
+            (household_id, device)).fetchall()
         conn.commit()
         return [{"id": r["id"], "action": r["action"], "params": json.loads(r["params"] or "{}")} for r in rows]
     finally:
@@ -1777,7 +1869,7 @@ async def pull_device_commands(request: Request, device: str, wait: int = 20):
     deadline = time.time() + wait
     async with _poll_sem:
         while True:
-            cmds = await run_in_threadpool(_claim_commands, device)
+            cmds = await run_in_threadpool(_claim_commands, _household(request), device)
             if cmds:
                 return {"commands": cmds}
             if time.time() >= deadline:
@@ -1805,15 +1897,18 @@ def ingest_event(req: EventRequest, request: Request):
         device_id = req.device_id        # admins may post synthetic/test events as any device
     else:
         raise HTTPException(status_code=403, detail="Only device-scoped API keys (or admins) may post events")
+    household_id = _household(request)
     conn = get_db()
     try:
         # Heartbeats are liveness pings, not events — keep only the latest per device (don't flood
         # vision_events) so the admin console can show the camera agent as active even in a quiet room.
         if req.type == "heartbeat":
             conn.execute(
-                "INSERT INTO device_heartbeats (device_id, last_seen) VALUES (?, CURRENT_TIMESTAMP) "
-                "ON CONFLICT(device_id) DO UPDATE SET last_seen = CURRENT_TIMESTAMP",
-                (device_id,),
+                "INSERT INTO device_heartbeats (device_id, household_id, last_seen) "
+                "VALUES (?, ?, CURRENT_TIMESTAMP) "
+                "ON CONFLICT(device_id) DO UPDATE SET last_seen = CURRENT_TIMESTAMP, "
+                "household_id = excluded.household_id",
+                (device_id, household_id),
             )
             # Opportunistically prune long-dead devices so the table can't grow unbounded (an admin
             # may post as any device_id) and the console doesn't list stale cameras forever.
@@ -1821,8 +1916,9 @@ def ingest_event(req: EventRequest, request: Request):
             conn.commit()
             return {"status": "ok"}
         cur = conn.execute(
-            "INSERT INTO vision_events (device_id, type, data, user_id) VALUES (?, ?, ?, ?)",
-            (device_id, req.type, json.dumps(req.data or {}), request.state.user_id),
+            "INSERT INTO vision_events (household_id, device_id, type, data, user_id) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (household_id, device_id, req.type, json.dumps(req.data or {}), request.state.user_id),
         )
         # Arrival detection: a recognized person not seen recently → emit a one-off presence_arrival
         # the UI announces ("welcome home"). Tracked in-memory so it's cheap on the events hot path.
@@ -1830,15 +1926,23 @@ def ingest_event(req: EventRequest, request: Request):
             nm = (req.data or {}).get("name")
             if nm and nm != "unknown":
                 now = time.time()
-                if now - _present_since.get(nm, 0.0) > ARRIVAL_GAP_S:
-                    conn.execute("INSERT INTO vision_events (device_id, type, data, user_id) VALUES (?, ?, ?, ?)",
-                                 (device_id, "presence_arrival", json.dumps({"name": nm}), request.state.user_id))
-                _present_since[nm] = now
+                # Keyed by (household, name): two households may each know an "Alice", and a bare
+                # name key would let one household's sighting suppress the other's arrival event.
+                seen_key = (household_id, nm)
+                if now - _present_since.get(seen_key, 0.0) > ARRIVAL_GAP_S:
+                    conn.execute(
+                        "INSERT INTO vision_events (household_id, device_id, type, data, user_id) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        (household_id, device_id, "presence_arrival", json.dumps({"name": nm}),
+                         request.state.user_id))
+                _present_since[seen_key] = now
         # Any real event also proves the device is alive — fold it into liveness too.
         conn.execute(
-            "INSERT INTO device_heartbeats (device_id, last_seen) VALUES (?, CURRENT_TIMESTAMP) "
-            "ON CONFLICT(device_id) DO UPDATE SET last_seen = CURRENT_TIMESTAMP",
-            (device_id,),
+            "INSERT INTO device_heartbeats (device_id, household_id, last_seen) "
+            "VALUES (?, ?, CURRENT_TIMESTAMP) "
+            "ON CONFLICT(device_id) DO UPDATE SET last_seen = CURRENT_TIMESTAMP, "
+            "household_id = excluded.household_id",
+            (device_id, household_id),
         )
         conn.execute("DELETE FROM vision_events WHERE id <= ?", (cur.lastrowid - VISION_EVENTS_CAP,))
         conn.commit()
@@ -1851,9 +1955,9 @@ def ingest_event(req: EventRequest, request: Request):
 @app.post("/chat/token-estimate")
 def chat_token_estimate(request: QueryRequest, raw_request: Request):
     """Return the current prompt size before generation, without persisting a turn."""
-    user_id, session_id, user_text = _validate_chat(request, raw_request)
+    user_id, household_id, session_id, user_text = _validate_chat(request, raw_request)
     completion_reserve = request.n_predict if (request.n_predict and request.n_predict > 0) else COMPLETION_RESERVE_DEFAULT
-    messages = chat.build_messages(session_id, user_id, user_text, request.system_prompt,
+    messages = chat.build_messages(session_id, user_id, household_id, user_text, request.system_prompt,
                                    completion_reserve=completion_reserve, reasoning=request.reasoning)
     result = count_prompt_tokens(messages)
     result["context_tokens"] = CONFIG["llm"].get("max_context_tokens", 4096)
@@ -1862,7 +1966,7 @@ def chat_token_estimate(request: QueryRequest, raw_request: Request):
 
 
 def _validate_chat(request: "QueryRequest", raw_request: Request):
-    """Shared front-matter for /inbox and /chat/stream: returns (user_id, session_id, user_text)."""
+    """Shared front-matter for /inbox and /chat/stream: returns (user_id, household_id, session_id, user_text)."""
     memory.update_activity()
     user_text = request.text.strip()
     # Attachments are deliberately kept in-band and labelled as untrusted reference
@@ -1891,9 +1995,10 @@ def _validate_chat(request: "QueryRequest", raw_request: Request):
     if sum(len(a.content) for a in request.attachments) > attachment_limit:
         raise HTTPException(status_code=400, detail="Attachments are limited to 48,000 characters total")
     user_id = raw_request.state.user_id
+    household_id = _household(raw_request)
     session_id = chat.resolve_session(request.session_id, user_id)
     chat.require_owned_session(session_id, user_id)
-    return user_id, session_id, user_text
+    return user_id, household_id, session_id, user_text
 
 
 def _maybe_title(needs_title: bool, session_id: str, user_id: int, user_text: str):
@@ -1917,7 +2022,7 @@ def _maybe_title(needs_title: bool, session_id: str, user_id: int, user_text: st
 
 @app.post("/inbox")
 def process_input(request: QueryRequest, raw_request: Request):
-    user_id, session_id, user_text = _validate_chat(request, raw_request)
+    user_id, household_id, session_id, user_text = _validate_chat(request, raw_request)
 
     # Fast-paths handled directly (instant, offline, no LLM): volume/gesture, then reminders.
     ack = (_handle_volume_command(user_text, raw_request) or _handle_reminder(user_text, raw_request)
@@ -1931,13 +2036,13 @@ def process_input(request: QueryRequest, raw_request: Request):
     existing = chat.get_recent_context(session_id)
     needs_title = (len(existing) == 0)
     completion_reserve = request.n_predict if (request.n_predict and request.n_predict > 0) else COMPLETION_RESERVE_DEFAULT
-    messages = chat.build_messages(session_id, user_id, user_text, request.system_prompt, completion_reserve=completion_reserve, reasoning=request.reasoning)
+    messages = chat.build_messages(session_id, user_id, household_id, user_text, request.system_prompt, completion_reserve=completion_reserve, reasoning=request.reasoning)
     max_tokens = chat.clamp_completion_for(messages, request.n_predict)
 
     t0 = time.time()
     with memory.Inflight():
         # One call with tools offered: the model either invokes a tool (a command) or just answers.
-        llm_resp = request_llm_tools(messages, _active_tools(), temperature=request.temperature, n_predict=max_tokens)
+        llm_resp = request_llm_tools(messages, _active_tools(raw_request), temperature=request.temperature, n_predict=max_tokens)
     t1 = time.time()
 
     msg = (llm_resp.get("choices") or [{}])[0].get("message", {})
@@ -1960,7 +2065,7 @@ def process_input(request: QueryRequest, raw_request: Request):
 
 @app.post("/chat/stream")
 def chat_stream(request: QueryRequest, raw_request: Request):
-    user_id, session_id, user_text = _validate_chat(request, raw_request)
+    user_id, household_id, session_id, user_text = _validate_chat(request, raw_request)
 
     # Fast-paths (volume/gesture, reminders) short-circuit the LLM and stream back the ack.
     ack = (_handle_volume_command(user_text, raw_request) or _handle_reminder(user_text, raw_request)
@@ -1981,7 +2086,7 @@ def chat_stream(request: QueryRequest, raw_request: Request):
     existing = chat.get_recent_context(session_id)
     needs_title = (len(existing) == 0)
     completion_reserve = request.n_predict if (request.n_predict and request.n_predict > 0) else COMPLETION_RESERVE_DEFAULT
-    messages = chat.build_messages(session_id, user_id, user_text, request.system_prompt, completion_reserve=completion_reserve, reasoning=request.reasoning)
+    messages = chat.build_messages(session_id, user_id, household_id, user_text, request.system_prompt, completion_reserve=completion_reserve, reasoning=request.reasoning)
     max_tokens = chat.clamp_completion_for(messages, request.n_predict)
 
     def event_generator():
@@ -2060,8 +2165,11 @@ def admin_create_user(req: CreateUserRequest, request: Request):
     try:
         conn.execute("BEGIN IMMEDIATE")               # serialize id selection against concurrent creates
         new_id = _lowest_free_user_id(conn)           # reuse a freed id, but only a residue-free one
-        conn.execute("INSERT INTO users (id, username, password_hash, role) VALUES (?, ?, ?, ?)",
-                     (new_id, req.username, hash_password(req.password), req.role))
+        # New accounts join the CREATING admin's household — there is deliberately no way to
+        # create a user into someone else's, so an admin cannot plant an account in another home.
+        conn.execute(
+            "INSERT INTO users (id, username, password_hash, role, household_id) VALUES (?, ?, ?, ?, ?)",
+            (new_id, req.username, hash_password(req.password), req.role, _household(request)))
         conn.commit()
         _audit(request, "user.create", f"{req.username} role={req.role} id={new_id}")
         return {"status": "ok", "id": new_id}
@@ -2084,8 +2192,9 @@ def admin_list_users(request: Request):
             FROM users u
             LEFT JOIN chat_sessions c ON u.id = c.user_id
             LEFT JOIN conversation_history m ON c.id = m.session_id
+            WHERE u.household_id = ?
             GROUP BY u.id
-        """).fetchall()
+        """, (_household(request),)).fetchall()
         return {"users": [dict(u) for u in users]}
     finally:
         conn.close()
@@ -2144,12 +2253,16 @@ def admin_delete_user(user_id: int, request: Request):
     conn = get_db()
     try:
         conn.execute("BEGIN IMMEDIATE")     # serialize the count check + deletes (no TOCTOU lockout race)
-        target = conn.execute("SELECT role FROM users WHERE id = ?", (user_id,)).fetchone()
+        household_id = _household(request)
+        target = conn.execute("SELECT role FROM users WHERE id = ? AND household_id = ?",
+                              (user_id, household_id)).fetchone()
         if target is None:
             raise HTTPException(status_code=404, detail="No such user")
-        # Never allow removing the last admin — it would lock everyone out of the console.
-        if target["role"] == "admin" and \
-           conn.execute("SELECT COUNT(*) AS n FROM users WHERE role='admin'").fetchone()["n"] <= 1:
+        # Never allow removing a household's last admin — it would lock that household out of its
+        # own console. The count is per-household: another home's admins are no help here.
+        if target["role"] == "admin" and conn.execute(
+                "SELECT COUNT(*) AS n FROM users WHERE role='admin' AND household_id = ?",
+                (household_id,)).fetchone()["n"] <= 1:
             raise HTTPException(status_code=400, detail="Cannot delete the last admin")
         all_msg_ids = _purge_user(conn, user_id)
         conn.commit()
@@ -2172,14 +2285,17 @@ def admin_set_role(user_id: int, req: RoleUpdateRequest, request: Request):
     _require_admin(request)
     conn = get_db()
     try:
-        if conn.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)).fetchone() is None:
+        household_id = _household(request)
+        if conn.execute("SELECT 1 FROM users WHERE id = ? AND household_id = ?",
+                        (user_id, household_id)).fetchone() is None:
             raise HTTPException(status_code=404, detail="No such user")
         # Atomic guard (no separate count→update, so no TOCTOU race): the demote applies only if it
-        # won't drop the admin count to zero.
+        # won't drop THIS household's admin count to zero.
         cur = conn.execute(
-            "UPDATE users SET role = ? WHERE id = ? AND "
-            "(? != 'user' OR role != 'admin' OR (SELECT COUNT(*) FROM users WHERE role='admin') > 1)",
-            (req.role, user_id, req.role))
+            "UPDATE users SET role = ? WHERE id = ? AND household_id = ? AND "
+            "(? != 'user' OR role != 'admin' OR "
+            " (SELECT COUNT(*) FROM users WHERE role='admin' AND household_id = ?) > 1)",
+            (req.role, user_id, household_id, req.role, household_id))
         conn.commit()
         if cur.rowcount == 0:
             raise HTTPException(status_code=400, detail="Cannot demote the last admin")
@@ -2193,7 +2309,13 @@ def admin_set_role(user_id: int, req: RoleUpdateRequest, request: Request):
 def admin_ha_get(request: Request):
     """Current HA config for the admin UI. Never returns the token itself — only whether one is set."""
     _require_admin(request)
+    if not _owns_smart_home(request):
+        # Not an error for a household without a smart home — just nothing to show. Reporting
+        # "unconfigured" rather than 403 also avoids confirming that some OTHER household has one.
+        return {"configured": False, "url": "", "token_set": False, "allowed_entities": [],
+                "env_managed": False, "connected": False, "owned": False}
     return {
+        "owned": True,
         "configured": ha.configured(),
         "url": ha.HA_URL,
         "token_set": bool(ha.HA_TOKEN),
@@ -2207,16 +2329,18 @@ def admin_ha_get(request: Request):
 def admin_ha_put(req: HAConfigRequest, request: Request):
     """Save HA config (url/token/allowlist) to the DB and apply it live — no restart."""
     _require_admin(request)
+    _require_smart_home(request)
     if HA_URL_FROM_ENV or HA_TOKEN_FROM_ENV:
         raise HTTPException(status_code=409,
                             detail="Home Assistant is configured via environment variables — edit those instead.")
+    hid = _household(request)
     url = (req.url or "").rstrip("/")
-    set_setting("ha_url", url)
+    set_household_setting(hid, "ha_url", url)
     if req.token:                                   # blank = keep the existing token
-        set_setting("ha_token", req.token)
-    token = get_setting("ha_token") or ""
+        set_household_setting(hid, "ha_token", req.token)
+    token = get_household_setting(hid, "ha_token") or ""
     allowed = list(req.allowed_entities if req.allowed_entities is not None else ha.HA_ALLOWED_ENTITIES)
-    set_setting("ha_allowed_entities", json.dumps(allowed))
+    set_household_setting(hid, "ha_allowed_entities", json.dumps(allowed))
     ha.configure(url=url, token=token, allowed=allowed)
     _rebuild_intent_router()
     _audit(request, "ha.config", f"url={url or '(cleared)'} entities={len(allowed)}")
@@ -2227,6 +2351,7 @@ def admin_ha_put(req: HAConfigRequest, request: Request):
 def admin_ha_test(req: HAConfigRequest, request: Request):
     """Probe a URL/token (blank token = use the stored one) before saving."""
     _require_admin(request)
+    _require_smart_home(request)
     ok, detail = ha.test_connection(req.url, req.token or ha.HA_TOKEN)
     return {"ok": ok, "detail": detail}
 
@@ -2235,6 +2360,7 @@ def admin_ha_test(req: HAConfigRequest, request: Request):
 def admin_ha_entities(request: Request):
     """Controllable HA entities for the device picker (uses the currently-saved connection)."""
     _require_admin(request)
+    _require_smart_home(request)
     return {"entities": ha.list_entities()}
 
 
@@ -2243,7 +2369,10 @@ def admin_create_key(req: CreateKeyRequest, request: Request):
     _require_admin(request)
     conn = get_db()
     try:
-        if not conn.execute("SELECT 1 FROM users WHERE id = ?", (req.user_id,)).fetchone():
+        # A key may only ever be minted FOR a member of the admin's own household — otherwise an
+        # admin could issue themselves a credential that authenticates as another household's user.
+        if not conn.execute("SELECT 1 FROM users WHERE id = ? AND household_id = ?",
+                            (req.user_id, _household(request))).fetchone():
             raise HTTPException(status_code=400, detail="No such user")
         new_key = "jk-" + secrets.token_hex(16)
         device_id = (req.device_id or "").strip() or None     # "" → NULL (unbound), like the CLI
@@ -2264,8 +2393,11 @@ def admin_list_keys(request: Request):
     conn = get_db()
     try:
         keys = conn.execute(
-            "SELECT rowid AS id, key_prefix, user_id, description, device_id, created_at, usage_count, last_used_at "
-            "FROM api_keys ORDER BY created_at DESC").fetchall()
+            "SELECT k.rowid AS id, k.key_prefix, k.user_id, k.description, k.device_id, "
+            "       k.created_at, k.usage_count, k.last_used_at "
+            "FROM api_keys k JOIN users u ON k.user_id = u.id "
+            "WHERE u.household_id = ? ORDER BY k.created_at DESC",
+            (_household(request),)).fetchall()
         # Display the prefix only — the full key is never recoverable (hash at rest).
         return {"keys": [{**dict(k), "key_string": (k["key_prefix"] or "jk-") + "…"} for k in keys]}
     finally:
@@ -2277,7 +2409,10 @@ def admin_delete_key(key_id: int, request: Request):
     _require_admin(request)
     conn = get_db()
     try:
-        conn.execute("DELETE FROM api_keys WHERE rowid = ?", (key_id,))
+        conn.execute(
+            "DELETE FROM api_keys WHERE rowid = ? AND user_id IN "
+            "(SELECT id FROM users WHERE household_id = ?)",
+            (key_id, _household(request)))
         conn.commit()
         _audit(request, "key.delete", f"id={key_id}")
         return {"status": "ok"}
@@ -2290,10 +2425,18 @@ def admin_stats(request: Request):
     _require_admin(request)
     conn = get_db()
     try:
+        hid = _household(request)
+        # Counts are scoped too — an instance-wide total would tell a demo visitor how many real
+        # users and conversations exist on the box.
         return {
-            "users": conn.execute("SELECT COUNT(*) FROM users").fetchone()[0],
-            "chats": conn.execute("SELECT COUNT(*) FROM chat_sessions").fetchone()[0],
-            "messages": conn.execute("SELECT COUNT(*) FROM conversation_history").fetchone()[0],
+            "users": conn.execute("SELECT COUNT(*) FROM users WHERE household_id = ?", (hid,)).fetchone()[0],
+            "chats": conn.execute(
+                "SELECT COUNT(*) FROM chat_sessions s JOIN users u ON s.user_id = u.id "
+                "WHERE u.household_id = ?", (hid,)).fetchone()[0],
+            "messages": conn.execute(
+                "SELECT COUNT(*) FROM conversation_history h "
+                "JOIN chat_sessions s ON h.session_id = s.id JOIN users u ON s.user_id = u.id "
+                "WHERE u.household_id = ?", (hid,)).fetchone()[0],
         }
     finally:
         conn.close()
@@ -2307,8 +2450,9 @@ def admin_events(request: Request, limit: int = 50, type: Optional[str] = None, 
     limit = max(1, min(limit, 500))
     conn = get_db()
     try:
-        q = "SELECT id, device_id, type, data, created_at FROM vision_events WHERE id > ?"
-        params: List[Any] = [since_id]
+        q = ("SELECT id, device_id, type, data, created_at FROM vision_events "
+             "WHERE household_id = ? AND id > ?")
+        params: List[Any] = [_household(request), since_id]
         if type:
             q += " AND type = ?"
             params.append(type)
@@ -2334,14 +2478,19 @@ def admin_list_faces(request: Request):
     _require_admin(request)
     conn = get_db()
     try:
+        # The last_seen subquery matches on NAME, so it needs the household filter too — without
+        # it, a namesake in another household would set this household's "last seen" timestamp and
+        # leak the fact that someone by that name was sighted elsewhere.
         rows = conn.execute(
             "SELECT p.id, p.name, p.user_id, u.username, p.created_at, "
             "  COUNT(e.id) AS embedding_count, "
             "  (SELECT MAX(v.created_at) FROM vision_events v "
-            "     WHERE v.type='face_seen' AND json_extract(v.data,'$.name')=p.name) AS last_seen "
+            "     WHERE v.household_id = p.household_id AND v.type='face_seen' "
+            "       AND json_extract(v.data,'$.name')=p.name) AS last_seen "
             "FROM persons p LEFT JOIN users u ON p.user_id = u.id "
             "LEFT JOIN face_embeddings e ON e.person_id = p.id "
-            "GROUP BY p.id ORDER BY p.name").fetchall()
+            "WHERE p.household_id = ? "
+            "GROUP BY p.id ORDER BY p.name", (_household(request),)).fetchall()
         return {"faces": [dict(r) for r in rows]}
     finally:
         conn.close()
@@ -2353,7 +2502,8 @@ def admin_list_embeddings(person_id: int, request: Request):
     _require_admin(request)
     conn = get_db()
     try:
-        if not conn.execute("SELECT 1 FROM persons WHERE id = ?", (person_id,)).fetchone():
+        if not conn.execute("SELECT 1 FROM persons WHERE id = ? AND household_id = ?",
+                            (person_id, _household(request))).fetchone():
             raise HTTPException(status_code=404, detail="No such person")
         rows = conn.execute(
             "SELECT id, source, created_at FROM face_embeddings WHERE person_id = ? ORDER BY id",
@@ -2369,17 +2519,23 @@ def admin_update_face(person_id: int, req: FaceUpdateRequest, request: Request):
     (so a rename can't clobber the link); send user_id=null to clear the link."""
     _require_admin(request)
     fields = req.model_fields_set
+    household_id = _household(request)
     conn = get_db()
     try:
-        if not conn.execute("SELECT 1 FROM persons WHERE id = ?", (person_id,)).fetchone():
+        if not conn.execute("SELECT 1 FROM persons WHERE id = ? AND household_id = ?",
+                            (person_id, household_id)).fetchone():
             raise HTTPException(status_code=404, detail="No such person")
         if "name" in fields and req.name:
-            if conn.execute("SELECT 1 FROM persons WHERE name = ? AND id != ?",
-                            (req.name.strip(), person_id)).fetchone():
+            if conn.execute("SELECT 1 FROM persons WHERE name = ? AND household_id = ? AND id != ?",
+                            (req.name.strip(), household_id, person_id)).fetchone():
                 raise HTTPException(status_code=400, detail="A person with that name already exists")
             conn.execute("UPDATE persons SET name = ? WHERE id = ?", (req.name.strip(), person_id))
         if "user_id" in fields:
-            if req.user_id is not None and not conn.execute("SELECT 1 FROM users WHERE id = ?", (req.user_id,)).fetchone():
+            # The target account must be in the SAME household — otherwise a face here could be
+            # linked to a user over there, handing them this household's device authorization.
+            if req.user_id is not None and not conn.execute(
+                    "SELECT 1 FROM users WHERE id = ? AND household_id = ?",
+                    (req.user_id, household_id)).fetchone():
                 raise HTTPException(status_code=400, detail="No such user")
             conn.execute("UPDATE persons SET user_id = ? WHERE id = ?", (req.user_id, person_id))
         conn.commit()
@@ -2394,8 +2550,14 @@ def admin_delete_face(person_id: int, request: Request):
     _require_admin(request)
     conn = get_db()
     try:
-        conn.execute("DELETE FROM face_embeddings WHERE person_id = ?", (person_id,))
-        cur = conn.execute("DELETE FROM persons WHERE id = ?", (person_id,))
+        household_id = _household(request)
+        # Scope the person delete, and drop embeddings only for a person that is actually ours —
+        # otherwise a guessed id would wipe another household's biometric data.
+        conn.execute("DELETE FROM face_embeddings WHERE person_id IN "
+                     "(SELECT id FROM persons WHERE id = ? AND household_id = ?)",
+                     (person_id, household_id))
+        cur = conn.execute("DELETE FROM persons WHERE id = ? AND household_id = ?",
+                           (person_id, household_id))
         conn.commit()
         if cur.rowcount == 0:
             raise HTTPException(status_code=404, detail="No such person")
@@ -2411,7 +2573,10 @@ def admin_delete_embedding(embedding_id: int, request: Request):
     _require_admin(request)
     conn = get_db()
     try:
-        cur = conn.execute("DELETE FROM face_embeddings WHERE id = ?", (embedding_id,))
+        cur = conn.execute(
+            "DELETE FROM face_embeddings WHERE id = ? AND person_id IN "
+            "(SELECT id FROM persons WHERE household_id = ?)",
+            (embedding_id, _household(request)))
         conn.commit()
         if cur.rowcount == 0:
             raise HTTPException(status_code=404, detail="No such embedding")
@@ -2427,17 +2592,20 @@ def admin_create_enroll_request(req: EnrollRequestCreate, request: Request):
     _require_admin(request)
     conn = get_db()
     try:
+        household_id = _household(request)
         name = req.name.strip() if req.name else None
         if req.user_id is not None:
-            urow = conn.execute("SELECT username FROM users WHERE id = ?", (req.user_id,)).fetchone()
+            urow = conn.execute("SELECT username FROM users WHERE id = ? AND household_id = ?",
+                                (req.user_id, household_id)).fetchone()
             if not urow:
                 raise HTTPException(status_code=400, detail="No such user")
             name = name or urow["username"]        # default the person's name to the account's
         if not name:
             raise HTTPException(status_code=400, detail="Pick a user (or pass a name)")
         cur = conn.execute(
-            "INSERT INTO enroll_requests (device_id, name, user_id, requested_by) VALUES (?, ?, ?, ?)",
-            (req.device_id, name, req.user_id, request.state.user_id))
+            "INSERT INTO enroll_requests (household_id, device_id, name, user_id, requested_by) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (household_id, req.device_id, name, req.user_id, request.state.user_id))
         conn.execute("DELETE FROM enroll_requests WHERE created_at < datetime('now', '-7 days')")
         conn.commit()
         _audit(request, "face.enroll_request", f"{name} -> {req.device_id}")
@@ -2462,7 +2630,8 @@ def admin_list_enroll_requests(request: Request):
         conn.commit()
         rows = conn.execute(
             "SELECT id, device_id, name, status, detail, created_at, completed_at "
-            "FROM enroll_requests ORDER BY id DESC LIMIT 20").fetchall()
+            "FROM enroll_requests WHERE household_id = ? ORDER BY id DESC LIMIT 20",
+            (_household(request),)).fetchall()
         return {"requests": [dict(r) for r in rows]}
     finally:
         conn.close()
@@ -2511,7 +2680,7 @@ def remove_knowledge(fact_id: int, request: Request):
 def list_global_knowledge(request: Request):
     """Household/global facts (shared by all users). Admin-only — these go into everyone's prompt."""
     _require_admin(request)
-    facts = memory.get_global_knowledge_list()
+    facts = memory.get_global_knowledge_list(_household(request))
     return {"facts": facts, "count": len(facts)}
 
 
@@ -2525,7 +2694,7 @@ def add_global_knowledge(req: KnowledgeFactRequest, request: Request):
     category = (req.category or "other").lower().strip()
     if category not in VALID_FACT_CATEGORIES:
         category = "other"
-    fact_id = memory.store_global_fact(category, content, source="manual")
+    fact_id = memory.store_global_fact(_household(request), category, content, source="manual")
     _audit(request, "knowledge.global.add", f"[{category}] {content[:120]}")
     return {"id": fact_id, "status": "ok"}
 
@@ -2536,7 +2705,7 @@ def edit_global_knowledge(fact_id: int, req: KnowledgeFactRequest, request: Requ
     content = req.content.strip()
     if not content:
         raise HTTPException(status_code=400, detail="Empty content")
-    if not memory.update_global_fact(fact_id, content,
+    if not memory.update_global_fact(_household(request), fact_id, content,
                                      req.category.lower().strip() if req.category else None):
         raise HTTPException(status_code=404, detail="No such fact")
     return {"status": "ok"}
@@ -2545,7 +2714,7 @@ def edit_global_knowledge(fact_id: int, req: KnowledgeFactRequest, request: Requ
 @app.delete("/admin/knowledge/global/{fact_id}")
 def remove_global_knowledge(fact_id: int, request: Request):
     _require_admin(request)
-    if not memory.delete_global_fact(fact_id):
+    if not memory.delete_global_fact(_household(request), fact_id):
         raise HTTPException(status_code=404, detail="No such fact")
     _audit(request, "knowledge.global.delete", f"id={fact_id}")
     return {"status": "ok"}
@@ -2559,11 +2728,11 @@ def global_knowledge_chat(req: GlobalChatRequest, request: Request):
     lines = [ln.strip() for ln in req.text.splitlines() if ln.strip()]
     if not lines:
         raise HTTPException(status_code=400, detail="Nothing to save")
-    saved = [{"id": memory.store_global_fact("household", ln, source="global-chat"), "content": ln}
+    saved = [{"id": memory.store_global_fact(_household(request), "household", ln, source="global-chat"), "content": ln}
              for ln in lines]
     _audit(request, "knowledge.global.chat", f"+{len(saved)} fact(s)")
     return {"reply": f"Saved {len(saved)} fact{'s' if len(saved) != 1 else ''} to household knowledge.",
-            "saved": saved, "count": len(memory.get_global_knowledge_list())}
+            "saved": saved, "count": len(memory.get_global_knowledge_list(_household(request)))}
 
 
 @app.post("/knowledge/extract-now")

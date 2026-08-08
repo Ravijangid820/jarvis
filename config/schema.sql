@@ -5,12 +5,31 @@
 -- so the old FTS5 search tables / triggers and the unused semantic_facts table were
 -- removed — they fired on every insert/delete but were never queried.
 
+-- A household is the tenant boundary: an admin owns one, its users belong to it, and its smart
+-- home, faces, cameras and household knowledge are visible ONLY inside it. Everything that used
+-- to be instance-global carries a household_id so two households can share one deployment
+-- without seeing each other. Household 1 ("Home") is created at init and owns all pre-existing
+-- rows, so a single-household deployment behaves exactly as before.
+--
+-- A DEMO household (is_demo=1) is the same structure with an expiry: it is minted on demand for
+-- a public visitor, is never linked to a smart home, and is purged whole on logout or at
+-- expires_at. Demo isolation is therefore not a special case — it is household isolation.
+CREATE TABLE IF NOT EXISTS households (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    is_demo INTEGER NOT NULL DEFAULT 0,
+    expires_at DATETIME,                     -- NULL = permanent; set for demo households
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_households_expiry ON households(is_demo, expires_at);
+
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
     role TEXT DEFAULT 'user',
     can_control_devices INTEGER DEFAULT 0,   -- may trigger device actions (lights/volume); admins always may
+    household_id INTEGER REFERENCES households(id),
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -68,10 +87,14 @@ CREATE TABLE IF NOT EXISTS user_knowledge (
 CREATE INDEX IF NOT EXISTS idx_knowledge_user ON user_knowledge(user_id);
 CREATE INDEX IF NOT EXISTS idx_knowledge_category ON user_knowledge(user_id, category);
 
--- Household / GLOBAL knowledge: facts common to everyone in the home (rooms, address, members,
--- device locations). Admin-curated only; injected into every user's prompt. No user_id — shared.
+-- Household knowledge: facts common to everyone in ONE home (rooms, address, members, device
+-- locations). Admin-curated; injected into the prompt of every user in that household — and only
+-- them. No user_id (it is shared within the household), but household_id is mandatory in
+-- practice: this table holds the home address and family names, so an unscoped read is the
+-- single worst leak in the schema.
 CREATE TABLE IF NOT EXISTS global_knowledge (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    household_id INTEGER REFERENCES households(id),
     category TEXT NOT NULL DEFAULT 'other',
     content TEXT NOT NULL,
     source TEXT DEFAULT 'manual',
@@ -94,6 +117,7 @@ CREATE INDEX IF NOT EXISTS idx_reminders_user ON reminders(user_id, status, due_
 CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    household_id INTEGER,
     user_id INTEGER,
     username TEXT,
     action TEXT NOT NULL,
@@ -104,6 +128,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_id ON audit_log(id DESC);
 -- Vision/edge events posted by edge devices (Raspberry Pi camera agent). `data` is JSON.
 CREATE TABLE IF NOT EXISTS vision_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    household_id INTEGER REFERENCES households(id),
     device_id TEXT NOT NULL,
     type TEXT NOT NULL,
     data TEXT,
@@ -116,6 +141,7 @@ CREATE INDEX IF NOT EXISTS idx_vision_events_recent ON vision_events(id DESC);
 -- pending commands (no inbound port on the device); the orchestrator only ever enqueues.
 CREATE TABLE IF NOT EXISTS device_commands (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    household_id INTEGER REFERENCES households(id),
     device_id TEXT NOT NULL,
     action TEXT NOT NULL,
     params TEXT,
@@ -129,9 +155,12 @@ CREATE INDEX IF NOT EXISTS idx_device_commands_pending ON device_commands(device
 -- per-user authorization. Each person can have MANY face embeddings (different angles/lighting),
 -- which recognition matches against (best of all) for robustness. Only vectors are stored, never
 -- imagery; runtime recognition runs on the edge.
+-- `name` is unique WITHIN a household, not globally: two households may each know an "Alice",
+-- and a demo visitor enrolling their own name must not collide with (or reveal) a real one.
 CREATE TABLE IF NOT EXISTS persons (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL UNIQUE,
+    household_id INTEGER REFERENCES households(id),
+    name TEXT NOT NULL,
     user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -156,11 +185,25 @@ CREATE TABLE IF NOT EXISTS app_settings (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Per-household runtime settings — same key/value shape as app_settings, but scoped to one
+-- tenant. The Home Assistant connection (ha_url / ha_token / ha_allowed_entities) lives HERE,
+-- not in app_settings: a smart home belongs to the household that owns it, so one household's
+-- admin can never see or drive another's. Demo households simply never get these keys, which is
+-- what makes "no smart home in the demo" a property of the data rather than a route guard.
+CREATE TABLE IF NOT EXISTS household_settings (
+    household_id INTEGER NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+    key          TEXT NOT NULL,
+    value        TEXT,
+    updated_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (household_id, key)
+);
+
 -- Liveness for edge devices (camera agents). The agent posts a periodic `heartbeat` event; we keep
 -- only the latest timestamp per device (not in vision_events, to avoid flooding it) so the admin
 -- console can show each camera as active (recent heartbeat) or inactive (stale / never seen).
 CREATE TABLE IF NOT EXISTS device_heartbeats (
     device_id TEXT PRIMARY KEY,
+    household_id INTEGER REFERENCES households(id),
     last_seen DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -169,6 +212,7 @@ CREATE TABLE IF NOT EXISTS device_heartbeats (
 -- rights — it can only fulfill a request an admin already created for IT.
 CREATE TABLE IF NOT EXISTS enroll_requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    household_id INTEGER REFERENCES households(id),
     device_id TEXT NOT NULL,
     name TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending',     -- pending | done | failed

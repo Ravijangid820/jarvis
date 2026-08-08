@@ -14,6 +14,27 @@ import ha  # noqa: E402
 
 ALLOW = ["input_boolean.test_light", "light.kitchen", "light.living_room", "switch.desk_fan"]
 
+class _FakeState:
+    """Minimal stand-in for request.state — enough for the household/authz lookups."""
+    def __init__(self, user_id=1, household_id=1, is_admin=True):
+        self.user_id = user_id
+        self.household_id = household_id
+        self.is_admin = is_admin
+        self.device_id = None
+
+
+class _FakeRequest:
+    def __init__(self, **kw):
+        self.state = _FakeState(**kw)
+
+
+def _req(**kw):
+    """A principal in household 1 — the household that owns the smart home in these tests.
+    The home fast-path and the HA tools now require one: they check that the CALLER's household
+    actually owns the smart home before touching Home Assistant."""
+    return _FakeRequest(**kw)
+
+
 
 # --- resolve_entity: the allowlist guard the tool executor relies on ---------
 
@@ -173,12 +194,12 @@ def test_ha_tools_offered_only_when_configured(monkeypatch):
     import main
     monkeypatch.setattr(ha, "HA_URL", "")
     monkeypatch.setattr(ha, "HA_TOKEN", "")
-    names = [t["function"]["name"] for t in main._active_tools()]
+    names = [t["function"]["name"] for t in main._active_tools(_req())]
     assert "set_volume" in names and "home_control" not in names
     # configure at RUNTIME (what the admin UI does) -> tools appear on the next request
     monkeypatch.setattr(ha, "HA_URL", "http://ha.test:8123")
     monkeypatch.setattr(ha, "HA_TOKEN", "tok")
-    names = [t["function"]["name"] for t in main._active_tools()]
+    names = [t["function"]["name"] for t in main._active_tools(_req())]
     assert "home_control" in names and "home_status" in names
 
 
@@ -216,19 +237,19 @@ def test_switch_it_off_uses_last_device(monkeypatch):
     main._LAST_HOME_ENTITY.clear()
 
     # no referent yet -> asks, does NOT act, does NOT fall through (None would mean LLM)
-    reply = main._handle_home_command("switch it off", None, "s1")
+    reply = main._handle_home_command("switch it off", _req(), "s1")
     assert reply is not None and "which device" in reply.lower() and turned == []
 
     # name the device -> acts + remembers
-    assert "fan is now on" in main._handle_home_command("switch on the fan", None, "s1").lower()
+    assert "fan is now on" in main._handle_home_command("switch on the fan", _req(), "s1").lower()
     assert turned == [("input_boolean.desk_fan", "on")]
 
     # pronoun now resolves to the fan
-    assert "fan is now off" in main._handle_home_command("switch it off", None, "s1").lower()
+    assert "fan is now off" in main._handle_home_command("switch it off", _req(), "s1").lower()
     assert turned[-1] == ("input_boolean.desk_fan", "off")
 
     # a DIFFERENT session has no referent -> asks again (no cross-session leakage)
-    reply = main._handle_home_command("turn it on", None, "s2")
+    reply = main._handle_home_command("turn it on", _req(), "s2")
     assert reply is not None and "which device" in reply.lower()
 
 
@@ -284,11 +305,11 @@ def test_run_via_fast_path_and_start_the_fan_means_on(monkeypatch):
     monkeypatch.setattr(main, "_audit", lambda *a, **k: None)
     main._LAST_HOME_ENTITY.clear()
 
-    reply = main._handle_home_command("run the movie night automation", None, "s1")
+    reply = main._handle_home_command("run the movie night automation", _req(), "s1")
     assert "running the movie night automation now" in reply.lower()
     assert actions[-1] == ("run", "automation.movie_night")
 
-    reply = main._handle_home_command("start the fan", None, "s1")   # run on a plain device = on
+    reply = main._handle_home_command("start the fan", _req(), "s1")   # run on a plain device = on
     assert "fan is now on" in reply.lower()
     assert actions[-1] == ("on", "switch.desk_fan")
 
@@ -317,17 +338,17 @@ def test_stop_vs_disable_semantics(monkeypatch):
     monkeypatch.setattr(main, "_audit", lambda *a, **k: None)
     main._LAST_HOME_ENTITY.clear()
 
-    reply = main._handle_home_command("stop morning automation", None, "s1")
+    reply = main._handle_home_command("stop morning automation", _req(), "s1")
     assert "stopped the morning automation" in reply.lower() and "stays enabled" in reply.lower()
     assert actions[-1] == ("stop", "automation.morning")     # NOT ("off", ...) — stays enabled
 
-    assert "morning automation is disabled" in main._handle_home_command("disable the morning automation", None, "s1").lower()
+    assert "morning automation is disabled" in main._handle_home_command("disable the morning automation", _req(), "s1").lower()
     assert actions[-1] == ("off", "automation.morning")      # explicit disable -> off
 
-    assert "morning automation is enabled" in main._handle_home_command("enable morning automation", None, "s1").lower()
+    assert "morning automation is enabled" in main._handle_home_command("enable morning automation", _req(), "s1").lower()
     assert actions[-1] == ("on", "automation.morning")
 
-    assert "fan is now off" in main._handle_home_command("stop the fan", None, "s1").lower()
+    assert "fan is now off" in main._handle_home_command("stop the fan", _req(), "s1").lower()
     assert actions[-1] == ("off", "switch.desk_fan")          # plain device: stop = off
 
 
@@ -364,13 +385,13 @@ def test_antibluff_guard_asks_instead_of_reaching_the_llm(monkeypatch):
     monkeypatch.setattr(ha, "HA_URL", "http://ha.test:8123")
     monkeypatch.setattr(ha, "HA_TOKEN", "tok")
     monkeypatch.setattr(ha, "HA_ALLOWED_ENTITIES", ["automation.morning"])
-    reply = main._handle_home_command("morning automation stop please now thanks", None, "s1")
+    reply = main._handle_home_command("morning automation stop please now thanks", _req(), "s1")
     assert reply is not None and "morning" in reply.lower()
 
     # ordinary sentences (no allowlisted device) still reach the LLM untouched
-    assert main._handle_home_command("stop telling me jokes", None, "s1") is None
+    assert main._handle_home_command("stop telling me jokes", _req(), "s1") is None
     # device named but NO control verb (just chatting about it) -> LLM is fine
-    assert main._handle_home_command("the morning automation is my favorite", None, "s1") is None
+    assert main._handle_home_command("the morning automation is my favorite", _req(), "s1") is None
 
 
 

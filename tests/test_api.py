@@ -33,10 +33,12 @@ import main  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 
-def _seed_user(username, password, role):
+def _seed_user(username, password, role, household_id=1):
+    """Seed a user. household_id defaults to 1 — the primary household every migration backfills
+    into — so the existing single-tenant tests read as before; the isolation tests pass a second."""
     c = sqlite3.connect(_DB)
-    c.execute("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
-              (username, auth.hash_password(password), role))
+    c.execute("INSERT INTO users (username, password_hash, role, household_id) VALUES (?, ?, ?, ?)",
+              (username, auth.hash_password(password), role, household_id))
     c.commit()
     c.close()
 
