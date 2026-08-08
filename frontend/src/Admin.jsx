@@ -1,4 +1,5 @@
 import { useState, useEffect, Fragment } from 'react'
+import { confirmDialog, promptDialog } from './notify.js'
 
 // Admin console, rendered by App when the path is /admin and the user is an admin.
 // Lives in the React app so it inherits the HUD styling, fonts, and active theme.
@@ -201,12 +202,12 @@ export default function Admin({ token, onExit, apiBase = "" }) {
     catch (e) { setErr(e.message) }
   }
   const delUser = async (id) => {
-    if (!confirm("Terminate this user and purge their data?")) return
+    if (!await confirmDialog("Terminate this user and purge their data?", { title: "Delete user", confirmLabel: "Terminate", danger: true })) return
     try { await api("/admin/users/" + id, "DELETE"); load() } catch (e) { setErr(e.message) }
   }
   const setRole = async (id, role) => {
     const verb = role === "admin" ? "Grant admin clearance to" : "Revoke admin clearance from"
-    if (!confirm(verb + " this user?")) return
+    if (!await confirmDialog(verb + " this user?", { title: "Change clearance", confirmLabel: role === "admin" ? "Grant" : "Revoke" })) return
     try { await api("/admin/users/" + id + "/role", "PUT", { role }); load() } catch (e) { setErr(e.message) }
   }
   const adminCount = users.filter(u => u.role === "admin").length
@@ -219,11 +220,11 @@ export default function Admin({ token, onExit, apiBase = "" }) {
     } catch (e) { setErr(e.message) }
   }
   const delKey = async (id) => {
-    if (!confirm("Sever this uplink? External scripts lose access immediately.")) return
+    if (!await confirmDialog("External scripts using this key lose access immediately.", { title: "Sever uplink", confirmLabel: "Sever", danger: true })) return
     try { await api("/admin/api_keys/" + id, "DELETE"); load() } catch (e) { setErr(e.message) }
   }
   const delFace = async (id) => {
-    if (!confirm("Delete this person and all their face embeddings?")) return
+    if (!await confirmDialog("This person and all of their face embeddings will be deleted.", { title: "Delete person", confirmLabel: "Delete", danger: true })) return
     try { await api("/admin/faces/" + id, "DELETE"); setExpanded(null); load() } catch (e) { setErr(e.message) }
   }
   const linkFace = async (id, userId) => {
@@ -231,7 +232,7 @@ export default function Admin({ token, onExit, apiBase = "" }) {
     catch (e) { setErr(e.message) }
   }
   const renameFace = async (id, current) => {
-    const name = prompt("Rename person:", current)
+    const name = await promptDialog("Rename this person.", current, { title: "Rename person", confirmLabel: "Rename" })
     if (!name || name.trim() === current) return
     try { await api("/admin/faces/" + id, "PUT", { name: name.trim() }); load() } catch (e) { setErr(e.message) }
   }
@@ -241,7 +242,7 @@ export default function Admin({ token, onExit, apiBase = "" }) {
     catch (e) { setErr(e.message) }
   }
   const delEmb = async (embId, personId) => {
-    if (!confirm("Delete this one embedding?")) return
+    if (!await confirmDialog("Delete this one embedding?", { title: "Delete embedding", confirmLabel: "Delete", danger: true })) return
     try {
       await api("/admin/faces/embeddings/" + embId, "DELETE")
       const d = await api(`/admin/faces/${personId}/embeddings`); setEmbs(d.embeddings || [])
@@ -265,13 +266,13 @@ export default function Admin({ token, onExit, apiBase = "" }) {
     catch (e) { setErr(e.message) }
   }
   const editGlobal = async (f) => {
-    const content = prompt("Edit household fact:", f.content)
+    const content = await promptDialog("Edit this household fact.", f.content, { title: "Edit fact", confirmLabel: "Save" })
     if (content == null || content.trim() === f.content) return
     try { await api("/admin/knowledge/global/" + f.id, "PUT", { content: content.trim(), category: f.category }); loadGlobal() }
     catch (e) { setErr(e.message) }
   }
   const delGlobal = async (id) => {
-    if (!confirm("Delete this household fact?")) return
+    if (!await confirmDialog("Delete this household fact?", { title: "Delete fact", confirmLabel: "Delete", danger: true })) return
     try { await api("/admin/knowledge/global/" + id, "DELETE"); loadGlobal() } catch (e) { setErr(e.message) }
   }
   const sendGlobalChat = async () => {
@@ -296,7 +297,7 @@ export default function Admin({ token, onExit, apiBase = "" }) {
     try { await api("/admin/backup", "POST"); await loadBackups() } catch (e) { setErr(e.message) } finally { setBackingUp(false) }
   }
   const delBackup = async (name) => {
-    if (!confirm("Delete backup " + name + "?")) return
+    if (!await confirmDialog("Delete backup " + name + "?", { title: "Delete backup", confirmLabel: "Delete", danger: true })) return
     try { await api("/admin/backups/" + encodeURIComponent(name), "DELETE"); loadBackups() } catch (e) { setErr(e.message) }
   }
   const downloadBackup = async (name) => {

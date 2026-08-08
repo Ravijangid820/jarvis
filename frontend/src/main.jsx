@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import './fonts/fonts.css'
 import './index.css'
 import App from './App.jsx'
+import NotifyHost from './NotifyHost.jsx'
 
 /**
  * GitHub Pages SPA redirect handler (companion to public/404.html).
@@ -24,5 +25,6 @@ applyPagesRedirect(window.location)
 createRoot(document.getElementById('root')).render(
   <StrictMode>
     <App />
+    <NotifyHost />
   </StrictMode>,
 )
