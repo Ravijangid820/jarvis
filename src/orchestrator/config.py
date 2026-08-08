@@ -213,11 +213,23 @@ def _env_int(name: str, default: int) -> int:
 
 
 # --- Public demo -------------------------------------------------------------
-# Independent of JARVIS_MODE: demo households can be offered by a normal production instance
-# alongside the real one, because they are isolated by the household boundary rather than by a
-# process-wide mode. DEMO_PUBLIC_SIGNUP is the master switch — off by default, so no deployment
-# starts handing out accounts by upgrading.
-DEMO_PUBLIC_SIGNUP: bool = (os.environ.get("DEMO_PUBLIC_SIGNUP", "") or "").strip().lower() in ("1", "true", "yes")
+# Demo signup follows the RUNTIME: a container started with JARVIS_MODE=demo is the public demo and
+# offers demo sessions; anything else (the lab/production instance) does not, and its login screen
+# shows no demo affordance at all. Tying this to the mode rather than to a standalone flag means one
+# container is one thing — there is no way to accidentally leave signup enabled on the real
+# instance by setting the wrong variable.
+#
+# DEMO_PUBLIC_SIGNUP=1 can still force it on for a non-demo runtime (useful for testing), but the
+# default follows the mode and no production deployment gains it by upgrading.
+_DEMO_SIGNUP_ENV = (os.environ.get("DEMO_PUBLIC_SIGNUP", "") or "").strip().lower()
+DEMO_PUBLIC_SIGNUP: bool = (_DEMO_SIGNUP_ENV in ("1", "true", "yes")
+                            if _DEMO_SIGNUP_ENV else JARVIS_MODE == "demo")
+
+# The credentials the demo login screen suggests. Typing them mints a fresh, isolated demo session
+# rather than signing in to any shared account — so the on-screen hint is honest and two visitors
+# using it never land in the same household.
+DEMO_USERNAME = "demo"
+DEMO_PASSWORD = "demo"
 
 # How long a demo household lives from its LAST activity. Refreshing the page must not lose the
 # session, so the token outlives a reload; an abandoned tab is reclaimed by this instead.

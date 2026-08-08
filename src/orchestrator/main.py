@@ -43,7 +43,8 @@ from auth import hash_password, hash_token, verify_password
 from intents import HOME_CONTROL_VERB, is_gesture_volume, parse_home_command, parse_reminder, parse_volume
 from config import (ADMIN_MAX_INPUT, ALLOWED_ORIGINS, APP_VERSION, BASE_DIR, CHROMA_DB_PATH,
                     COMPLETION_RESERVE_DEFAULT, CONFIG, DEMO_MINT_PER_IP_HOURLY,
-                    DEMO_PUBLIC_SIGNUP, DEMO_TTL_MINUTES, DEMO_USER_ID_BASE,
+                    DEMO_PASSWORD, DEMO_PUBLIC_SIGNUP, DEMO_TTL_MINUTES,
+                    DEMO_USER_ID_BASE, DEMO_USERNAME,
                     HA_TOKEN_FROM_ENV, HA_URL_FROM_ENV,
                     INDEX_HTML, LLM_URL, PIPER_BIN, PIPER_MODEL,
                     RATE_LIMIT_RPM, REACT_DIST_DIR, REGULAR_MAX_INPUT, REQUIRE_PRESENCE_FOR_CONTROL,
@@ -530,6 +531,13 @@ def login(req: LoginRequest, request: Request):
     # lockout that an IP bucket would cause behind the shared subnet-router source IP.
     if not check_login_rate(req.username):
         raise HTTPException(status_code=429, detail="Too many attempts; try again shortly")
+    # On the public demo runtime the suggested demo/demo credentials mint a FRESH sandbox rather
+    # than signing in to a shared account. That keeps the hint on the login screen honest (typing
+    # what it suggests gets you in) without two visitors ever landing in the same household. The
+    # branch is unreachable on any other runtime, where DEMO_PUBLIC_SIGNUP is false.
+    if (DEMO_PUBLIC_SIGNUP and req.username.strip().lower() == DEMO_USERNAME
+            and req.password == DEMO_PASSWORD):
+        return _mint_demo_session(request)
     conn = get_db()
     try:
         row = conn.execute("SELECT id, password_hash, role FROM users WHERE username = ?", (req.username,)).fetchone()
@@ -644,14 +652,16 @@ def _client_ip(request: Request) -> str:
     return xff or (request.client.host if request.client else "unknown")
 
 
-@app.post("/demo/session")
-def demo_session(request: Request):
-    """Mint a throwaway demo household and return a token for its admin.
+def _mint_demo_session(request: Request) -> Dict[str, Any]:
+    """Create a throwaway demo household and return a token for its admin.
 
     The visitor becomes an admin OF THEIR OWN, EMPTY household, so the admin console is fully
     usable and contains nothing real. The token is an ordinary session token, stored in
     localStorage like a normal login — which is what makes a page refresh keep the session while
     logout and expiry destroy it.
+
+    Shared by POST /demo/session (the "Try the demo" button) and the demo/demo credentials the
+    login screen suggests, so both routes produce the same isolated, expiring sandbox.
     """
     if not DEMO_PUBLIC_SIGNUP:
         raise HTTPException(status_code=404, detail="Not found")
@@ -697,6 +707,12 @@ def demo_session(request: Request):
     logger.info("Demo session minted: household=%d user=%s expires=%s", hh_id, username, expires_s)
     return {"token": token, "role": "admin", "demo": True, "username": username,
             "expires_at": expires_s, "ttl_minutes": DEMO_TTL_MINUTES}
+
+
+@app.post("/demo/session")
+def demo_session(request: Request):
+    """Start a demo session ("Try the demo"). 404 on any runtime that isn't the public demo."""
+    return _mint_demo_session(request)
 
 
 @app.post("/auth/logout")
@@ -786,7 +802,13 @@ def health_check() -> Dict[str, Any]:
             n_ctx = dgs.get("n_ctx") or props.get("n_ctx") or 4096
     except Exception:
         pass
-    return {"status": "ok" if ok else "offline", "model": model_name, "detail": detail, "n_ctx": n_ctx, "mode": JARVIS_MODE}
+    # demo_signup drives the LOGIN SCREEN, which renders before any token exists — so it has to
+    # ride on this unauthenticated endpoint. It says only "this runtime offers demo sessions",
+    # which is already implied by mode; a production/lab container reports false and its UI shows
+    # no demo affordance at all.
+    return {"status": "ok" if ok else "offline", "model": model_name, "detail": detail,
+            "n_ctx": n_ctx, "mode": JARVIS_MODE, "demo_signup": DEMO_PUBLIC_SIGNUP,
+            "demo_ttl_minutes": DEMO_TTL_MINUTES if DEMO_PUBLIC_SIGNUP else None}
 
 
 def _system_stats() -> Dict[str, Any]:

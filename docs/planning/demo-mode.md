@@ -217,7 +217,39 @@ around now.
 
 ---
 
-## 7. Open questions
+## 7. Runtime separation
+
+The demo is a **separate container**, not a flag on the real one. `JARVIS_MODE=demo` is the single
+switch, and everything follows from it:
+
+| | demo runtime | lab / production runtime |
+|---|---|---|
+| `/health` | `demo_signup: true` | `demo_signup: false` |
+| Login screen | "Try the Demo" + `demo`/`demo` placeholder hints | neither — nothing suggests a demo exists |
+| `POST /demo/session` | mints a sandbox | **404** |
+| `demo`/`demo` login | mints a *fresh* sandbox per visitor | ordinary failed login (**401**) |
+| Home Assistant | no credentials in the container at all | configured as normal |
+| Database volume | `jarvis-demo-data` | `jarvis-prod-data` |
+
+`docker-compose.demo.yml` + `.env.demo.example` run it, on a different port and project name so it
+coexists with the production stack.
+
+Two details worth keeping:
+
+- **The suggested credentials are honest.** The login screen hints `demo`/`demo`, so typing them
+  has to work — but they must not be a *shared account*, or every visitor would land in one
+  household. `/auth/login` therefore treats them as a mint request on the demo runtime: each use
+  produces a different isolated sandbox. The branch sits after the login throttle, so it is not a
+  way around rate limiting, and it is unreachable on any other runtime.
+- **`reset_demo_session()` was deleted** (it lived in chat.py). Under the old instance-wide demo
+  mode it wiped every chat in the database older than 30 minutes on each session read. That is
+  redundant now — ephemerality is a property of the household — and it had become actively wrong:
+  with a 60-minute TTL, a visitor crossing the 30-minute mark would have their history deleted
+  underneath them, breaking the guarantee that a refresh keeps the conversation.
+
+---
+
+## 8. Open questions
 
 - Does the public-domain instance currently hold the real household's HA token and face data?
   The design is safe either way, but it determines whether Phase 0 is urgent or merely required.

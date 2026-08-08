@@ -8,7 +8,7 @@ import memory
 from budget import clamp_completion, estimate_message_tokens, fit_history, truncate_to_tokens
 from config import (COMPLETION_RESERVE_DEFAULT, KNOWLEDGE_TOKEN_CAP, MAX_CONTEXT_MESSAGES,
                     MAX_CONTEXT_TOKENS, MIN_COMPLETION_TOKENS, PROMPT_SAFETY_MARGIN,
-                    REASONING, SYSTEM_PROMPT, JARVIS_MODE, logger)
+                    REASONING, SYSTEM_PROMPT)
 from db import get_db
 
 
@@ -60,17 +60,6 @@ def _get_recent_message_ids(session_id: str) -> set:
 
 # --- Session CRUD -----------------------------------------------------------
 def get_sessions(user_id: int) -> List[Dict[str, Any]]:
-    if JARVIS_MODE == "demo":
-        conn = get_db()
-        try:
-            latest = conn.execute(
-                "SELECT id FROM chat_sessions WHERE user_id = ? ORDER BY created_at DESC LIMIT 1",
-                (user_id,),
-            ).fetchone()
-            keep_id = latest["id"] if latest else None
-        finally:
-            conn.close()
-        reset_demo_session(keep_id, user_id)
     conn = get_db()
     try:
         rows = conn.execute(
@@ -82,32 +71,13 @@ def get_sessions(user_id: int) -> List[Dict[str, Any]]:
         conn.close()
 
 
-def reset_demo_session(keep_session_id: Optional[str], user_id: int):
-    """In Demo mode, wipe older sessions and their RAG embeddings for this user so history remains ephemeral to the current test session."""
-    if JARVIS_MODE != "demo":
-        return
-    conn = get_db()
-    try:
-        if keep_session_id:
-            conn.execute("DELETE FROM conversation_history WHERE session_id IN (SELECT id FROM chat_sessions WHERE id != ? AND user_id = ?)", (keep_session_id, user_id))
-            conn.execute("DELETE FROM chat_sessions WHERE id != ? AND user_id = ?", (keep_session_id, user_id))
-        else:
-            conn.execute("DELETE FROM conversation_history WHERE session_id IN (SELECT id FROM chat_sessions WHERE user_id = ?)", (user_id,))
-            conn.execute("DELETE FROM chat_sessions WHERE user_id = ?", (user_id,))
-        # Purge any sessions older than 30 minutes across the entire db in demo mode
-        conn.execute("DELETE FROM conversation_history WHERE session_id IN (SELECT id FROM chat_sessions WHERE created_at < datetime('now', '-30 minutes'))")
-        conn.execute("DELETE FROM chat_sessions WHERE created_at < datetime('now', '-30 minutes')")
-        conn.commit()
-    finally:
-        conn.close()
-    try:
-        if memory.vectors_available() and memory.memory_collection is not None:
-            if keep_session_id:
-                memory.memory_collection.delete(where={"$and": [{"user_id": user_id}, {"session_id": {"$ne": keep_session_id}}]})
-            else:
-                memory.memory_collection.delete(where={"user_id": user_id})
-    except Exception as e:
-        logger.warning("Demo mode RAG cleanup failed: %s", e)
+# NOTE: a previous reset_demo_session() lived here. Under the old instance-wide JARVIS_MODE=demo it
+# wiped, on every session read, both this user's older chats AND every chat in the database older
+# than 30 minutes. Ephemerality is now a property of the demo HOUSEHOLD — created with an expiry,
+# destroyed whole on logout or by the TTL sweeper — so this was redundant. It was also actively
+# wrong once demo sessions got a 60-minute TTL: a visitor whose session passed the 30-minute mark
+# would have their history deleted underneath them, breaking the guarantee that a refresh keeps
+# the conversation. Deleted rather than fixed; the household purge is the single reset path.
 
 
 def create_session(title: str, user_id: int) -> str:
@@ -118,7 +88,6 @@ def create_session(title: str, user_id: int) -> str:
         conn.commit()
     finally:
         conn.close()
-    reset_demo_session(session_id, user_id)
     return session_id
 
 
@@ -135,9 +104,7 @@ def resolve_session(session_id: Optional[str], user_id: int) -> str:
                 conn.commit()
         finally:
             conn.close()
-        reset_demo_session(sid, user_id)
         return sid
-    reset_demo_session(session_id, user_id)
     return session_id
 
 

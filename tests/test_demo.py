@@ -248,3 +248,47 @@ def test_mint_is_404_when_signup_is_disabled(client, monkeypatch):
     """The master switch: a normal deployment must not hand out accounts by upgrading."""
     monkeypatch.setattr(main, "DEMO_PUBLIC_SIGNUP", False)
     assert client.post("/demo/session").status_code == 404
+
+
+# --- the runtime switch: one container is one thing -------------------------------------------
+
+def test_health_advertises_the_demo_runtime(client):
+    """The login screen renders before any token exists, so it learns what runtime this is from
+    the unauthenticated /health."""
+    body = client.get("/health").json()
+    assert body["demo_signup"] is True
+    assert body["demo_ttl_minutes"] == 60
+
+
+def test_health_hides_demo_on_a_non_demo_runtime(client, monkeypatch):
+    """A lab/production container must advertise nothing — the UI then renders no demo button and
+    no credential hints."""
+    monkeypatch.setattr(main, "DEMO_PUBLIC_SIGNUP", False)
+    body = client.get("/health").json()
+    assert body["demo_signup"] is False
+    assert body["demo_ttl_minutes"] is None
+
+
+def test_suggested_demo_credentials_mint_a_fresh_sandbox(client):
+    """The login screen suggests demo/demo, so typing it must work — and must NOT be a shared
+    account: two visitors using the same hint land in different households."""
+    r1 = client.post("/auth/login", json={"username": "demo", "password": "demo"})
+    r2 = client.post("/auth/login", json={"username": "demo", "password": "demo"})
+    assert r1.status_code == 200 and r2.status_code == 200
+    b1, b2 = r1.json(), r2.json()
+    assert b1["demo"] is True and b1["role"] == "admin"
+    assert b1["username"] != b2["username"]
+    assert _household_of(b1["username"]) != _household_of(b2["username"])
+
+
+def test_demo_credentials_are_rejected_on_a_non_demo_runtime(client, monkeypatch):
+    """demo/demo must be an ordinary (failing) login on the lab container — never a back door."""
+    monkeypatch.setattr(main, "DEMO_PUBLIC_SIGNUP", False)
+    assert client.post("/auth/login", json={"username": "demo", "password": "demo"}).status_code == 401
+
+
+def test_demo_login_is_still_rate_limited(client):
+    """The demo branch sits after the login throttle, so it can't be used to bypass it."""
+    for _ in range(12):
+        client.post("/auth/login", json={"username": "demo", "password": "demo"})
+    assert client.post("/auth/login", json={"username": "demo", "password": "demo"}).status_code == 429
