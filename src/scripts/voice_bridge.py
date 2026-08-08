@@ -121,8 +121,9 @@ def is_greeting(cmd: str) -> bool:
 
 def main():
     if not KEY_FILE.is_file():
-        sys.exit(f"FATAL: {KEY_FILE} missing. Mint one:\n"
-                 f"  uv run python src/scripts/manage.py mint-key admin voice-listener > {KEY_FILE}\n"
+        sys.exit(f"FATAL: {KEY_FILE} missing. Mint one DEVICE-SCOPED (never a plain admin key —\n"
+                 f"an open mic must not wield admin; see docs/planning/voice-wake.md §3):\n"
+                 f"  uv run python src/scripts/manage.py mint-key <you> voice-listener voice-lab > {KEY_FILE}\n"
                  f"  chmod 600 {KEY_FILE}")
     if KEY_FILE.stat().st_mode & 0o077:
         log.warning("%s is group/other-readable — run: chmod 600 %s", KEY_FILE, KEY_FILE)
