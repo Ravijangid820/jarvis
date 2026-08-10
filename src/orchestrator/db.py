@@ -1,6 +1,7 @@
 """SQLite access: connection factory + schema initialization."""
 import logging
 import os
+import re
 import sqlite3
 from pathlib import Path
 
@@ -128,6 +129,55 @@ def _safe_exec(conn: sqlite3.Connection, sql: str):
         if "duplicate column" in msg or "already exists" in msg:
             return  # already in the expected state — benign
         raise
+
+
+def _migrate_mark_device_turns(conn: sqlite3.Connection):
+    """Retro-tag smart-home acknowledgements already in the history as kind='device'.
+
+    New rows are tagged as they are written, but a database that has been in use carries months of
+    them tagged 'chat' — and those are precisely the rows that taught the model to produce
+    "Okay - the Light is now off." as prose for messages that were not commands. Without this the
+    fix only helps conversations started after the upgrade.
+
+    Matching is anchored to the exact templates _ha_reply emits, so free-form assistant text can
+    never be caught by it: the worst case for a false positive is one real reply hidden from the
+    model, and the templates are distinctive enough that it does not arise in practice. The
+    preceding user turn is tagged too, so history stays a clean user/assistant alternation rather
+    than developing runs of unanswered user messages.
+
+    Runs once in effect: after the first pass there are no 'chat' rows left that match.
+    """
+    try:
+        rows = conn.execute(
+            "SELECT id, session_id, speaker, content FROM conversation_history "
+            "WHERE kind = 'chat' ORDER BY id").fetchall()
+    except sqlite3.OperationalError:
+        return
+    ack = re.compile(
+        r"^Okay [-\u2014] (?:the .+? (?:is now (?:on|off)|was toggled)"
+        r"|.+? is (?:enabled|disabled|applied)"
+        r"|I (?:ran|stopped) .+?"
+        r"|running .+? now"
+        r"|leaving it as is)\.?$", re.I)
+    marked = 0
+    prev_id_by_session = {}
+    for r in rows:
+        if r["speaker"] == "user":
+            prev_id_by_session[r["session_id"]] = r["id"]
+            continue
+        first_line = (r["content"] or "").strip().splitlines()[0].strip() if (r["content"] or "").strip() else ""
+        if not ack.match(first_line):
+            continue
+        ids = [r["id"]]
+        prior = prev_id_by_session.get(r["session_id"])
+        if prior is not None:
+            ids.append(prior)
+        conn.executemany("UPDATE conversation_history SET kind = 'device' WHERE id = ?",
+                         [(i,) for i in ids])
+        marked += len(ids)
+    if marked:
+        logger.info("Tagged %d historical smart-home turns as kind='device' "
+                    "(hidden from the model, still shown in the transcript)", marked)
 
 
 def _migrate_plaintext_api_keys(conn: sqlite3.Connection):
@@ -300,6 +350,8 @@ def init_db():
         _safe_exec(conn, "ALTER TABLE conversation_history ADD COLUMN facts_extracted BOOLEAN DEFAULT 0")
         _safe_exec(conn, "ALTER TABLE users ADD COLUMN can_control_devices INTEGER DEFAULT 0")
         _safe_exec(conn, "ALTER TABLE api_keys ADD COLUMN device_id TEXT")
+        _safe_exec(conn, "ALTER TABLE conversation_history ADD COLUMN kind TEXT NOT NULL DEFAULT 'chat'")
+        _migrate_mark_device_turns(conn)
         # Enrollment moved into the browser (see /faces/identify), so the queue an admin used to
         # push a capture onto a remote camera is gone. Only ever transient request state — device,
         # name, pending/done/failed — never an embedding, so there is nothing here to preserve;

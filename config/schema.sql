@@ -46,7 +46,13 @@ CREATE TABLE IF NOT EXISTS conversation_history (
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
     speaker TEXT CHECK(speaker IN ('user', 'jarvis')),
     content TEXT NOT NULL,
-    facts_extracted BOOLEAN DEFAULT 0
+    facts_extracted BOOLEAN DEFAULT 0,
+    -- 'chat' = ordinary conversation; 'device' = a smart-home command and its deterministic
+    -- acknowledgement. The distinction exists because those acknowledgements are template strings,
+    -- and feeding them back as assistant prose taught the model to imitate them: it began emitting
+    -- "Okay - the Light is now off." for sentences that were not commands, claiming actions that
+    -- never happened. The transcript still shows them; the model is shown live device state instead.
+    kind TEXT NOT NULL DEFAULT 'chat'
 );
 
 CREATE INDEX IF NOT EXISTS idx_history_session ON conversation_history(session_id, id);

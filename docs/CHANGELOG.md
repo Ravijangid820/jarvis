@@ -4,6 +4,42 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## Unreleased — the assistant is told what house it lives in
+
+A real transcript showed it denying it could control anything ("I don't have a body or access to
+real-world devices"), inventing status it had no source for ("the lights are on, the temperature is
+set"), and — twice — emitting `Okay — the Light is now off.` for utterances that were **not
+commands**, with no action behind either. Three separate causes:
+
+- **The prompt never mentioned the devices.** Printing the assembled system message showed 989
+  characters of persona and nothing else. There is now a live block on the user turn listing the
+  allowlisted devices and their current state, from one `/api/states` call cached for 4s. It sits
+  on the turn rather than the system prefix so llama.cpp keeps its KV cache, and it is invalidated
+  the moment an action runs — a block saying "Fan — on" beside a note saying the fan was just
+  switched off is a contradiction the model resolves by inventing a reason for it (observed: "the
+  temperature is too low, and the motor has been shut down", describing a sensor that does not
+  exist). Scoped to the household that owns the smart home, the same boundary the HTTP surface
+  enforces.
+- **The deterministic acknowledgements were being fed back as assistant prose.** They are template
+  strings, and a 2B model reading a month of them starts producing them. `conversation_history` now
+  carries a `kind` column; device turns stay in the transcript and are withheld from the model, and
+  a migration retro-tags those already stored (44 in the author's database).
+- **A "quick chat" session is never closed, so it accumulated a month of turns.** Same model, same
+  prompt, same question: a clean session answered *"I am functioning normally, sir."* while the real
+  one answered *"Hello. I'm doing well. How about you?"* — the model imitating its own pre-persona
+  replies. Verbatim history is now capped by age (`history_max_age_hours`, default 24); older
+  material is left to RAG, which retrieves by relevance rather than by accident of recency. That
+  turn also took **194 s**; it now takes **22 s**, with the prompt down from 74 messages to 10.
+
+**Device replies are now hybrid.** A bare command ("turn off the light") keeps the instant template —
+that speed is the whole point of the fast path. A sentence that said more ("I'm feeling cold, turn
+off the fan") goes to the model with the completed action stated as fact, so it answers the person
+rather than the command. The split is a pure function (`says_more_than_command`) pinned by tests on
+real transcript lines.
+
+Not a bug, though it looked like one: `user_knowledge` was empty because that conversation contained
+no personal facts. Run against a fact-bearing message the extractor stored three, correctly.
+
 ## v3.3.0 — 2026-08-10 — the live voice page, and images that actually contain it
 
 The voice page became an instrument this cycle: a wake word, a reactor that reads state at a glance,

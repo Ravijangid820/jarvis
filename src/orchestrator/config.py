@@ -92,6 +92,12 @@ def _resolve(p: str) -> str:
 DB_PATH: str = _resolve(CONFIG["memory"]["db_path"])
 CHROMA_DB_PATH: str = _resolve(CONFIG["memory"].get("chroma_db_path", "memory/chroma_db"))
 MAX_CONTEXT_MESSAGES: int = CONFIG["memory"]["max_context_messages"]
+# How far back verbatim history may reach when building a prompt. Anything older is left to
+# RAG, which retrieves by relevance rather than by recency. A "quick chat" session is never
+# closed, so without this it accumulates forever: one here held turns from a month earlier,
+# which cost 194 s to re-evaluate and — worse — taught the model to imitate replies written
+# before the current system prompt existed. 0 disables the cutoff.
+HISTORY_MAX_AGE_HOURS: float = float(CONFIG["memory"].get("history_max_age_hours", 24))
 SYSTEM_PROMPT: str = CONFIG["system_prompt"]
 
 # --- Generation tuning (optional; edit config/jarvis.json, restart — no rebuild) -----------------
@@ -146,6 +152,15 @@ RAG_DISTANCE_THRESHOLD = 0.6  # cosine distance = 1 - similarity; discard > this
 RAG_MAX_RESULTS = 5
 
 # --- Fact extraction --------------------------------------------------------
+# Room for the extractor to finish its JSON. 512 was not enough for a batch of a dozen
+# messages: the reply was cut mid-object and every fact in it was discarded. Paired with a
+# smaller batch below, so each call stays short on a CPU that generates ~3.7 tok/s.
+FACT_EXTRACTION_TOKENS = 1024        # ceiling; the real figure is derived per call
+FACT_EXTRACTION_MIN_TOKENS = 256     # floor, so a long batch still gets a usable reply
+FACT_EXTRACTION_BATCH = 6
+# Give up on a message after this many failed extraction passes, so one unparseable message
+# cannot hold the queue (and the LLM) hostage every idle cycle forever.
+FACT_EXTRACTION_MAX_ATTEMPTS = 3
 IDLE_THRESHOLD_SECONDS = 120   # extract facts after 2 min of inactivity
 IDLE_CHECK_INTERVAL = 30       # check for idle every 30 seconds
 FACT_DEDUP_SIM = 0.90          # semantic-similarity merge threshold

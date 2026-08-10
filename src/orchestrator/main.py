@@ -41,7 +41,7 @@ from pydantic import BaseModel, Field, field_validator
 import chat
 import memory
 from auth import hash_password, hash_token, verify_password
-from intents import HOME_CONTROL_VERB, is_gesture_volume, parse_home_command, parse_reminder, parse_volume
+from intents import HOME_CONTROL_VERB, is_gesture_volume, parse_home_command, parse_reminder, parse_volume, says_more_than_command
 from config import (ADMIN_MAX_INPUT, ALLOWED_ORIGINS, APP_VERSION, BASE_DIR, CHROMA_DB_PATH,
                     COMPLETION_RESERVE_DEFAULT, CONFIG, DEMO_MINT_PER_IP_HOURLY,
                     DEMO_PASSWORD, DEMO_PUBLIC_SIGNUP, DEMO_TTL_MINUTES,
@@ -88,7 +88,7 @@ def _load_ha_settings():
                 allowed = json.loads(ents_raw)
             except (ValueError, TypeError):
                 allowed = []
-        ha.configure(url=url, token=token, allowed=allowed)
+        ha.configure(url=url, token=token, allowed=allowed, household_id=_HA_HOUSEHOLD_ID)
     except Exception as e:
         logger.warning("Could not load Home Assistant settings from DB: %s", e)
 
@@ -1897,17 +1897,23 @@ def _ha_act(entity: str, action: str):
     if status == ha.HA_UNREACHABLE:
         return False, action, "I couldn't reach Home Assistant to do that."
 
+    # Whatever happens below, the cached device snapshot no longer describes this house — drop it
+    # so the next prompt reads live state. Invalidated on failure too: after an action we could not
+    # confirm, a stale "on" is exactly the assertion we least want the model repeating.
     if action == "run":
         if entity.partition(".")[0] in ha.RUNNABLE_DOMAINS:
             ok = ha.run(entity)
+            ha.invalidate_snapshot()
             return ok, "run", None if ok else "I couldn't reach Home Assistant to do that."
         action = "on"
     elif action == "stop":
         if entity.partition(".")[0] in ("automation", "script"):
             ok = ha.stop(entity)
+            ha.invalidate_snapshot()
             return ok, "stop", None if ok else "I couldn't reach Home Assistant to do that."
         action = "off"
     ok = ha.turn(entity, action)
+    ha.invalidate_snapshot()
     return ok, action, None if ok else "I couldn't reach Home Assistant to do that."
 
 
@@ -1958,6 +1964,19 @@ def _ha_state_phrase(entity: str, st: dict) -> str:
         return f"{label.capitalize()} is {'running right now' if state == 'on' else 'not running'}."
     name = (st.get("attributes") or {}).get("friendly_name") or nice
     return f"{name} is {state}."
+
+
+def _home_says_more(user_text: str, session_id: str) -> bool:
+    """Did this message say anything beyond the smart-home command it contained?
+
+    Bare commands keep the instant templated reply — that speed is the point of the fast path, and
+    on this hardware an LLM turn for "turn off the light" would cost seconds. A message that also
+    said something ("I'm feeling cold, turn off the fan") gets a composed reply instead, because a
+    template answering only half of what someone said is exactly what makes an assistant feel
+    mechanical.
+    """
+    ent = (_LAST_HOME_ENTITY.get(session_id) or (None,))[0]
+    return says_more_than_command(user_text, ha.display_name(ent) if ent else "")
 
 
 def _handle_home_command(user_text: str, raw_request: Request, session_id: str) -> Optional[str]:
@@ -2533,8 +2552,20 @@ def process_input(request: QueryRequest, raw_request: Request):
     user_id, household_id, session_id, user_text = _validate_chat(request, raw_request)
 
     # Fast-paths handled directly (instant, offline, no LLM): volume/gesture, then reminders.
-    ack = (_handle_volume_command(user_text, raw_request) or _handle_reminder(user_text, raw_request)
-           or _handle_home_command(user_text, raw_request, session_id))
+    ack = _handle_volume_command(user_text, raw_request) or _handle_reminder(user_text, raw_request)
+    device_event = None
+    if ack is None:
+        home = _handle_home_command(user_text, raw_request, session_id)
+        if home is not None:
+            # The action has happened either way. The only question is who words the reply.
+            if _home_says_more(user_text, session_id):
+                device_event = home
+            else:
+                ack = home
+                chat.store_message(session_id, "user", user_text, kind="device")
+                chat.store_message(session_id, "jarvis", ack, kind="device")
+                return {"response": ack, "speed": "", "new_title": None,
+                        "audio": synthesize_tts(ack) if request.voice_feedback else None}
     if ack is not None:
         chat.store_message(session_id, "user", user_text)
         chat.store_message(session_id, "jarvis", ack)
@@ -2544,7 +2575,7 @@ def process_input(request: QueryRequest, raw_request: Request):
     existing = chat.get_recent_context(session_id)
     needs_title = (len(existing) == 0)
     completion_reserve = request.n_predict if (request.n_predict and request.n_predict > 0) else COMPLETION_RESERVE_DEFAULT
-    messages = chat.build_messages(session_id, user_id, household_id, user_text, request.system_prompt, completion_reserve=completion_reserve, reasoning=request.reasoning, voice=request.voice)
+    messages = chat.build_messages(session_id, user_id, household_id, user_text, request.system_prompt, completion_reserve=completion_reserve, reasoning=request.reasoning, voice=request.voice, device_event=device_event)
     max_tokens = chat.clamp_completion_for(messages, request.n_predict)
 
     t0 = time.time()
@@ -2576,12 +2607,21 @@ def chat_stream(request: QueryRequest, raw_request: Request):
     user_id, household_id, session_id, user_text = _validate_chat(request, raw_request)
 
     # Fast-paths (volume/gesture, reminders) short-circuit the LLM and stream back the ack.
-    ack = (_handle_volume_command(user_text, raw_request) or _handle_reminder(user_text, raw_request)
-           or _handle_home_command(user_text, raw_request, session_id))
+    ack = _handle_volume_command(user_text, raw_request) or _handle_reminder(user_text, raw_request)
+    device_event = None
+    ack_kind = "chat"
+    if ack is None:
+        home = _handle_home_command(user_text, raw_request, session_id)
+        if home is not None:
+            # Same split as /inbox: the switch has already flipped; only the wording is in question.
+            if _home_says_more(user_text, session_id):
+                device_event = home
+            else:
+                ack, ack_kind = home, "device"
     if ack is not None:
         def vol_gen():
-            chat.store_message(session_id, "user", user_text)
-            chat.store_message(session_id, "jarvis", ack)
+            chat.store_message(session_id, "user", user_text, kind=ack_kind)
+            chat.store_message(session_id, "jarvis", ack, kind=ack_kind)
             yield f"data: {json.dumps({'content': ack})}\n\n"
             done: Dict[str, Any] = {"done": True}
             if request.voice_feedback:
@@ -2594,7 +2634,7 @@ def chat_stream(request: QueryRequest, raw_request: Request):
     existing = chat.get_recent_context(session_id)
     needs_title = (len(existing) == 0)
     completion_reserve = request.n_predict if (request.n_predict and request.n_predict > 0) else COMPLETION_RESERVE_DEFAULT
-    messages = chat.build_messages(session_id, user_id, household_id, user_text, request.system_prompt, completion_reserve=completion_reserve, reasoning=request.reasoning, voice=request.voice)
+    messages = chat.build_messages(session_id, user_id, household_id, user_text, request.system_prompt, completion_reserve=completion_reserve, reasoning=request.reasoning, voice=request.voice, device_event=device_event)
     max_tokens = chat.clamp_completion_for(messages, request.n_predict)
 
     def event_generator():
@@ -2903,7 +2943,7 @@ def admin_ha_put(req: HAConfigRequest, request: Request):
     token = get_household_setting(hid, "ha_token") or ""
     allowed = list(req.allowed_entities if req.allowed_entities is not None else ha.HA_ALLOWED_ENTITIES)
     set_household_setting(hid, "ha_allowed_entities", json.dumps(allowed))
-    ha.configure(url=url, token=token, allowed=allowed)
+    ha.configure(url=url, token=token, allowed=allowed, household_id=hid)
     _rebuild_intent_router()
     _audit(request, "ha.config", f"url={url or '(cleared)'} entities={len(allowed)}")
     return {"status": "ok", "configured": ha.configured(), "connected": ha.ping()}
