@@ -389,10 +389,10 @@ Build-time args:
 
 Rebuild: `docker compose build --no-cache` (orchestrator), or re-run the Actions workflow.
 
-**Path filters in CI**: `.github/workflows/build-push.yml` skips images whose inputs didn't change.
-If you add a `COPY` to a Dockerfile, add that path to the image's filter — otherwise a change to it
-publishes nowhere and you debug a container built from stale source. (`frontend/**` counts for
-`jarvis-orchestrator` and `jarvis-combined` too: both bundle the built SPA.)
+**Publishing is tag-driven.** `.github/workflows/build-push.yml` puts images in GHCR only when you
+push a `v*` git tag (`:<version>` **and** `:latest` — what every compose file pulls) or trigger a
+manual run (`:<your tag>`, never `:latest`). Merging to `main` publishes nothing on purpose. All four
+images are built on every release, so a `:latest` set always comes from one commit.
 
 ## Notes / known rough edges (verify on first build)
 - **Image size**: the baked embedding bundle, the browser-side model bundles (~118 MB) and — for

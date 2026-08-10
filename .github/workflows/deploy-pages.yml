@@ -11,10 +11,13 @@ name: Deploy frontend to GitHub Pages
 
 on:
   push:
-    branches: [main, production-setup, github-pages-deploy]
+    # main only. `production-setup` and `github-pages-deploy` used to be listed here and both were
+    # deleted long ago — a trigger naming a branch that doesn't exist is a trigger that never fires.
+    branches: [main]
     paths:
       - 'frontend/**'
       - '.github/workflows/deploy-pages.yml'
+      - 'src/scripts/fetch_browser_models.sh'   # the face + wake bundles this site serves
   workflow_dispatch:      # manual trigger from Actions tab
 
 permissions:

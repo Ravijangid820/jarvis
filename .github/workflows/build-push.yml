@@ -1,9 +1,16 @@
 name: Build & push images (GHCR)
 
-# Optimized CI/CD Workflow:
-# Uses path-filtering and GitHub Actions Docker layer caching (type=gha)
-# so container images are ONLY rebuilt when their relevant source files change,
-# and unchanged Docker build layers are reused instantly in ~5 seconds.
+# Publishing is TAG-DRIVEN. The only things that put an image in GHCR are:
+#   - a v* git tag  -> ghcr.io/<owner>/jarvis-*:<version> AND :latest   (what the compose files pull)
+#   - a manual run  -> ghcr.io/<owner>/jarvis-*:<your tag>, which never touches :latest
+# Merging to main deliberately publishes nothing. main and the images move on separate clocks; a
+# release is the moment they meet.
+#
+# All four images are built together, every time. There is no path filtering: a release is a set of
+# images that were built from one commit, and skipping one because "its files didn't change" is how
+# you end up with a :latest orchestrator paired with a stale :latest frontend. GitHub Actions layer
+# caching (type=gha) already makes an unchanged image cost seconds, so the filtering bought little
+# and risked much.
 
 on:
   workflow_dispatch:
@@ -13,7 +20,6 @@ on:
         required: true
         default: "test"
   push:
-    branches: ["production-setup"]
     tags: ["v*"]
 
 permissions:
@@ -21,55 +27,8 @@ permissions:
   packages: write
 
 jobs:
-  # ---- Detect changed paths to skip unnecessary container builds ----
-  changes:
-    runs-on: ubuntu-latest
-    outputs:
-      combined: ${{ steps.filter.outputs.combined }}
-      orchestrator: ${{ steps.filter.outputs.orchestrator }}
-      llama: ${{ steps.filter.outputs.llama }}
-      frontend: ${{ steps.filter.outputs.frontend }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          # A filter must list EVERY path its image copies in. jarvis-combined and
-          # jarvis-orchestrator both bundle the built SPA, so a frontend-only commit changes what
-          # they ship — leaving 'frontend/**' out of them is how a UI change gets published to
-          # jarvis-frontend and quietly skipped everywhere else.
-          filters: |
-            combined:
-              - 'Dockerfile.combined'
-              - 'src/**'
-              - 'config/**'
-              - 'licenses/**'
-              - 'frontend/**'
-              - 'docker/**'
-              - 'pyproject.toml'
-              - 'uv.lock'
-            orchestrator:
-              - 'Dockerfile.orchestrator'
-              - 'src/**'
-              - 'config/**'
-              - 'licenses/**'
-              - 'frontend/**'
-              - 'docker/**'
-              - 'pyproject.toml'
-              - 'uv.lock'
-            llama:
-              - 'Dockerfile.llama'
-              - 'models/**'
-            frontend:
-              - 'Dockerfile.frontend'
-              - 'frontend/**'
-              - 'src/scripts/fetch_browser_models.sh'
-              - 'docker/nginx.conf.template'
-
   # ---- jarvis-combined: single self-contained container ----
   build-combined:
-    needs: changes
-    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') || needs.changes.outputs.combined == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -120,8 +79,6 @@ jobs:
 
   # ---- jarvis-orchestrator: pure backend API image ----
   build-orchestrator:
-    needs: changes
-    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') || needs.changes.outputs.orchestrator == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -169,8 +126,6 @@ jobs:
 
   # ---- jarvis-llama: pre-baked LLM inference engine image ----
   build-llama:
-    needs: changes
-    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') || needs.changes.outputs.llama == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -221,8 +176,6 @@ jobs:
 
   # ---- jarvis-frontend: standalone Nginx container image ----
   build-frontend:
-    needs: changes
-    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') || needs.changes.outputs.frontend == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
