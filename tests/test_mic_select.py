@@ -206,8 +206,16 @@ def test_streaming_an_unlisted_device_is_refused(client, monkeypatch):
         assert r.status_code == 404, f"{bogus!r} should not be accepted"
 
 
+def _pretend_ffmpeg_exists(monkeypatch):
+    """The endpoint refuses early when ffmpeg is missing, so any test reaching PAST that check must
+    say what it assumes. CI runners have no ffmpeg; this box does, which is the only reason the
+    lock test below ever passed here — it was asserting 409 while CI got a truthful 503."""
+    monkeypatch.setattr(main.shutil, "which", lambda name: "/usr/bin/ffmpeg" if name == "ffmpeg" else None)
+
+
 def test_only_one_session_may_hold_the_server_mic(client, monkeypatch):
     _fake_devices(monkeypatch, ALSA_TWO)
+    _pretend_ffmpeg_exists(monkeypatch)
     h = {"Authorization": "Bearer " + _tok(client, "pepper", "pw-user")}
     assert main._SERVER_MIC_LOCK.acquire(blocking=False)      # pretend another session has it
     try:
@@ -228,3 +236,19 @@ def test_missing_ffmpeg_is_reported_not_crashed(client, monkeypatch):
     # A refused request must not strand the lock — the next session has to be able to take it.
     assert main._SERVER_MIC_LOCK.acquire(blocking=False)
     main._SERVER_MIC_LOCK.release()
+
+
+def test_a_missing_ffmpeg_outranks_a_busy_microphone(client, monkeypatch):
+    """Both conditions can hold at once. The permanent misconfiguration is the more useful thing to
+    report — "busy" would send someone hunting for another session when the feature could never
+    have worked. Pinned because it is exactly the ordering a later refactor would flip by accident.
+    """
+    _fake_devices(monkeypatch, ALSA_TWO)
+    monkeypatch.setattr(main.shutil, "which", lambda _n: None)
+    h = {"Authorization": "Bearer " + _tok(client, "pepper", "pw-user")}
+    assert main._SERVER_MIC_LOCK.acquire(blocking=False)
+    try:
+        r = client.get("/voice/server-mic/stream?device=plughw:0,0", headers=h)
+        assert r.status_code == 503 and "ffmpeg" in r.json()["detail"]
+    finally:
+        main._SERVER_MIC_LOCK.release()
