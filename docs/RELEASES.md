@@ -6,6 +6,7 @@ see [CHANGELOG.md](CHANGELOG.md); for published image tags see
 
 | Version | Date | Theme |
 |---|---|---|
+| **v3.3.0** | 2026-08-10 | **Live voice, end to end** — wake word, reactor HUD, mic selection, warm models, browser face enrolment — and the container fixes that finally ship them |
 | v3.2.1 | 2026-08-03 | Patch: two silent-failure fixes (CSP-blocked inline script, ORT path 404 on Pages) + build-time guards |
 | **v3.2.0** | 2026-08-03 | **Speech-to-text on the device** — in-browser Whisper (WASM); the server spends no CPU on STT |
 | **v3.1.0** | 2026-08-03 | **MCP tool discovery** — real protocol handshake, review-only; frontend CI gate |

@@ -4,7 +4,55 @@ All notable changes to this project are documented in this file.
 
 ---
 
-## Unreleased — the live page stops shouting its settings
+## v3.3.0 — 2026-08-10 — the live voice page, and images that actually contain it
+
+The voice page became an instrument this cycle: a wake word, a reactor that reads state at a glance,
+a microphone you can choose (including the one plugged into the box), models that load once instead
+of on every visit, and face enrolment that happens in the browser holding the camera. Then the
+container build turned out not to be shipping most of it.
+
+### the images were missing the half of the app that runs in the browser
+
+Three of those features — face enrol/recognition, the "hey jarvis" wake word, and the failsafe
+Whisper copy — run in Web Workers on models the page downloads. The workers build those URLs from
+Vite's `BASE_URL`, so they always come from **whichever origin serves the SPA**, never from the API.
+No image carried them, and `models/` is gitignored, so on a CI checkout the build context had
+nothing to copy even if a `COPY` line had existed. `/face-models`, `/wake-models` and `/stt-models`
+404'd in every deployment, including the public demo. Face ID has no fallback at all: the OpenCV Zoo
+serves its weights over git-LFS without CORS headers, so a browser cannot fetch them cross-origin —
+if we don't host them, the feature cannot work.
+
+- **`src/scripts/fetch_browser_models.sh`** is now the single home for those three bundles' sources
+  and SHA-256 pins, shared by the native installer, all three Dockerfiles and the Pages workflow. A
+  missing or tampered file **fails the build** rather than publishing a dead feature.
+- **`jarvis-orchestrator` serves the SPA again.** The "pure backend" split dropped the React stage
+  but nothing else moved: the README still promised a UI on `:5000`, the default compose still had no
+  web service, and `GET /` returned a bare 404.
+- **`jarvis-frontend` could not reach the orchestrator.** `VITE_API_URL` defaulted to `""` and CI
+  passed no build-arg, so the SPA called nginx's own root and got `index.html` back with a 200 for
+  every API request. It builds with `/api` now, proxied to `$JARVIS_API_UPSTREAM` from a rendered
+  template — with buffering off, so `/chat/stream` streams instead of arriving as one late burst.
+- **GitHub Pages ships the face and wake bundles**, which it never had, leaving both features dead on
+  the public site.
+- A `./config` bind-mount replaces `/app/config` and hides `schema.sql`, which makes `init_db()`
+  raise; the entrypoint restores it from `/opt/jarvis/config-template`. Piper failures were swallowed
+  with `|| echo WARN`, shipping images with no TTS — now a hard build failure. And `Dockerfile.llama`
+  copied a staged GGUF under its own name while `CMD` named one literally, so any non-default model
+  built an image that exited at start.
+
+### releases publish, merges don't
+
+`build-push.yml` triggered on pushes to `production-setup` — a branch merged and deleted months ago,
+so the workflow had no working push trigger and nobody noticed. Publishing is now tag-driven: a `v*`
+tag builds all four images and moves `:latest`; a manual run publishes only the tag you type; merging
+to `main` deliberately publishes nothing.
+
+That made the path-filtering machinery dead code — with only tags and manual runs left, every job
+already built unconditionally. Deleted rather than maintained: a filter that silently skips an image
+whose Dockerfile gained a `COPY` is a trap (it was already missing `frontend/**` for two images), and
+a release should be a set of images built from one commit.
+
+### the live page stops shouting its settings
 
 Mode, pause length and microphone were two rows of buttons parked under the reactor. They are
 settings, not controls — you touch them once and then look at that screen for the next twenty
@@ -21,7 +69,7 @@ you talk: the reactor, the phase, the go/stop button, and the wake-word state.
 - Escape closes whichever panel is on top, bound once so the settings panel and the mic picker
   can't disagree about which of them it belongs to.
 
-## Unreleased — "Preparing model…" becomes a first-run event
+### "Preparing model…" becomes a first-run event
 
 The speech model was being loaded far more often than it needed to be. Three separate causes stacked
 up, each producing the same symptom, which is why it looked like caching was simply absent:
@@ -55,7 +103,7 @@ is actually happening.
 - Logout calls `releaseStt()` — everywhere else we work to keep the model warm, but leaving one
   resident for whoever signs in next on a shared machine is the wrong default.
 
-## Unreleased — the live voice page gets a reactor face
+### the live voice page gets a reactor face
 
 The visualizer was four circles and three arcs. It is now an instrument, and which of its two
 identities is showing tells you who currently holds the conversation — before you read a word:
@@ -81,7 +129,7 @@ identities is showing tells you who currently holds the conversation — before 
   fast path and back off to 240 under simulated load. "Reduce effects" and `prefers-reduced-motion`
   thin the spray and drop the glows without ever freezing the amplitude readout.
 
-## Unreleased — speak into whichever microphone is nearest
+### speak into whichever microphone is nearest
 
 The previous entry let an admin choose the box's microphone for the wake-word listener. This one
 answers the question a person actually asks — *which mic is closest to me?* — which doesn't care
@@ -107,7 +155,7 @@ which machine the cable goes into.
 - Guards on the live feed: one session at a time (`409` otherwise), a 15-minute cap, an audit-log
   entry per session, and refused outright in demo households.
 
-## Unreleased — pick the server's microphone from the UI
+### pick the server's microphone from the UI
 
 The wake-word listener always opened whatever the OS called the default input. Plug a proper mic
 into the box and there was no way to tell it to use that one short of an env var and a restart —
@@ -133,7 +181,7 @@ so the mic is now selectable the same way the language model is.
   The panel says so and gives the `/dev/snd` LXC passthrough; [setup/voice.md](setup/voice.md) has
   the config lines.
 
-## Unreleased — the camera stops being able to send pictures
+### the camera stops being able to send pictures
 
 Face recognition had grown two halves that did the same job in opposite directions: a browser that
 enrolled locally, and a server-driven flow that reached out to a remote camera, drove a capture over
