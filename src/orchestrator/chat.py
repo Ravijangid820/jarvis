@@ -148,7 +148,8 @@ def delete_session(session_id: str, user_id: int):
 def build_messages(session_id: str, user_id: int, household_id: int, user_text: str,
                    custom_sys_prompt: Optional[str] = None,
                    completion_reserve: int = COMPLETION_RESERVE_DEFAULT,
-                   reasoning: Optional[bool] = None) -> List[Dict[str, str]]:
+                   reasoning: Optional[bool] = None,
+                   voice: bool = False) -> List[Dict[str, str]]:
     """Assemble the prompt within the model's context window.
 
     Layout: [single system message] + [recent history…] + [current turn]. The system message holds
@@ -167,6 +168,14 @@ def build_messages(session_id: str, user_id: int, household_id: int, user_text: 
     elif active_reasoning is False and "/no_think" not in sys_prompt:
         sys_prompt = (sys_prompt + " /no_think").strip()
     system_parts = [sys_prompt]
+    # Spoken turns need to be shorter than written ones. Every token is read aloud by Piper at
+    # roughly the speed the model produces it, so a paragraph that scans fine on screen is close to
+    # half a minute of talking — and there is no skimming an answer you have to listen to.
+    if voice:
+        system_parts.append(
+            "This reply will be SPOKEN ALOUD, so keep it to one or two short sentences. "
+            "Write it the way you would say it: no lists, no headings, no markdown, no code, "
+            "no URLs. If the full answer is long, give the short version and offer the detail.")
 
     # Household knowledge — shared by everyone IN THIS HOUSEHOLD, admin-curated. Stable across
     # turns, so it stays in the cache-friendly system prefix. (Capped; if it ever outgrows the cap

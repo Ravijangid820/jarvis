@@ -4,6 +4,11 @@ The Pi 3 B+ can't run pose + gestures + faces concurrently in real time, so the 
 cheap motion detector every frame and, only while there's motion, escalates to *one* enabled
 heavy detector per cycle (round-robin, each throttled by its own interval_s). On faster hardware
 just raise fps / enable more detectors — same code.
+
+The agent never sends imagery. It POSTs events, pulls its enrolled set, and long-polls for
+commands — nothing else. Enrollment lives in the browser of whichever device has a camera and a
+screen (the server's /faces/enroll), so there is no capture to drive from here and no preview
+frame to relay: what leaves this process is JSON describing what was seen, and only that.
 """
 import argparse
 import json
@@ -20,7 +25,6 @@ from .detectors.gestures import GestureDetector
 from .detectors.motion import MotionDetector
 from .detectors.pose import PoseDetector
 from . import net
-from .enroll import capture_average
 from .events import EventClient
 from .keyfile import load_key
 from .paths import base_dir
@@ -54,114 +58,6 @@ def _fetch_enrolled(server, key, ctx=None):
     except Exception as e:
         log.warning("could not fetch enrolled faces: %s", e)
         return None
-
-
-def _poll_enroll(server, key, ctx=None):
-    """Check for a pending enroll request for THIS device (server binds it to our key)."""
-    req = urllib.request.Request(server.rstrip("/") + "/faces/enroll-request",
-                                 headers={"Authorization": "Bearer " + key})
-    with urllib.request.urlopen(req, timeout=10, context=ctx) as r:
-        return json.loads(r.read(_MAX_ENROLLED_BYTES + 1).decode()).get("request")
-
-
-def _submit_enroll(server, key, request_id, embedding=None, error=None, ctx=None):
-    body = json.dumps({"request_id": request_id, "embedding": embedding, "error": error}).encode("utf-8")
-    req = urllib.request.Request(server.rstrip("/") + "/faces/enroll-result", data=body, method="POST",
-                                 headers={"Content-Type": "application/json", "Authorization": "Bearer " + key})
-    with urllib.request.urlopen(req, timeout=20, context=ctx) as r:
-        r.read(4096)
-
-
-def _preview_uploader(server, key, request_id, ctx=None):
-    """Return an on_frame(frame, row, captured, total) callback that relays annotated JPEG frames to
-    the server so the admin UI shows a smooth (~10 fps) live view of what the camera sees during
-    enrollment. Frames go over ONE kept-alive connection — at 10 fps a fresh TLS handshake per frame
-    would needlessly load the box. Call .close() when the capture is done to release it."""
-    import base64
-    import http.client
-    u = urlsplit(server)
-    host, port = u.hostname, u.port or (443 if u.scheme == "https" else 80)
-    state = {"last": 0.0, "conn": None}
-
-    def _connect():
-        if u.scheme == "https":
-            return http.client.HTTPSConnection(host, port, timeout=3, context=ctx)
-        return http.client.HTTPConnection(host, port, timeout=3)
-
-    def on_frame(frame, row, captured, total):
-        now = time.time()
-        if now - state["last"] < 0.1:           # ~10 fps — smooth without flooding the link
-            return
-        state["last"] = now
-        try:
-            import cv2
-            f = frame
-            if row is not None:
-                x, y, w, h = (int(v) for v in row[:4])
-                f = frame.copy()
-                cv2.rectangle(f, (x, y), (x + w, y + h), (0, 255, 0), 2)
-            ok, buf = cv2.imencode(".jpg", f, [cv2.IMWRITE_JPEG_QUALITY, 55])
-            if not ok:
-                return
-            img = base64.b64encode(buf.tobytes()).decode("ascii")
-            body = json.dumps({"request_id": request_id, "image": img,
-                               "captured": captured, "total": total}).encode("utf-8")
-            headers = {"Content-Type": "application/json", "Authorization": "Bearer " + key}
-            for attempt in (1, 2):              # reconnect once if the kept connection went stale
-                try:
-                    if state["conn"] is None:
-                        state["conn"] = _connect()
-                    state["conn"].request("POST", "/faces/enroll-preview", body=body, headers=headers)
-                    state["conn"].getresponse().read()
-                    break
-                except Exception:
-                    if state["conn"] is not None:
-                        try: state["conn"].close()
-                        except Exception: pass
-                    state["conn"] = None
-                    if attempt == 2:
-                        raise
-        except Exception as e:
-            log.debug("preview upload failed: %s", e)
-
-    def close():
-        if state["conn"] is not None:
-            try: state["conn"].close()
-            except Exception: pass
-            state["conn"] = None
-
-    on_frame.close = close
-    return on_frame
-
-
-def _maybe_enroll(server, key, cam, fdet, frames=7, ctx=None):
-    """If an admin queued an enroll request for this device, capture on-camera + submit the embedding."""
-    try:
-        reqd = _poll_enroll(server, key, ctx)
-    except Exception as e:
-        log.debug("enroll poll failed: %s", e)
-        return
-    if not reqd:
-        return
-    rid, name = reqd.get("id"), reqd.get("name")
-    log.info("enroll request #%s: capturing '%s' — look at the camera", rid, name)
-    uploader = _preview_uploader(server, key, rid, ctx)
-    try:
-        vec = capture_average(cam, fdet, frames, log_progress=False, on_frame=uploader)
-    except Exception as e:
-        vec = None
-        log.warning("enroll capture failed: %s", e)
-    finally:
-        uploader.close()
-    try:
-        if vec:
-            _submit_enroll(server, key, rid, embedding=vec, ctx=ctx)
-            log.info("✓ enrolled '%s' from this camera", name)
-        else:
-            _submit_enroll(server, key, rid, error="no clear face captured", ctx=ctx)
-            log.warning("enroll '%s' failed: no clear face", name)
-    except Exception as e:
-        log.warning("enroll submit failed: %s", e)
 
 
 def _poll_commands(server, key, device, ctx=None):
@@ -284,11 +180,8 @@ def run(config_path, dry_run=False):
     rr = 0
     last_hb = 0.0
     HB_INTERVAL = 30.0    # liveness ping so the server shows this device active even in a quiet room
-    last_enroll = 0.0
-    ENROLL_INTERVAL = 4.0  # how often to check for an admin-queued "enroll this face" request
     last_known = time.time()
     KNOWN_REFRESH = 60.0   # re-pull enrolled faces so new enrollments are recognized without a restart
-    can_enroll = bool(key) and fdet is not None and fdet.has_identity() and not dry_run
     device_id = cfg.get("device_id", "pi")
     gdet_volume = next((d for d in heavy if d.name == "gestures"), None)   # reuse if enabled
     last_cmd = 0.0
@@ -312,9 +205,6 @@ def run(config_path, dry_run=False):
             if t0 - last_hb >= HB_INTERVAL:        # prove liveness regardless of motion
                 client.send("heartbeat")
                 last_hb = t0
-            if can_enroll and t0 - last_enroll >= ENROLL_INTERVAL:   # admin-queued enroll-from-UI
-                last_enroll = t0
-                _maybe_enroll(url, key, cam, fdet, ctx=ctx)
             if fdet is not None and key and t0 - last_known >= KNOWN_REFRESH:   # pick up new enrollments
                 last_known = t0
                 enr = _fetch_enrolled(url, key, ctx)

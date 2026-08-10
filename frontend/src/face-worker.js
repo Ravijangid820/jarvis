@@ -26,6 +26,7 @@
  */
 
 import * as ort from "onnxruntime-web";
+import { fetchModel } from "./model-cache.js";
 import { alignFace, alignedToTensor, l2Normalize } from "./face-align.js";
 import { DETECTOR_SIZE, decodeAll, toDetectorTensor, unletterbox } from "./face-detect.js";
 
@@ -49,34 +50,17 @@ if (ort?.env?.wasm) {
 let detSession = null;
 let recSession = null;
 
-async function fetchWithProgress(url, stage) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`${stage} model unavailable (HTTP ${res.status})`);
-  const total = Number(res.headers.get("content-length") || 0);
-  const reader = res.body?.getReader();
-  if (!reader) return new Uint8Array(await res.arrayBuffer());
-  const chunks = [];
-  let loaded = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    loaded += value.length;
-    self.postMessage({ type: "progress", stage, loaded, total });
-  }
-  const out = new Uint8Array(loaded);
-  let off = 0;
-  for (const c of chunks) { out.set(c, off); off += c.length; }
-  return out;
-}
-
 async function load() {
   if (detSession && recSession) { self.postMessage({ type: "ready" }); return; }
   const opts = { executionProviders: ["wasm"], graphOptimizationLevel: "all" };
   // Detector first: it is 232 KB against SFace's 38 MB, so the UI can show a live box while the
   // recognizer is still downloading.
-  detSession ??= await ort.InferenceSession.create(await fetchWithProgress(YUNET_URL, "detector"), opts);
-  recSession ??= await ort.InferenceSession.create(await fetchWithProgress(SFACE_URL, "recognizer"), opts);
+  detSession ??= await ort.InferenceSession.create(
+    new Uint8Array(await fetchModel(YUNET_URL, (loaded, total) =>
+      self.postMessage({ type: "progress", stage: "detector", loaded, total }))), opts);
+  recSession ??= await ort.InferenceSession.create(
+    new Uint8Array(await fetchModel(SFACE_URL, (loaded, total) =>
+      self.postMessage({ type: "progress", stage: "recognizer", loaded, total }))), opts);
   self.postMessage({ type: "ready" });
 }
 

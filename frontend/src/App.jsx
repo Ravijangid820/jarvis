@@ -5,7 +5,13 @@ import { lazy, Suspense } from 'react'
 // Lazy: this panel pulls in onnxruntime-web and the face worker. Keeping it out of the main
 // bundle means visitors who never open it never download any of it.
 const FaceEnroll = lazy(() => import('./FaceEnroll'))
+// Lazy for the same reason: it owns the Whisper worker and the audio graph, and most sessions
+// never open /voice.
+const VoiceLive = lazy(() => import('./VoiceLive'))
+const MicPicker = lazy(() => import('./MicPicker'))
 import { notifyError, notifyOk, confirmDialog, promptDialog } from './notify.js'
+import { openSelectedMic } from './mic-select.js'
+import { ensureStt, isSttWarm, releaseStt, transcribeAudio } from './stt-worker.js'
 
 const API = import.meta.env.VITE_API_URL || ""
 const BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "")
@@ -367,6 +373,14 @@ function App() {
   const [isDemoSession, setIsDemoSession] = useState(() => localStorage.getItem("jarvis_demo") === "1")
   const [demoSecondsLeft, setDemoSecondsLeft] = useState(null)
   const [faceOpen, setFaceOpen] = useState(false)
+  // Personal memory: facts about THIS user, stored server-side and injected into every prompt of
+  // theirs as the USER PROFILE block. Per-user, so unlike household knowledge it is not admin-only.
+  const [memoryOpen, setMemoryOpen] = useState(false)
+  const [facts, setFacts] = useState([])
+  const [factBudget, setFactBudget] = useState({ used: 0, budget: 0 })
+  const [factText, setFactText] = useState("")
+  const [factCat, setFactCat] = useState("personal")
+  const [factBusy, setFactBusy] = useState(false)
   const [uplink, setUplink] = useState("N/A")
   const [nCtx, setNCtx] = useState(4096)
   const [allTurnsUsage, setAllTurnsUsage] = useState({ prompt: 0, cached: 0, generated: 0 })
@@ -389,6 +403,10 @@ function App() {
 
   const [availableModels, setAvailableModels] = useState([])
   const [showModelModal, setShowModelModal] = useState(false)
+  const [micInfo, setMicInfo] = useState(null)      // {mics, driver, error, selected, stale} from /voice/mics
+  const [showMicModal, setShowMicModal] = useState(false)   // admin: the LISTENER's mic on the box
+  const [selectingMic, setSelectingMic] = useState(false)
+  const [showMicPicker, setShowMicPicker] = useState(false) // anyone: where MY voice is captured
   const [switchingModel, setSwitchingModel] = useState(false)
 
   // Sidebar: `open` drives the mobile slide-in drawer; `collapsed` hides it on desktop.
@@ -437,6 +455,23 @@ function App() {
   const [paletteIndex, setPaletteIndex] = useState(0)
 
   // Theme switcher + synthesized UI sound (both persisted, sound off by default).
+  // In-app routing for /admin and /voice. These were always SPA views, but we *arrived* at them
+  // with window.location.href — a full document load, which discarded the Whisper worker, the wake
+  // models and every warm cache on the way in AND on the way back. That single line was most of
+  // why the live page asked to prepare a model every time it opened.
+  const [route, setRoute] = useState(() => window.location.pathname)
+  const navigate = (to) => {
+    if (to === window.location.pathname) return
+    window.history.pushState({}, "", to)
+    setRoute(to)
+  }
+  useEffect(() => {
+    // Back/forward must move between the views rather than reloading the document.
+    const onPop = () => setRoute(window.location.pathname)
+    window.addEventListener("popstate", onPop)
+    return () => window.removeEventListener("popstate", onPop)
+  }, [])
+
   const [theme, setTheme] = useState(() => localStorage.getItem("jarvis_theme") || "clean")
   const [sound, setSound] = useState(() => localStorage.getItem("jarvis_sound") === "1")
   const [perfMode, setPerfMode] = useState(() => localStorage.getItem("jarvis_perf") === "1")
@@ -452,65 +487,96 @@ function App() {
   const [sttError, setSttError] = useState("")
   const [sttSource, setSttSource] = useState("")   // "official" | "failsafe" — which copy loaded
   const [sttPreparing, setSttPreparing] = useState(false)  // downloads done, compiling the graphs
-  const whisperWorkerRef = useRef(null)
   const mediaStreamRef = useRef(null)
+  const stopMicRef = useRef(null)      // source-specific teardown (server PCM stream vs local tracks)
   const mediaRecorderRef = useRef(null)
   const audioChunksRef = useRef([])
+  // Voice-activity detection for the mic button: one click starts it, a pause ends it.
+  const sttCtxRef = useRef(null)          // AudioContext used only to watch the level
+  const sttRafRef = useRef(null)
+  const autoSubmitRef = useRef(false)     // did SILENCE end this take (vs. a second click)?
+  const heardSpeechRef = useRef(false)
+  // The worker's message handler is registered once, so anything it calls would otherwise be
+  // frozen at the render that created the worker — sending into a stale session id, with a stale
+  // token. These refs are re-pointed every render so it always reaches the current values.
+  const sendRef = useRef(null)
+  const inputValueRef = useRef("")
+  const processingRef = useRef(false)
 
-  /** Lazily create the Whisper Web Worker and start downloading the model. */
-  const initWhisperWorker = () => {
-    if (whisperWorkerRef.current) return whisperWorkerRef.current
-    const w = new Worker(new URL("./whisper-worker.js", import.meta.url), { type: "module" })
-    w.addEventListener("message", handleWorkerMessage)
-    whisperWorkerRef.current = w
+  // Silence long enough to mean "I've finished talking". Generous, because Whisper needs the
+  // trailing audio anyway and clipping someone mid-thought is far more annoying than waiting.
+  const VOICE_SILENCE_MS = 1400
+  const VOICE_NO_SPEECH_MS = 7000   // clicked the mic but never spoke -> give up quietly
+  // Memory backstop, not a limit on how long you may talk — the same reasoning as /voice. Hitting
+  // it stops the take WITHOUT auto-sending, so a runaway recording lands in the box for review
+  // rather than firing a turn nobody finished.
+  const VOICE_MAX_MS = 300000
+
+  /** Make sure the shared Whisper model is resident, showing progress only if it isn't already.
+   *  The worker itself lives in stt-worker.js at module scope, so the live voice page and this mic
+   *  share one copy and neither pays for the other's load. */
+  const ensureWhisper = async () => {
+    if (isSttWarm()) { setSttReady(true); setSttSource(sttSource || ""); return true }
     setSttLoading(true)
     setSttLoadProgress(0)
+    setSttPreparing(false)
     setSttError("")
-    w.postMessage({ type: "load" })
-    return w
+    try {
+      const { source } = await ensureStt(handleWorkerMessage)
+      setSttReady(true)
+      setSttLoading(false)
+      setSttLoadProgress(100)
+      setSttPreparing(false)
+      setSttSource(source || "")
+      return true
+    } catch (err) {
+      setSttLoading(false)
+      setSttPreparing(false)
+      setSttError(String(err?.message || err))
+      return false
+    }
   }
 
-  /** Handle messages coming back from the Whisper worker. */
-  const handleWorkerMessage = (e) => {
-    const { type, progress, text, error, source, phase } = e.data || {}
-    switch (type) {
-      case "progress":
-        setSttLoadProgress(Math.round(progress ?? 0))
-        break
-      case "status":
-        // Post-download graph compilation: no progress to report, several seconds long.
-        setSttPreparing(phase === "preparing")
-        break
-      case "ready":
-        setSttReady(true)
-        setSttLoading(false)
-        setSttLoadProgress(100)
-        setSttPreparing(false)
-        setSttSource(source || "")
-        break
-      case "result":
-        setSttTranscribing(false)
-        if (text) {
-          setInput(prev => {
-            const sep = prev && !prev.endsWith(" ") ? " " : ""
-            return prev + sep + text
-          })
-          // Auto-resize the textarea to fit the injected text
-          setTimeout(() => {
-            const el = inputRef.current
-            if (el) { el.style.height = "auto"; el.style.height = Math.min(el.scrollHeight, 140) + "px" }
-          }, 0)
-        }
-        break
-      case "error":
-        setSttLoading(false)
-        setSttTranscribing(false)
-        setSttError(error || "STT error")
-        console.error("[STT]", error)
-        break
-      default:
-        break
+  /** Load-progress from the shared worker (see stt-worker.js). Results and failures come back as
+   *  promise settlements rather than messages, so only the progress cases are handled here. */
+  /** Load-progress from the shared worker (see stt-worker.js). Results and failures come back as
+   *  promise settlements rather than messages, so only the progress cases are handled here. */
+  const handleWorkerMessage = (m) => {
+    const { type, progress, phase } = m || {}
+    if (type === "progress") setSttLoadProgress(Math.round(progress ?? 0))
+    // Post-download graph compilation: no progress to report, several seconds long.
+    else if (type === "status") setSttPreparing(phase === "preparing")
+  }
+
+  /** Apply a finished transcript: auto-submit if silence ended the take, else drop it in the box. */
+  const applyTranscript = (text) => {
+    setSttTranscribing(false)
+    const auto = autoSubmitRef.current
+    autoSubmitRef.current = false
+    // Whisper labels non-speech with bracketed markers ([BLANK_AUDIO], (silence), …). Auto-
+    // submitting one would ask the model to answer nothing, so strip them before deciding.
+    const clean = (text || "").replace(/[[(][^\])]*[\])]/g, "").trim()
+    if (!clean) return
+    // Silence ended the take: send it, but ONLY if a turn isn't already generating — send()
+    // refuses while processing, so firing anyway would clear the box and drop the transcript
+    // on the floor. Busy means it lands in the box instead, ready when the reply lands.
+    if (auto && !processingRef.current) {
+      // Anything already typed goes with it, so a half-written line isn't stranded.
+      const combined = ((inputValueRef.current || "").trim() + " " + clean).trim()
+      setInput("")
+      sendRef.current?.(combined)
+      return
     }
+    // Stopped by a second click — the user asked to take the wheel, so let them read and edit.
+    setInput(prev => {
+      const sep = prev && !prev.endsWith(" ") ? " " : ""
+      return prev + sep + clean
+    })
+    setTimeout(() => {
+      const el = inputRef.current
+      if (el) { el.style.height = "auto"; el.style.height = Math.min(el.scrollHeight, 140) + "px" }
+    }, 0)
+    return
   }
 
   /**
@@ -530,21 +596,102 @@ function App() {
     return rendered.getChannelData(0)
   }
 
+  /** Tear down the level-watching audio graph (not the recorder, not the mic stream). */
+  const stopSilenceWatch = () => {
+    if (sttRafRef.current) cancelAnimationFrame(sttRafRef.current)
+    sttRafRef.current = null
+    try { sttCtxRef.current?.close() } catch { /* already closed */ }
+    sttCtxRef.current = null
+  }
+
+  /**
+   * Watch the microphone level and end the take on a pause, so one click is the whole interaction.
+   *
+   * Only ever *stops* the recorder — MediaRecorder still captures every sample, so this can't clip
+   * the audio Whisper receives. The threshold rides an adaptive noise floor rather than a fixed
+   * number, because a laptop fan or a noisy room would otherwise either never trigger or never
+   * stop.
+   */
+  const startSilenceWatch = (stream) => {
+    let actx
+    try {
+      actx = new AudioContext()
+    } catch { return }        // no level watching available; the second click still works
+    sttCtxRef.current = actx
+    const analyser = actx.createAnalyser()
+    analyser.fftSize = 1024
+    actx.createMediaStreamSource(stream).connect(analyser)
+    const data = new Float32Array(analyser.fftSize)
+
+    // Seeded from the room on the first block, then tracked asymmetrically on EVERY block: falls
+    // quickly toward a quieter background, rises slowly. A hardcoded seed meant that with music
+    // playing the background itself read as speech immediately, and freezing the floor once speech
+    // began meant the pause that should end the take never registered — so it ran to the 30s cap.
+    let noise = -1
+    let quietSince = 0
+    const started = performance.now()
+    heardSpeechRef.current = false
+
+    const tick = () => {
+      const rec = mediaRecorderRef.current
+      if (!rec || rec.state === "inactive") return stopSilenceWatch()
+
+      analyser.getFloatTimeDomainData(data)
+      let sum = 0
+      for (let i = 0; i < data.length; i++) sum += data[i] * data[i]
+      const level = Math.sqrt(sum / data.length)
+      const now = performance.now()
+      if (noise < 0) noise = level          // seed from reality, not a guess
+      const floor = noise
+      noise = level < floor ? floor * 0.7 + level * 0.3 : floor * 0.998 + level * 0.002
+      const trigger = Math.max(0.012, floor * 3)
+
+      if (level > trigger) {
+        heardSpeechRef.current = true
+        quietSince = 0
+      } else if (!quietSince) {
+        quietSince = now
+      }
+
+      const quietFor = quietSince ? now - quietSince : 0
+      const spoke = heardSpeechRef.current
+      // Ended by a pause after real speech -> submit it. Never spoke, or ran too long -> stop and
+      // let the transcript land in the box instead of firing a turn nobody asked for.
+      if (spoke && quietFor >= VOICE_SILENCE_MS) {
+        autoSubmitRef.current = true
+        stopSilenceWatch()
+        stopRecording()
+        return
+      }
+      if ((!spoke && now - started >= VOICE_NO_SPEECH_MS) || now - started >= VOICE_MAX_MS) {
+        autoSubmitRef.current = false
+        stopSilenceWatch()
+        stopRecording()
+        return
+      }
+      sttRafRef.current = requestAnimationFrame(tick)
+    }
+    sttRafRef.current = requestAnimationFrame(tick)
+  }
+
   /** Request microphone permission and start capturing audio. */
   const startRecording = async () => {
     setSttError("")
-    // Ensure the worker + model are ready (lazy load on first click)
-    const w = initWhisperWorker()
-    if (!sttReady && !sttLoading) {
-      setSttLoading(true)
-      w.postMessage({ type: "load" })
-    }
+    autoSubmitRef.current = false
+    heardSpeechRef.current = false
+    // Instant when the model is already resident — which, after the first use anywhere in the app,
+    // it is.
+    if (!(await ensureWhisper())) return
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, sampleRate: 16000 }
-      })
+      // Honours the user's Microphone choice — which may be a mic on the SERVER, streamed here.
+      // MediaRecorder doesn't care: by this point it's a MediaStream like any other.
+      const { stream, stop: stopMic, note } = await openSelectedMic(
+        { channelCount: 1, sampleRate: 16000 },
+        { apiBase: API, token, onServerEnd: (why) => notifyError(why, { title: "Microphone" }) })
+      if (note) notifyOk(note, { title: "Microphone" })
       mediaStreamRef.current = stream
+      stopMicRef.current = stopMic
       audioChunksRef.current = []
 
       const recorder = new MediaRecorder(stream, { mimeType: MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "audio/webm" })
@@ -554,7 +701,10 @@ function App() {
         if (e.data.size > 0) audioChunksRef.current.push(e.data)
       }
       recorder.onstop = async () => {
-        // Release mic immediately
+        // Release mic immediately. stopMic also closes a server stream, which otherwise keeps the
+        // box's microphone open and its endpoint locked against everyone else.
+        stopMicRef.current?.()
+        stopMicRef.current = null
         stream.getTracks().forEach(t => t.stop())
         mediaStreamRef.current = null
 
@@ -573,12 +723,12 @@ function App() {
           await actx.close()
           const pcm16k = await resampleTo16kHz(decoded)
 
-          // Send to the worker for transcription
-          if (whisperWorkerRef.current) {
-            whisperWorkerRef.current.postMessage({ type: "transcribe", audio: pcm16k })
-          } else {
+          // Shared worker, already warm after the first use anywhere in the app.
+          try {
+            applyTranscript(await transcribeAudio(pcm16k))
+          } catch (err) {
             setSttTranscribing(false)
-            setSttError("Worker not available")
+            setSttError(String(err?.message || err))
           }
         } catch (err) {
           setSttTranscribing(false)
@@ -589,6 +739,7 @@ function App() {
 
       recorder.start()
       setSttRecording(true)
+      startSilenceWatch(stream)
     } catch (err) {
       setSttError(err?.name === "NotAllowedError" ? "Microphone access denied" : "Mic error: " + (err?.message || "unknown"))
       console.error("[STT] getUserMedia error:", err)
@@ -597,13 +748,16 @@ function App() {
 
   /** Stop recording and trigger transcription. */
   const stopRecording = () => {
+    stopSilenceWatch()
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
       mediaRecorderRef.current.stop()
     }
     setSttRecording(false)
   }
 
-  /** Toggle recording on/off — main click handler for the mic button. */
+  /** Toggle recording on/off — main click handler for the mic button.
+   *  Starting is one click; a pause normally finishes the take, so the second click is only an
+   *  escape hatch (and deliberately routes the text to the box rather than sending it). */
   const toggleRecording = () => {
     if (sttRecording) {
       stopRecording()
@@ -615,8 +769,12 @@ function App() {
   // Clean up worker + mic on unmount
   useEffect(() => {
     return () => {
-      if (whisperWorkerRef.current) { whisperWorkerRef.current.terminate(); whisperWorkerRef.current = null }
+      // The Whisper worker is deliberately NOT terminated: it is document-scoped and shared with
+      // the live voice page (stt-worker.js). releaseStt() is called on logout instead.
+      stopMicRef.current?.()
       if (mediaStreamRef.current) { mediaStreamRef.current.getTracks().forEach(t => t.stop()) }
+      if (sttRafRef.current) cancelAnimationFrame(sttRafRef.current)
+      try { sttCtxRef.current?.close() } catch { /* already closed */ }
     }
   }, [])
 
@@ -952,6 +1110,35 @@ function App() {
     } catch { /* ignore */ }
   }
 
+  /** The microphones the SERVER can see — the box's own hardware, for the wake-word listener.
+   *  Deliberately not the browser's mic list: this picks what the always-on listener on the server
+   *  opens, which is a different device on a different machine from the one this tab records with. */
+  const fetchMics = async () => {
+    if (role !== "admin") return
+    setMicInfo(null)
+    try {
+      const res = await apiRequest("/voice/mics")
+      if (res.ok) setMicInfo(await res.json())
+      else setMicInfo({ mics: [], error: `Could not list microphones (HTTP ${res.status})` })
+    } catch { setMicInfo({ mics: [], error: "Could not reach the server to list microphones" }) }
+  }
+
+  const selectMic = async (captureId) => {
+    if (selectingMic) return
+    setSelectingMic(true)
+    try {
+      const res = await apiRequest("/voice/mics/select", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ capture_id: captureId }),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (res.ok) { await fetchMics(); notifyOk(d.message || "Microphone saved.", { title: "Microphone" }) }
+      else notifyError(d.detail || "Failed to select that microphone")
+    } catch { notifyError("Error selecting microphone") }
+    finally { setSelectingMic(false) }
+  }
+
   const refreshDraftTokenEstimate = async () => {
     const text = input.trim() || (attachments.length ? "Please review the attached file(s)." : "")
     if (!text || !token) { setDraftTokenEstimate(null); return }
@@ -1072,6 +1259,10 @@ function App() {
         headers: { "Authorization": "Bearer " + token }
       }).catch(() => {})
     }
+    // Drop the resident speech model. Everywhere else we work hard to KEEP it warm, but leaving a
+    // loaded model (and its worker) running for whoever signs in next is the wrong default on a
+    // shared machine — and logout is the one moment where paying the reload again is right.
+    releaseStt()
     localStorage.removeItem("jarvis_token")
     localStorage.removeItem("jarvis_role")
     localStorage.removeItem("jarvis_user")
@@ -1082,6 +1273,67 @@ function App() {
     setSessions([])
     setMessages([])
     setCurrentSessionId("default")
+  }
+
+  // --- Personal memory (facts about this user) ---
+  // Categories the server accepts for a PERSONAL fact. The household-only ones (home, rooms,
+  // devices, people) are deliberately absent: those belong to the admin's household panel, and
+  // offering them here would invite putting shared facts somewhere only one user can see them.
+  const FACT_CATEGORIES = ["personal", "family", "preferences", "location",
+                           "work", "education", "interests", "technical", "other"]
+
+  const loadFacts = async () => {
+    try {
+      const res = await fetch(API + "/knowledge", { headers: { Authorization: "Bearer " + token } })
+      if (!res.ok) { if (res.status === 401 || res.status === 403) doLogout(); return }
+      const d = await res.json()
+      setFacts(d.facts || [])
+      setFactBudget({ used: d.prompt_chars || 0, budget: d.prompt_char_budget || 0 })
+    } catch { /* offline — keep whatever is on screen */ }
+  }
+
+  const addFact = async () => {
+    const content = factText.trim()
+    if (!content) return
+    setFactBusy(true)
+    try {
+      const res = await fetch(API + "/knowledge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+        body: JSON.stringify({ content, category: factCat }),
+      })
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`)
+      setFactText("")
+      await loadFacts()
+      notifyOk("Saved — Jarvis will remember that.")
+    } catch (e) { notifyError(String(e.message || e)) } finally { setFactBusy(false) }
+  }
+
+  const editFact = async (f) => {
+    const content = await promptDialog("Edit this fact.", f.content,
+      { title: "Edit fact", confirmLabel: "Save" })
+    if (content == null || content.trim() === f.content || !content.trim()) return
+    try {
+      const res = await fetch(API + "/knowledge/" + f.id, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+        body: JSON.stringify({ content: content.trim(), category: f.category }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      await loadFacts()
+    } catch (e) { notifyError(String(e.message || e)) }
+  }
+
+  const delFact = async (id) => {
+    if (!await confirmDialog("Forget this fact?",
+      { title: "Forget fact", confirmLabel: "Forget", danger: true })) return
+    try {
+      const res = await fetch(API + "/knowledge/" + id, {
+        method: "DELETE", headers: { Authorization: "Bearer " + token },
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      await loadFacts()
+    } catch (e) { notifyError(String(e.message || e)) }
   }
 
   // --- Sessions & History ---
@@ -1427,6 +1679,16 @@ function App() {
     }
   }
 
+  // Re-point after every render (no dep array on purpose). The Whisper worker's message handler is
+  // attached once, so calling `send`/reading `input` directly from it would use the values frozen
+  // at the render that created the worker — a stale session id and a stale draft. Done in an
+  // effect rather than during render, which React forbids.
+  useEffect(() => {
+    sendRef.current = send
+    inputValueRef.current = input
+    processingRef.current = processing
+  })
+
   // Synthesized UI blips (Web Audio — no files). Lazily created on first use, which
   // also satisfies the browser autoplay gesture requirement. No-op when sound is off.
   const blip = (kind) => {
@@ -1456,6 +1718,11 @@ function App() {
       { tag: "NEW", label: "New session", run: () => createSession() },
       { tag: "MCP", label: "/mcp — Manage MCP Tool Servers", run: () => { fetchMcpServers(); setShowMcpModal(true); } },
       { tag: "MDL", label: "/models — Switch Language Model", run: () => { fetchAvailableModels(); setShowModelModal(true); } },
+      { tag: "MIC", label: "/mic — Choose your microphone", run: () => setShowMicPicker(true) },
+      ...(role === "admin"
+        ? [{ tag: "WWM", label: "/listener-mic — Wake-word listener's microphone (server)",
+             run: () => { fetchMics(); setShowMicModal(true); } }]
+        : []),
       { tag: "FIL", label: "/files — Attach Text/Code File", run: () => fileInputRef.current?.click() },
       { tag: "SYS", label: "/system — Edit System Message", run: () => { setShowPlusMenu(true); setPlusPanel("system"); } },
       { tag: "TLS", label: "/tools — View Jarvis Built-in Tools", run: () => { setShowPlusMenu(true); setPlusPanel("tools"); } },
@@ -1463,7 +1730,7 @@ function App() {
       { tag: "IN", label: "Focus message input", run: () => inputRef.current?.focus() },
       { tag: "VOX", label: `JARVIS voice: ${sound ? "on" : "off"} — toggle (greeting + spoken replies)`, run: () => setSound(s => !s) },
       { tag: "FX", label: `Reduce effects: ${perfMode ? "on" : "off"} — toggle (smoother scroll)`, run: () => setPerfMode(p => !p) },
-      ...(role === "admin" ? [{ tag: "ADM", label: "Open admin console", run: () => { window.location.href = `${BASE}/admin` } }] : []),
+      ...(role === "admin" ? [{ tag: "ADM", label: "Open admin console", run: () => navigate(`${BASE}/admin`) }] : []),
       { tag: "OUT", label: "Disconnect", run: () => doLogout() },
       ...sessions.map(s => ({ tag: "GO", label: `Go to: ${s.title}`, run: () => loadHistory(s.id) })),
     ]
@@ -1606,7 +1873,10 @@ function App() {
   }
 
   // Admin console lives at /admin within the SPA (so it inherits HUD styling + theme).
-  const isAppAdminPath = window.location.pathname.endsWith("/admin") || window.location.pathname.endsWith("/admin/")
+  const isAppAdminPath = route.endsWith("/admin") || route.endsWith("/admin/")
+  // Live voice kiosk, same routing trick. Any signed-in user may use it: it is their own
+  // microphone and their own conversation, and it grants nothing an ordinary chat turn doesn't.
+  const isVoicePath = route.endsWith("/voice") || route.endsWith("/voice/")
   /** Persistent banner for a demo sandbox: what this is, how long is left, and a one-click way to
    *  erase it. Rendered on both the chat view and the admin console — the visitor should never be
    *  in a screen that doesn't say "this is a temporary sandbox". Returns null for real accounts. */
@@ -1637,20 +1907,36 @@ function App() {
     )
   }
 
-  if (isAppAdminPath) {
+  if (isVoicePath) {
     const homeUrl = BASE ? `${BASE}/` : "/"
-    if (role !== "admin") { window.location.href = homeUrl; return null }
     return (
       <>
         {renderDemoBanner()}
-        <Admin token={token} onExit={() => { window.location.href = homeUrl }} apiBase={API} />
+        <Suspense fallback={null}>
+          <VoiceLive token={token} apiBase={API} onExit={() => navigate(homeUrl)} />
+        </Suspense>
+      </>
+    )
+  }
+
+  if (isAppAdminPath) {
+    const homeUrl = BASE ? `${BASE}/` : "/"
+    if (role !== "admin") { navigate(homeUrl); return null }
+    return (
+      <>
+        {renderDemoBanner()}
+        <Admin token={token} onExit={() => navigate(homeUrl)} apiBase={API} />
       </>
     )
   }
 
   const renderPlusMenu = () => {
+    // `id` is null for items that ACT (open a modal, navigate) rather than opening a submenu.
+    // The active check must guard on that exactly like the chevron below does: plusPanel is null
+    // whenever no submenu is open — which is the default — so a bare `plusPanel === id` is
+    // null === null, and every action item renders permanently highlighted.
     const menuItem = (id, icon, label, action, disabled = false) => (
-      <button type="button" className={`lpm-item ${plusPanel === id ? 'active' : ''} ${disabled ? 'disabled' : ''}`}
+      <button type="button" className={`lpm-item ${id && plusPanel === id ? 'active' : ''} ${disabled ? 'disabled' : ''}`}
         onClick={disabled ? undefined : action} disabled={disabled}>
         <span className="lpm-icon">{icon}</span><span className="lpm-label">{label}</span>
         {id && <span className="lpm-arrow">›</span>}
@@ -1668,7 +1954,18 @@ function App() {
               enrolment is privileged. A demo visitor is an admin of their own household, so the
               demo still gets the full flow — a regular member of a real household would only have
               hit a 403 on save. */}
+          {/* Not admin-gated: these facts are the user's OWN, and a household member needs to
+              manage what Jarvis remembers about them as much as the admin does. */}
+          {menuItem(null, "👤", "About me", () => { loadFacts(); setMemoryOpen(true); closePlusMenu() })}
+          {menuItem(null, "🎙", "Live voice", () => { navigate(BASE ? `${BASE}/voice` : "/voice"); closePlusMenu() })}
+          {/* Not admin-gated: this is where THIS user's voice is picked up, which is theirs to
+              choose. The admin-only panel below it sets the box's always-on listener instead. */}
+          {menuItem(null, "🎚", "Microphone", () => { setShowMicPicker(true); closePlusMenu() })}
           {role === "admin" && menuItem(null, "🙂", "Face ID", () => { setFaceOpen(true); closePlusMenu() })}
+          {/* The SERVER's mic, not this browser's — "Live voice" above already uses your own device.
+              Admin-only because it names the box's attached hardware and reconfigures a service. */}
+          {role === "admin" && menuItem(null, "📻", "Wake-word listener mic",
+            () => { fetchMics(); setShowMicModal(true); closePlusMenu() })}
         </div>
         {plusPanel === "reasoning" && <div className="lpm-submenu">
           <div className="lpm-subhead">Reasoning</div>
@@ -1714,6 +2011,73 @@ function App() {
           )}
           {role === "admin" && <button type="button" onClick={() => { fetchMcpServers(); setShowMcpModal(true); closePlusMenu() }}>＋ Manage MCP Servers</button>}
         </div>}
+      </div>
+    )
+  }
+
+  const renderMemoryModal = () => {
+    const { used, budget } = factBudget
+    const pct = budget ? Math.min(100, Math.round(used / budget * 100)) : 0
+    const over = budget > 0 && used > budget
+    return (
+      <div className="jarvis-modal-backdrop" onClick={() => setMemoryOpen(false)}>
+        <div className="jarvis-modal mcp-modal" onClick={e => e.stopPropagation()}>
+          <div className="jm-header">
+            <h3>👤 What Jarvis knows about you</h3>
+            <button type="button" className="jm-close" onClick={() => setMemoryOpen(false)}>×</button>
+          </div>
+          <div className="jm-body">
+            <p className="jm-desc">
+              Anything you write here is remembered and included in every one of your conversations,
+              so you never have to repeat it. It is <strong>yours alone</strong> — other people in the
+              household have their own, and none of it is shared with them.
+            </p>
+
+            <div className="mem-form">
+              <select className="hud-input" value={factCat} onChange={e => setFactCat(e.target.value)}>
+                {FACT_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+              <textarea className="hud-input mem-input" rows={3} maxLength={2000}
+                placeholder="e.g. I'm a software engineer and I prefer concise answers with code examples."
+                value={factText} onChange={e => setFactText(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) addFact() }} />
+              <button type="button" className="hud-btn" onClick={addFact}
+                disabled={factBusy || !factText.trim()}>
+                {factBusy ? "Saving…" : "Remember this"}
+              </button>
+            </div>
+
+            {/* The block is truncated head-first at the cap, so without this meter facts past it
+                would stop reaching the model with nothing on screen to say so. */}
+            {budget > 0 && (
+              <div className={`mem-budget${over ? " over" : ""}`}>
+                <div className="mem-budget-bar"><div style={{ width: `${pct}%` }} /></div>
+                <span>
+                  {used} / {budget} characters of prompt space
+                  {over && " — facts past this point are being cut off. Shorten or delete a few."}
+                </span>
+              </div>
+            )}
+
+            <div className="mcp-server-list">
+              {facts.length === 0 ? (
+                <div className="mcp-empty">
+                  Nothing remembered yet. Add a fact above, or just tell Jarvis in chat — it also
+                  picks things up from your conversations on its own.
+                </div>
+              ) : facts.map(f => (
+                <div key={f.id} className="mem-row">
+                  <span className="mem-cat">{f.category}</span>
+                  <span className="mem-content">{f.content}</span>
+                  <span className="mem-actions">
+                    <button type="button" className="hud-btn" onClick={() => editFact(f)}>Edit</button>
+                    <button type="button" className="hud-btn warn" onClick={() => delFact(f.id)}>Forget</button>
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
       </div>
     )
   }
@@ -1858,6 +2222,83 @@ function App() {
     </div>
   )
 
+  const renderMicModal = () => {
+    const mics = micInfo?.mics || []
+    const selected = micInfo?.selected
+    const usingDefault = !selected || selected.capture_id < 0
+    return (
+      <div className="jarvis-modal-backdrop" onClick={() => setShowMicModal(false)}>
+        <div className="jarvis-modal model-modal" onClick={e => e.stopPropagation()}>
+          <div className="jm-header">
+            <h3>🎙 Server Microphone</h3>
+            <button type="button" className="jm-close" onClick={() => setShowMicModal(false)}>×</button>
+          </div>
+          <div className="jm-body">
+            <p className="jm-desc">
+              Which microphone <strong>attached to the server</strong> the always-listening wake-word
+              service should use. This is not the mic this browser records with — voice typing in
+              this tab already uses your own device.
+            </p>
+
+            {micInfo === null && <div className="model-empty">Looking for microphones…</div>}
+
+            {micInfo && mics.length === 0 && (
+              // The common case on a fresh box, and it is nearly always the same cause: the
+              // container can't see the host's sound card. Say the fix rather than just "none found".
+              <div className="model-empty">
+                <p>No microphone is visible to the server{micInfo.driver ? ` (audio driver: ${micInfo.driver})` : ""}.</p>
+                <p className="jm-desc" style={{ marginTop: 8 }}>
+                  If you've plugged one into the host, the container also needs access to it — pass
+                  <code> /dev/snd</code> through to the LXC and restart it, then reopen this panel.
+                </p>
+              </div>
+            )}
+
+            {micInfo?.error && <div className="model-switching-status">⚠ {micInfo.error}</div>}
+
+            {micInfo?.stale && (
+              <div className="model-switching-status">
+                ⚠ The selected microphone “{selected?.name}” isn't attached right now — the listener
+                falls back to the system default until it's back.
+              </div>
+            )}
+
+            {micInfo && (
+              <div className="model-grid">
+                <div className={`model-card ${usingDefault ? "active" : ""}`}
+                     onClick={() => !usingDefault && selectMic(-1)}>
+                  <div className="model-card-top">
+                    <strong>System default</strong>
+                    {usingDefault && <span className="model-active-badge">Active</span>}
+                  </div>
+                  <div className="model-card-meta">Whatever the OS calls the default input</div>
+                </div>
+                {mics.map(m => (
+                  <div key={m.id} className={`model-card ${m.active ? "active" : ""}`}
+                       onClick={() => !m.active && selectMic(m.id)}>
+                    <div className="model-card-top">
+                      <strong>{m.name}</strong>
+                      {m.active && <span className="model-active-badge">Active</span>}
+                    </div>
+                    <div className="model-card-meta">Capture device #{m.id}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {selectingMic && <div className="model-switching-status">↻ Saving microphone preference…</div>}
+            {micInfo && mics.length > 0 && (
+              <p className="jm-desc" style={{ marginTop: 10 }}>
+                The listener holds its microphone open, so a change applies when it restarts:
+                <code> sudo systemctl restart jarvis-listener</code>.
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   const renderLlamaUsagePopup = () => {
     const totalCtx = nCtx || 4096
     const promptTurn = lastTurnUsage.prompt_tokens || lastTurnUsage.prompt || lastTurnTimings.prompt_n || 0
@@ -1945,6 +2386,7 @@ function App() {
           <FaceEnroll token={token} apiBase={API} onClose={() => setFaceOpen(false)} />
         </Suspense>
       )}
+      {memoryOpen && renderMemoryModal()}
       {dueReminders.length > 0 && (
         <div style={{ position: "fixed", top: 12, right: 12, zIndex: 1000, display: "flex", flexDirection: "column", gap: 8, maxWidth: 360 }}>
           {dueReminders.map(r => (
@@ -2041,7 +2483,7 @@ function App() {
             <div className="hud-label">Access Control</div>
             <div className="panel-row">
               <button className="hud-btn" onClick={doLogout}>Disconnect</button>
-              {role === "admin" && <button className="hud-btn warn" onClick={() => window.location.href = `${BASE}/admin`}>Admin</button>}
+              {role === "admin" && <button className="hud-btn warn" onClick={() => navigate(`${BASE}/admin`)}>Admin</button>}
             </div>
           </div>
 
@@ -2309,6 +2751,12 @@ function App() {
         </div>
         {showMcpModal && renderMcpModal()}
         {showModelModal && renderModelModal()}
+        {showMicModal && renderMicModal()}
+        {showMicPicker && (
+          <Suspense fallback={null}>
+            <MicPicker token={token} apiBase={API} onClose={() => setShowMicPicker(false)} />
+          </Suspense>
+        )}
       </main>
     </div>
   )

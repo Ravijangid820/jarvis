@@ -14,12 +14,17 @@ Behaviour:
   "Jarvis, good morning"         → spoken greeting
   "Jarvis, <anything else>"      → POST /inbox, spoken reply       [voice_feedback]
 
+Which microphone: the admin picks one in the web UI (⊕ → Microphone), which writes
+<repo>/config/active_mic.json; this reads it at startup and passes `-c <id>` to whisper-stream.
+Unset (or -1) means the system default, exactly as before. VOICE_CAPTURE_ID overrides both.
+
 Tune via env vars (paths default to this repo):
   JARVIS_SERVER_URL   default http://localhost:5000
   VOICE_WAKE_WORD     default "jarvis"
   WHISPER_BIN         default <repo>/whisper/build/bin/whisper-stream
   WHISPER_MODEL       default <repo>/whisper/models/ggml-base.en.bin
   VOICE_KEY_FILE      default <repo>/config/voice_listener.key
+  VOICE_CAPTURE_ID    default from config/active_mic.json (-1 = system default)
 """
 import base64
 import json
@@ -41,6 +46,7 @@ WAKE = os.environ.get("VOICE_WAKE_WORD", "jarvis").lower()
 WHISPER_BIN = os.environ.get("WHISPER_BIN", str(REPO / "whisper/build/bin/whisper-stream"))
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", str(REPO / "whisper/models/ggml-base.en.bin"))
 KEY_FILE = Path(os.environ.get("VOICE_KEY_FILE", str(REPO / "config/voice_listener.key")))
+ACTIVE_MIC = REPO / "config" / "active_mic.json"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("voice-bridge")
@@ -103,6 +109,51 @@ def post_inbox(text: str, token: str) -> None:
         log.error("post failed: %s", e)
 
 
+def resolve_capture_id() -> int:
+    """Which SDL capture device to open: the admin's choice, re-resolved by NAME. -1 = system default.
+
+    Re-resolving matters. SDL's capture indices are positional, so unplugging a device shifts every
+    one after it down by one — a stored bare index can therefore come to mean a *different*
+    microphone, and an assistant that quietly starts listening on the wrong one is worse than one
+    that says it can't find the right one. So the name is authoritative: if it is still present we
+    use wherever it sits now, and if it has gone we fall back to the default and say so loudly
+    rather than open whatever inherited its number.
+    """
+    env = os.environ.get("VOICE_CAPTURE_ID")
+    if env not in (None, ""):
+        try:
+            return int(env)
+        except ValueError:
+            log.warning("VOICE_CAPTURE_ID=%r is not a number — using the system default", env)
+            return -1
+    if not ACTIVE_MIC.is_file():
+        return -1
+    try:
+        chosen = json.loads(ACTIVE_MIC.read_text())
+    except Exception as e:
+        log.warning("could not read %s (%s) — using the system default", ACTIVE_MIC, e)
+        return -1
+    cid, name = chosen.get("capture_id", -1), chosen.get("name")
+    if cid < 0 or not name:
+        return -1
+    try:
+        proc = subprocess.run([sys.executable, str(REPO / "src/scripts/list_mics.py")],
+                              capture_output=True, text=True, timeout=10)
+        devices = json.loads(proc.stdout).get("devices", [])
+    except Exception as e:
+        log.warning("could not enumerate microphones (%s) — trusting the stored index %d", e, cid)
+        return cid
+    match = next((d for d in devices if d["name"] == name), None)
+    if match is None:
+        log.warning("selected microphone %r is not attached (devices: %s) — falling back to the "
+                    "system default. Re-select it in the web UI once it's plugged in.",
+                    name, [d["name"] for d in devices] or "none")
+        return -1
+    if match["id"] != cid:
+        log.info("microphone %r moved from index %d to %d — using %d", name, cid, match["id"], match["id"])
+    return match["id"]
+
+
 def parse_line(line: str):
     """(heard, command) — heard=True if the wake word is in the line; command is the trailing text."""
     text = _ANSI.sub("", line).strip()
@@ -135,7 +186,11 @@ def main():
     # transcription per utterance. Tune --length/-vth/-t to your mic + CPU on the box.
     argv = [WHISPER_BIN, "-m", WHISPER_MODEL, "-t", "4", "--step", "0",
             "--length", "5000", "-vth", "0.6", "--no-context"]
-    log.info("listening (wake word: '%s') — %s", WAKE, " ".join(argv))
+    capture_id = resolve_capture_id()
+    if capture_id >= 0:
+        argv += ["-c", str(capture_id)]
+    log.info("listening (wake word: '%s', mic: %s) — %s", WAKE,
+             f"capture #{capture_id}" if capture_id >= 0 else "system default", " ".join(argv))
     proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
     last, last_t = "", 0.0
     try:

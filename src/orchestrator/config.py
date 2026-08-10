@@ -196,6 +196,7 @@ STT_MODELS_DIR = BASE_DIR / "models" / "stt"
 # without permissive CORS, so a browser cannot fetch them cross-origin — we host or the feature is
 # simply off. Populated (and SHA-256-verified) by src/scripts/download_models.sh.
 FACE_MODELS_DIR = BASE_DIR / "models" / "face"
+WAKE_MODELS_DIR = BASE_DIR / "models" / "wake"
 INDEX_HTML = REACT_DIST_DIR / "index.html"
 SCHEMA_PATH = BASE_DIR / "config" / "schema.sql"
 ADMIN_MAX_INPUT = 10000

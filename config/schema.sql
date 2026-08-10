@@ -201,25 +201,18 @@ CREATE TABLE IF NOT EXISTS household_settings (
 -- Liveness for edge devices (camera agents). The agent posts a periodic `heartbeat` event; we keep
 -- only the latest timestamp per device (not in vision_events, to avoid flooding it) so the admin
 -- console can show each camera as active (recent heartbeat) or inactive (stale / never seen).
+-- A device is unique WITHIN a household, not globally: `laptop-cam` is the default id in both the
+-- agent config and VOICE_CAMERA, so a global key made two households collide on one row — and
+-- since the upsert also rewrites household_id, whichever camera heartbeat arrived last STOLE the
+-- row, blanking the other household's console. The uniqueness that enforces this lives in
+-- _HOUSEHOLD_INDEXES (db.py), not here: on an upgraded database household_id does not exist yet
+-- when this script runs, so an index over it could not be created at this point.
 CREATE TABLE IF NOT EXISTS device_heartbeats (
-    device_id TEXT PRIMARY KEY,
+    device_id TEXT NOT NULL,
     household_id INTEGER REFERENCES households(id),
     last_seen DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- Enroll-from-the-UI: an admin creates a pending request for a camera device; that device's agent
--- polls, captures + embeds on-device, and submits the result. The device never gains general enroll
--- rights — it can only fulfill a request an admin already created for IT.
-CREATE TABLE IF NOT EXISTS enroll_requests (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    household_id INTEGER REFERENCES households(id),
-    device_id TEXT NOT NULL,
-    name TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending',     -- pending | done | failed
-    requested_by INTEGER,
-    user_id INTEGER REFERENCES users(id),       -- enroll FOR this account → link the person to it
-    detail TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    completed_at DATETIME
-);
-CREATE INDEX IF NOT EXISTS idx_enroll_requests_device ON enroll_requests(device_id, status);
+-- (enroll_requests lived here: an admin queued a capture, a camera agent polled for it and relayed
+-- preview frames back. Enrollment now happens in the browser that has the camera, so there is no
+-- request to queue and no imagery to relay. Dropped by a migration in db.py.)

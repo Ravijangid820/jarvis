@@ -231,6 +231,10 @@ def test_switch_it_off_uses_last_device(monkeypatch):
     monkeypatch.setattr(ha, "HA_TOKEN", "tok")
     monkeypatch.setattr(ha, "HA_ALLOWED_ENTITIES", ["input_boolean.test_light", "input_boolean.desk_fan"])
     monkeypatch.setattr(ha, "turn", lambda e, a: turned.append((e, a)) or True)
+    # The act path now pre-flights the entity against HA (a 200-with-empty-body for an
+    # entity HA does not have used to read as success). Fake it as present: these tests
+    # fake actuation too, so they must fake existence to match.
+    monkeypatch.setattr(ha, "probe_entity", lambda e: (ha.ENTITY_FOUND, {"state": "off"}))
     monkeypatch.setattr(main, "_can_control_devices", lambda r: True)
     monkeypatch.setattr(main, "REQUIRE_PRESENCE_FOR_CONTROL", False)
     monkeypatch.setattr(main, "_audit", lambda *a, **k: None)
@@ -299,6 +303,10 @@ def test_run_via_fast_path_and_start_the_fan_means_on(monkeypatch):
     monkeypatch.setattr(ha, "HA_TOKEN", "tok")
     monkeypatch.setattr(ha, "HA_ALLOWED_ENTITIES", ["automation.movie_night", "switch.desk_fan"])
     monkeypatch.setattr(ha, "run", lambda e: actions.append(("run", e)) or True)
+    # The act path now pre-flights the entity against HA (a 200-with-empty-body for an
+    # entity HA does not have used to read as success). Fake it as present: these tests
+    # fake actuation too, so they must fake existence to match.
+    monkeypatch.setattr(ha, "probe_entity", lambda e: (ha.ENTITY_FOUND, {"state": "off"}))
     monkeypatch.setattr(ha, "turn", lambda e, a: actions.append((a, e)) or True)
     monkeypatch.setattr(main, "_can_control_devices", lambda r: True)
     monkeypatch.setattr(main, "REQUIRE_PRESENCE_FOR_CONTROL", False)
@@ -332,6 +340,10 @@ def test_stop_vs_disable_semantics(monkeypatch):
     monkeypatch.setattr(ha, "HA_TOKEN", "tok")
     monkeypatch.setattr(ha, "HA_ALLOWED_ENTITIES", ["automation.morning", "switch.desk_fan"])
     monkeypatch.setattr(ha, "turn", lambda e, a: actions.append((a, e)) or True)
+    # The act path now pre-flights the entity against HA (a 200-with-empty-body for an
+    # entity HA does not have used to read as success). Fake it as present: these tests
+    # fake actuation too, so they must fake existence to match.
+    monkeypatch.setattr(ha, "probe_entity", lambda e: (ha.ENTITY_FOUND, {"state": "off"}))
     monkeypatch.setattr(ha, "stop", lambda e: actions.append(("stop", e)) or True)
     monkeypatch.setattr(main, "_can_control_devices", lambda r: True)
     monkeypatch.setattr(main, "REQUIRE_PRESENCE_FOR_CONTROL", False)
@@ -378,13 +390,25 @@ def test_parse_enable_disable():
     assert p("stop morning automation") == {"action": "stop", "device": "morning automation"}
 
 
-def test_antibluff_guard_asks_instead_of_reaching_the_llm(monkeypatch):
-    """Device named + control verb, but unparseable phrasing -> a clarification, NOT None
-    (None would fall through to the toolless streaming LLM, which bluffs acks)."""
+def _home_ready(monkeypatch, allowed=("automation.morning",)):
+    """Configure a reachable-looking smart home owned by the caller's household (1)."""
     import main
     monkeypatch.setattr(ha, "HA_URL", "http://ha.test:8123")
     monkeypatch.setattr(ha, "HA_TOKEN", "tok")
-    monkeypatch.setattr(ha, "HA_ALLOWED_ENTITIES", ["automation.morning"])
+    monkeypatch.setattr(ha, "HA_ALLOWED_ENTITIES", list(allowed))
+    monkeypatch.setattr(main, "_HA_HOUSEHOLD_ID", 1)
+    return main
+
+
+def test_antibluff_guard_asks_instead_of_reaching_the_llm(monkeypatch):
+    """Device named + control verb, but unparseable phrasing -> a clarification, NOT None
+    (None would fall through to the streaming LLM, which is offered no tools and bluffs acks).
+
+    The tool round-trip is stubbed out: this asserts the ROUTING, and a unit test must not depend
+    on llama-server being up or on what a 2B model happens to emit today.
+    """
+    main = _home_ready(monkeypatch)
+    monkeypatch.setattr(main, "_home_tool_roundtrip", lambda *a, **k: None)   # model calls nothing
     reply = main._handle_home_command("morning automation stop please now thanks", _req(), "s1")
     assert reply is not None and "morning" in reply.lower()
 
@@ -392,6 +416,167 @@ def test_antibluff_guard_asks_instead_of_reaching_the_llm(monkeypatch):
     assert main._handle_home_command("stop telling me jokes", _req(), "s1") is None
     # device named but NO control verb (just chatting about it) -> LLM is fine
     assert main._handle_home_command("the morning automation is my favorite", _req(), "s1") is None
+
+
+def test_tool_roundtrip_answers_when_the_rules_and_router_both_miss(monkeypatch):
+    """The layer the web UI never had. /inbox always called the LLM with tools; /chat/stream called
+    it with none, so a phrasing the rules and the semantic router both missed reached a toolless
+    model that answered as if it had acted. A tool result now wins over the canned question."""
+    main = _home_ready(monkeypatch)
+    monkeypatch.setattr(main, "_home_tool_roundtrip", lambda *a, **k: "Okay — running the morning automation now.")
+    reply = main._handle_home_command("morning automation stop please now thanks", _req(), "s1")
+    assert reply == "Okay — running the morning automation now."
+
+
+def test_tool_roundtrip_never_fires_on_ordinary_chat(monkeypatch):
+    """It costs a full generation on a box that does ~6 tok/s, so it must be reachable ONLY when
+    the utterance already carries a control verb AND names an allowlisted device."""
+    main = _home_ready(monkeypatch)
+    calls = []
+
+    def _spy(*a, **k):
+        calls.append(a)
+        return "acted"
+
+    monkeypatch.setattr(main, "_home_tool_roundtrip", _spy)
+    assert main._handle_home_command("stop telling me jokes", _req(), "s1") is None
+    assert main._handle_home_command("what is the weather like today", _req(), "s1") is None
+    assert main._handle_home_command("the morning automation is my favorite", _req(), "s1") is None
+    assert calls == []
+
+
+# --- friendly names: the layer real hardware actually needs ----------------------------------
+
+# A real 4-gang switch as Home Assistant exposes it: machine-generated ids, human names only in
+# the friendly_name attribute. Resolving on ids alone made "turn on the fan" match NOTHING, and
+# threw away the model's own correct tool call (device: "fan").
+REAL = ["switch.4node_smart_switch_switch_1", "switch.4node_smart_switch_switch_2",
+        "switch.4node_smart_switch_switch_3"]
+REAL_NAMES = {REAL[0]: "Light", REAL[1]: "Tube Light", REAL[2]: "Fan"}
+
+
+def test_friendly_name_resolves_what_the_id_cannot():
+    assert ha.resolve_entity("turn off the fan", REAL, REAL_NAMES) == REAL[2]
+    assert ha.resolve_entity("fan", REAL, REAL_NAMES) == REAL[2]
+    # the id is opaque, so without names this is unreachable — that was the bug
+    assert ha.resolve_entity("turn off the fan", REAL, {}) is None
+
+
+def test_the_more_completely_named_device_wins():
+    """'Light' and 'Tube Light' both contain 'light'. Naming one COMPLETELY picks it; naming the
+    longer one completely picks that instead. Neither may silently actuate the wrong device."""
+    assert ha.resolve_entity("turn on the light", REAL, REAL_NAMES) == REAL[0]
+    assert ha.resolve_entity("turn on the tube light", REAL, REAL_NAMES) == REAL[1]
+    assert ha.resolve_entity("tube light", REAL, REAL_NAMES) == REAL[1]
+
+
+def test_friendly_names_do_not_weaken_the_allowlist():
+    """A name must never widen what can be actuated: unknown devices and non-allowlisted ids are
+    still refused, and a bare shared domain word is still ambiguous."""
+    assert ha.resolve_entity("garage door", REAL, REAL_NAMES) is None
+    assert ha.resolve_entity("lock.front_door", REAL, REAL_NAMES) is None
+    assert ha.resolve_entity("switch", REAL, REAL_NAMES) is None      # all three are switches
+
+
+def test_display_name_falls_back_to_the_id():
+    assert ha.display_name(REAL[2], REAL_NAMES) == "Fan"
+    assert ha.display_name("light.kitchen", {}) == "kitchen"
+
+
+def test_stale_allowlist_entries_are_listed_so_they_can_be_removed(monkeypatch):
+    """An allowlisted entity HA no longer knows must still appear in the picker.
+
+    It used to be invisible there (the picker only rendered what /api/states returned) while the
+    UI kept saving it back on every write — so it could never be removed. That is not cosmetic:
+    see the ambiguity test below.
+    """
+    live = [{"entity_id": "switch.4node_smart_switch_switch_3",
+             "attributes": {"friendly_name": "Fan"}, "state": "on"}]
+    monkeypatch.setattr(ha, "_request", lambda *a, **k: live)
+    monkeypatch.setattr(ha, "HA_ALLOWED_ENTITIES",
+                        ["switch.4node_smart_switch_switch_3", "input_boolean.fan"])
+    rows = {e["entity_id"]: e for e in ha.list_entities()}
+    assert rows["switch.4node_smart_switch_switch_3"]["available"] is True
+    ghost = rows["input_boolean.fan"]
+    assert ghost["available"] is False and ghost["allowed"] is True   # rendered, ticked, removable
+
+
+def test_a_stale_entry_makes_a_real_device_unresolvable():
+    """Why the above matters. A dead `input_boolean.fan` and a real switch named "Fan" tie, and
+    resolve_entity refuses to guess — so "turn on the fan" stops working entirely, which reads as
+    "the allowlist didn't save". Removing the stale entry restores it."""
+    real = "switch.4node_smart_switch_switch_3"
+    names = {real: "Fan"}
+    assert ha.resolve_entity("turn on the fan", [real, "input_boolean.fan"], names) is None
+    assert ha.resolve_entity("turn on the fan", [real], names) == real
+
+
+# --- acting on an entity Home Assistant no longer has ----------------------------------------
+
+def test_act_on_a_missing_entity_reports_failure_not_success(monkeypatch):
+    """The corrosive one. HA's generic turn_off answers 200 with an empty body for an entity_id it
+    does not have, so Jarvis said "Okay — the fan is now off" having done nothing at all. It must
+    now say so, and must NOT call the service at all."""
+    import main
+    called = []
+    monkeypatch.setattr(ha, "probe_entity", lambda e: (ha.ENTITY_MISSING, None))
+    monkeypatch.setattr(ha, "turn", lambda e, a: called.append((e, a)) or True)
+    ok, eff, err = main._ha_act("input_boolean.fan", "off")
+    assert ok is False
+    assert called == []                      # never actuated a device HA doesn't have
+    assert "doesn't have" in err and "fan" in err
+
+
+def test_missing_entity_and_unreachable_ha_are_different_sentences(monkeypatch):
+    """A stale allowlist entry is fixable in the admin page; an outage is not. Collapsing the two
+    into one message sends the user looking in the wrong place."""
+    import main
+    monkeypatch.setattr(ha, "turn", lambda e, a: True)
+    monkeypatch.setattr(ha, "probe_entity", lambda e: (ha.ENTITY_MISSING, None))
+    _, _, missing = main._ha_act("switch.gone", "off")
+    monkeypatch.setattr(ha, "probe_entity", lambda e: (ha.HA_UNREACHABLE, None))
+    _, _, down = main._ha_act("switch.gone", "off")
+    assert missing != down
+    assert "couldn't reach" in down
+
+
+def test_a_present_entity_still_acts_normally(monkeypatch):
+    import main
+    monkeypatch.setattr(ha, "probe_entity", lambda e: (ha.ENTITY_FOUND, {"state": "on"}))
+    monkeypatch.setattr(ha, "turn", lambda e, a: True)
+    ok, eff, err = main._ha_act("switch.desk_fan", "off")
+    assert (ok, eff, err) == (True, "off", None)
+
+
+def test_probe_entity_maps_404_to_missing_and_other_errors_to_unreachable(monkeypatch):
+    """404 means HA answered "no such entity"; anything else means it didn't answer usefully.
+    Inferring "deleted" from a timeout would tell users to edit an allowlist that is fine."""
+    import urllib.error
+
+    def _raise(exc):
+        def _open(*a, **k):
+            raise exc
+        return _open
+
+    monkeypatch.setattr(ha, "HA_URL", "http://ha.test:8123")
+    monkeypatch.setattr(ha, "HA_TOKEN", "tok")
+    monkeypatch.setattr(ha.urllib.request, "urlopen",
+                        _raise(urllib.error.HTTPError("u", 404, "Not Found", None, None)))
+    assert ha.probe_entity("switch.gone")[0] == ha.ENTITY_MISSING
+    monkeypatch.setattr(ha.urllib.request, "urlopen",
+                        _raise(urllib.error.HTTPError("u", 500, "Boom", None, None)))
+    assert ha.probe_entity("switch.gone")[0] == ha.HA_UNREACHABLE
+    monkeypatch.setattr(ha.urllib.request, "urlopen", _raise(OSError("no route to host")))
+    assert ha.probe_entity("switch.gone")[0] == ha.HA_UNREACHABLE
+
+
+def test_refresh_names_keeps_the_old_cache_when_ha_is_unreachable(monkeypatch):
+    """A transient HA blip must not un-name every device and silently drop resolution back to
+    machine ids — that would look exactly like the bug this fixes, intermittently."""
+    monkeypatch.setattr(ha, "_FRIENDLY", dict(REAL_NAMES))
+    monkeypatch.setattr(ha, "_request", lambda *a, **k: None)         # HA down
+    assert ha.refresh_names() == 0
+    assert ha.friendly_names() == REAL_NAMES
 
 
 

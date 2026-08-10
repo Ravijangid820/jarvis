@@ -1895,6 +1895,145 @@ button.clickable-model:hover {
 /* MCP Cards */
 .mcp-server-list { display: flex; flex-direction: column; gap: 10px; max-height: 300px; overflow-y: auto; }
 .mcp-empty, .model-empty { padding: 24px; text-align: center; color: #71717a; font-size: 0.85rem; border: 1px dashed rgba(255,255,255,.1); border-radius: 8px; }
+
+/* --- Live voice kiosk (/voice) ------------------------------------------------------------ */
+.voice-page { min-height: 100vh; display: flex; flex-direction: column; background: var(--bg-void); color: #d4d4d8; }
+.voice-head {
+  flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 12px 18px; border-bottom: 1px solid rgba(255,255,255,.07);
+}
+.voice-brand { font-size: 0.72rem; letter-spacing: 0.3em; color: var(--holo-cyan); font-weight: 700; }
+.voice-head .hud-btn { flex: none; padding: 6px 16px; }
+
+.voice-stage {
+  flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 14px; padding: 24px 18px; text-align: center; position: relative; isolation: isolate;
+}
+/* Blueprint backdrop: a drafting grid under a radial vignette, so the reactor appears to float on
+   a schematic rather than on flat black. Two repeating-linear-gradients cost nothing to composite
+   and never repaint — deliberately not an image, which would be another asset to ship and cache. */
+.voice-stage::before {
+  content: ""; position: absolute; inset: 0; z-index: -2; pointer-events: none;
+  background-image:
+    repeating-linear-gradient(0deg, rgba(103,199,235,.045) 0 1px, transparent 1px 46px),
+    repeating-linear-gradient(90deg, rgba(103,199,235,.045) 0 1px, transparent 1px 46px),
+    repeating-linear-gradient(0deg, rgba(103,199,235,.022) 0 1px, transparent 1px 11.5px),
+    repeating-linear-gradient(90deg, rgba(103,199,235,.022) 0 1px, transparent 1px 11.5px);
+  mask-image: radial-gradient(circle at 50% 45%, #000 0%, #000 38%, transparent 78%);
+}
+/* A cool wash behind the rings, warming to gold while Jarvis is working — the same two-identity
+   story the canvas tells, carried into the room around it. */
+.voice-stage::after {
+  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  background: radial-gradient(circle at 50% 45%, rgba(103,199,235,.10), transparent 62%);
+  transition: background 900ms ease;
+}
+.voice-stage.phase-thinking::after, .voice-stage.phase-speaking::after {
+  background: radial-gradient(circle at 50% 45%, rgba(255,176,46,.16), transparent 66%);
+}
+
+.voice-reactor { position: relative; display: grid; place-items: center; }
+.voice-canvas { width: min(46vh, 78vw); height: min(46vh, 78vw); display: block; }
+.voice-wordmark {
+  position: absolute; pointer-events: none; user-select: none;
+  font-family: var(--font-data, inherit); font-weight: 700;
+  font-size: clamp(0.72rem, 2.1vh, 1.15rem); letter-spacing: 0.22em;
+  color: #eaf7ff; text-shadow: 0 0 14px rgba(103,199,235,.85), 0 0 34px rgba(103,199,235,.4);
+  opacity: .92; transition: opacity 500ms ease, color 700ms ease, text-shadow 700ms ease;
+}
+/* Out of the way whenever the core is doing the talking: the wordmark is an idle-state label, and
+   leaving it lit through a reply would sit on top of the burst. */
+.voice-stage.phase-thinking .voice-wordmark, .voice-stage.phase-speaking .voice-wordmark { opacity: 0; }
+.voice-stage.phase-hearing .voice-wordmark { opacity: .35; }
+.voice-stage.phase-off .voice-wordmark { opacity: .5; color: #9fb8c4; text-shadow: 0 0 10px rgba(103,199,235,.3); }
+.voice-mic-note { color: var(--alert-orange); opacity: .85; }
+@media (prefers-reduced-motion: reduce) {
+  .voice-stage::after, .voice-wordmark { transition: none; }
+}
+.voice-label { font-size: 0.78rem; letter-spacing: 0.28em; text-transform: uppercase; color: var(--holo-cyan); min-height: 1.2em; }
+.voice-stage.phase-thinking .voice-label { color: var(--alert-orange); }
+.voice-stage.phase-off .voice-label { color: #71717a; }
+.voice-go { flex: none; min-width: 190px; padding: 10px 22px; }
+.voice-head-actions { display: flex; align-items: center; gap: 8px; }
+.voice-gear { flex: none; padding: 6px 12px; font-size: 0.9rem; line-height: 1; }
+.voice-wake-state { font-size: 0.64rem; letter-spacing: 0.12em; text-transform: uppercase; color: #71717a; }
+.voice-stage.phase-armed .voice-label { color: var(--holo-cyan); opacity: 0.75; }
+
+/* The settings summary. Deliberately typographic rather than a button-looking button: it reports
+   state first and is clickable second, so it reads as part of the readout instead of adding a
+   third row of controls to the thing we just cleared. */
+.voice-summary {
+  appearance: none; background: none; border: 0; cursor: pointer;
+  font: inherit; font-size: 0.66rem; letter-spacing: 0.16em; text-transform: uppercase;
+  color: #6b7280; padding: 2px 6px; border-radius: 3px;
+  transition: color 160ms ease, background 160ms ease;
+}
+.voice-summary:hover, .voice-summary:focus-visible { color: var(--holo-cyan); background: var(--holo-cyan-dim); }
+.voice-summary:focus-visible { outline: 1px solid var(--holo-cyan); outline-offset: 2px; }
+
+.voice-settings { max-width: 540px; }
+.vs-row {
+  display: flex; align-items: flex-start; gap: 18px; justify-content: space-between;
+  padding: 14px 0; border-bottom: 1px solid rgba(255,255,255,.06);
+}
+.vs-row:last-of-type { border-bottom: 0; }
+.vs-label { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.vs-label strong { font-size: 0.78rem; letter-spacing: 0.06em; color: #d4d4d8; font-weight: 600; }
+.vs-label span { font-size: 0.72rem; line-height: 1.5; color: #71717a; }
+.vs-choices { display: flex; gap: 6px; flex-wrap: wrap; flex: none; justify-content: flex-end; }
+.vs-choices .hud-btn { flex: none; padding: 5px 12px; font-size: 0.66rem; }
+.vs-choices .hud-btn.active { background: var(--holo-cyan-dim); box-shadow: inset 0 0 12px var(--holo-cyan-glow); }
+.vs-choices .hud-btn:disabled { opacity: .4; cursor: not-allowed; }
+/* Stack on narrow screens: the choices would otherwise squeeze the description to one word a line. */
+@media (max-width: 520px) {
+  .vs-row { flex-direction: column; gap: 10px; }
+  .vs-choices { justify-content: flex-start; }
+}
+.voice-hint { max-width: 46ch; font-size: 0.76rem; line-height: 1.6; color: #71717a; margin: 0; }
+.voice-error { font-size: 0.78rem; color: var(--alert-orange); max-width: 52ch; }
+
+.voice-transcript {
+  flex: 0 0 auto; max-height: 34vh; overflow-y: auto; display: flex; flex-direction: column; gap: 10px;
+  padding: 16px 18px 24px; border-top: 1px solid rgba(255,255,255,.07);
+}
+.voice-empty { color: #52525b; font-size: 0.8rem; text-align: center; }
+.voice-turn { display: flex; gap: 10px; align-items: baseline; font-size: 0.88rem; line-height: 1.55; }
+.voice-who { flex: 0 0 auto; min-width: 52px; font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.14em; color: #71717a; }
+.voice-turn.jarvis .voice-who { color: var(--holo-cyan); }
+.voice-text { flex: 1 1 auto; word-break: break-word; }
+@media (max-width: 560px) { .voice-canvas { width: 74vw; height: 74vw; } }
+
+/* --- Personal memory ("About me") ------------------------------------------------------- */
+.mem-form { display: flex; flex-direction: column; gap: 8px; }
+.mem-form .hud-input { flex: none; }
+.mem-input { resize: vertical; min-height: 68px; font-family: inherit; line-height: 1.5; padding: 10px; }
+.mem-form .hud-btn { flex: none; align-self: flex-start; padding: 8px 18px; }
+
+/* Prompt-budget meter. The profile block is truncated head-first at the cap, so this is the only
+   place a user can see that a fact has stopped reaching the model. */
+.mem-budget { display: flex; flex-direction: column; gap: 6px; font-size: 0.72rem; color: #71717a; letter-spacing: 0.04em; }
+.mem-budget-bar { height: 3px; background: rgba(255,255,255,.08); border-radius: 2px; overflow: hidden; }
+.mem-budget-bar > div { height: 100%; background: var(--holo-cyan); transition: width 0.3s ease; }
+.mem-budget.over { color: var(--alert-orange); }
+.mem-budget.over .mem-budget-bar > div { background: var(--alert-orange); }
+
+.mem-row {
+  display: flex; align-items: flex-start; gap: 12px; padding: 10px 12px;
+  background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.07); border-radius: 10px;
+}
+.mem-cat {
+  flex: 0 0 auto; font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.12em;
+  color: var(--holo-cyan); background: rgba(103, 199, 235, 0.14);
+  border: 1px solid rgba(103, 199, 235, 0.5); border-radius: 4px;
+  padding: 3px 7px; margin-top: 2px;
+}
+.mem-content { flex: 1 1 auto; font-size: 0.88rem; line-height: 1.5; word-break: break-word; white-space: pre-wrap; }
+.mem-actions { flex: 0 0 auto; display: flex; gap: 6px; }
+.mem-actions .hud-btn { flex: none; padding: 5px 10px; font-size: 0.62rem; }
+@media (max-width: 560px) {
+  .mem-row { flex-wrap: wrap; }
+  .mem-content { flex: 1 1 100%; order: 3; }
+}
 .mcp-server-card {
   display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px;
   padding: 12px 14px; background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.07); border-radius: 10px;

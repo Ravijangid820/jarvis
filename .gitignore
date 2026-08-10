@@ -70,6 +70,12 @@ frontend/dist/
 # Voice-listener API key (mint with manage.py)
 config/voice_listener.key
 
+# Per-deployment runtime choices, written by the admin UI — which GGUF to load next restart, and
+# which capture device the listener should open. Both name hardware/files on ONE box, so they
+# would be wrong for anyone else who checked them out.
+config/active_model.json
+config/active_mic.json
+
 # Local-only fixture photo for the face-alignment cross-check (see
 # src/scripts/gen_align_fixture.py). Deliberately NOT committed: any suitable portrait
 # works, and the derived JSON fixtures — which ARE committed — are what the tests read.

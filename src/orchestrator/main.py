@@ -18,6 +18,7 @@ import re
 import shutil
 import sqlite3
 import secrets
+import sys
 import tarfile
 import tempfile
 import threading
@@ -46,9 +47,10 @@ from config import (ADMIN_MAX_INPUT, ALLOWED_ORIGINS, APP_VERSION, BASE_DIR, CHR
                     DEMO_PASSWORD, DEMO_PUBLIC_SIGNUP, DEMO_TTL_MINUTES,
                     DEMO_USER_ID_BASE, DEMO_USERNAME,
                     HA_TOKEN_FROM_ENV, HA_URL_FROM_ENV,
-                    INDEX_HTML, LLM_URL, PIPER_BIN, PIPER_MODEL,
+                    INDEX_HTML, KNOWLEDGE_TOKEN_CAP, LLM_URL, PIPER_BIN, PIPER_MODEL,
                     RATE_LIMIT_RPM, REACT_DIST_DIR, REGULAR_MAX_INPUT, REQUIRE_PRESENCE_FOR_CONTROL,
                     FACE_MODELS_DIR, STATIC_DIR, STT_MODELS_DIR, VALID_FACT_CATEGORIES,
+                    WAKE_MODELS_DIR,
                     JARVIS_MODE, logger)
 import ha
 import intent_router
@@ -71,7 +73,6 @@ from llm import count_prompt_tokens, llm_content, request_llm, request_llm_strea
 _HA_HOUSEHOLD_ID: Optional[int] = None
 
 
-@asynccontextmanager
 def _load_ha_settings():
     """Apply the DB-stored (admin-UI-managed) Home Assistant settings at startup. Environment vars
     win — a field set via env stays as config.py resolved it and the UI shows it read-only."""
@@ -92,13 +93,32 @@ def _load_ha_settings():
         logger.warning("Could not load Home Assistant settings from DB: %s", e)
 
 
+def _refresh_ha_names_and_router():
+    """Cache the entities' friendly names, then embed the router exemplars built FROM them.
+
+    Ordering is the point: exemplars and device resolution both key on the display name, so the
+    names have to land first or the router indexes machine ids ("turn on the 4node smart switch
+    switch 3") for the lifetime of the process. Both are network/CPU work, so this runs off-request
+    — at startup and whenever an admin saves the smart-home config.
+    """
+    try:
+        cached = ha.refresh_names()
+        if cached:
+            logger.info("Home Assistant: cached %d entity names", cached)
+    except Exception as e:
+        logger.warning("Home Assistant name refresh failed (%s) — resolution falls back to ids", e)
+    if memory.vectors_available():
+        intent_router.rebuild(memory.embed_documents)
+
+
 def _rebuild_intent_router():
-    """Embed the router exemplars in the background (startup + whenever the allowlist changes)."""
-    if not (ha.configured() and ha.HA_ALLOWED_ENTITIES and memory.vectors_available()):
+    """Kick the name+exemplar refresh in the background (startup + whenever the allowlist changes)."""
+    if not (ha.configured() and ha.HA_ALLOWED_ENTITIES):
         return
-    threading.Thread(target=intent_router.rebuild, args=(memory.embed_documents,), daemon=True).start()
+    threading.Thread(target=_refresh_ha_names_and_router, daemon=True).start()
 
 
+@asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
     _load_ha_settings()        # runtime HA config (env > DB), before anything serves
@@ -147,6 +167,11 @@ _GESTURE_STEP_CLAMP = 25         # max % change per report (smoothness / anti-ju
 # Greet-on-arrival: a recognized person not seen for ARRIVAL_GAP_S counts as a fresh arrival.
 _present_since: Dict[str, float] = {}
 ARRIVAL_GAP_S = 300.0
+
+# SFace's calibrated cosine cutoff (OpenCV's recommended value). THE definition of "recognized" for
+# this deployment: matching happens here, so clients never carry a threshold of their own to drift
+# out of step with this one.
+FACE_RECOGNIZE_THRESHOLD = 0.363
 
 # --- Rate limiting (in-process) ---------------------------------------------
 _rate_store: Dict[str, List[float]] = defaultdict(list)
@@ -272,11 +297,11 @@ async def security_middleware(request: Request, call_next):
             # /demo/session is unauthenticated by design — it is how a visitor GETS a credential,
             # exactly like /auth/login. It creates its own isolated household and can reach no
             # existing data; its own per-IP limit stands in for the auth check.
-            or path in ["/health", "/", "/admin", "/auth/login", "/demo/session",
+            or path in ["/health", "/", "/admin", "/voice", "/auth/login", "/demo/session",
                         "/favicon.svg", "/favicon.png", "/favicon.ico", "/ca.crt"]
             or path.endswith("/favicon.svg") or path.endswith("/favicon.png") or path.endswith("/favicon.ico") or path.endswith("/ca.crt")
             or "/static/" in path or "/assets/" in path or "/stt-models/" in path
-            or "/face-models/" in path
+            or "/face-models/" in path or "/wake-models/" in path
             or "/ort/" in path):
         resp = await call_next(request)
         # Vite emits content-hashed bundles under /assets — safe to cache forever.
@@ -295,7 +320,7 @@ async def security_middleware(request: Request, call_next):
             return _apply_security_headers(resp, "public, max-age=31536000, immutable", csp=False)
         # Same reasoning as /stt-models: fixed filenames, so `immutable` would be a lie if the
         # pinned weights were ever re-pinned. Revalidate; StaticFiles' ETag makes that a cheap 304.
-        if "/stt-models/" in path or "/face-models/" in path:
+        if "/stt-models/" in path or "/face-models/" in path or "/wake-models/" in path:
             return _apply_security_headers(resp, "public, no-cache", csp=False)
         return _apply_security_headers(resp)
 
@@ -397,6 +422,9 @@ class QueryRequest(BaseModel):
     system_prompt: Optional[str] = Field(default=None, max_length=2000)
     voice_feedback: bool = False
     reasoning: Optional[bool] = None
+    # Set by the live voice page. Server-side rather than a client-supplied system_prompt so the
+    # persona stays defined in exactly one place and a caller can't quietly replace it.
+    voice: bool = False
     attachments: List["ChatAttachment"] = Field(default_factory=list, max_length=3)
 
 
@@ -500,25 +528,11 @@ class FaceUpdateRequest(BaseModel):
     user_id: Optional[int] = None          # link person → account (null clears the link)
 
 
-class EnrollRequestCreate(BaseModel):
-    # Enroll FOR a user account (preferred — links the face → account); name is derived from the
-    # user, or may be given directly (e.g. the CLI / a non-account person).
-    user_id: Optional[int] = None
-    name: Optional[str] = Field(default=None, min_length=1, max_length=64)
-    device_id: str = Field(..., min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._:-]+$")
-
-
-class EnrollResult(BaseModel):
-    request_id: int
-    embedding: Optional[List[float]] = Field(default=None, min_length=8, max_length=2048)
-    error: Optional[str] = Field(default=None, max_length=200)
-
-
-class EnrollPreview(BaseModel):
-    request_id: int
-    image: str = Field(..., max_length=700000)   # base64 JPEG (annotated frame); ~500 KB cap
-    captured: int = 0
-    total: int = 0
+class FaceIdentifyRequest(BaseModel):
+    # One freshly-computed L2-normalized vector to match against this household's enrolled set.
+    # Same shape as FaceEnrollRequest.embedding — the client computes it exactly the same way,
+    # the only difference is that nothing is stored.
+    embedding: List[float] = Field(..., min_length=8, max_length=2048)
 
 
 class MCPServerRequest(BaseModel):
@@ -534,6 +548,13 @@ class MCPServerTestRequest(BaseModel):
 
 class ModelSwitchRequest(BaseModel):
     model: str = Field(..., min_length=1, max_length=128)
+
+
+class MicSelectRequest(BaseModel):
+    # -1 is whisper-stream's own default ("whatever the system calls the default input"), which is
+    # the right answer when there is exactly one mic and the useful escape hatch when the list is
+    # wrong. Anything >= 0 is an index into the server's SDL capture-device list.
+    capture_id: int = Field(..., ge=-1, le=64)
 
 
 
@@ -1128,6 +1149,247 @@ def switch_model(req: ModelSwitchRequest, request: Request):
 
 
 # ----------------- Voice / TTS -----------------
+ACTIVE_MIC_PATH = BASE_DIR / "config" / "active_mic.json"
+
+
+def _read_active_mic() -> Dict[str, Any]:
+    """The admin's chosen microphone: {"capture_id": int, "name": str} — or {} if never set."""
+    try:
+        if ACTIVE_MIC_PATH.exists():
+            data = json.loads(ACTIVE_MIC_PATH.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and "capture_id" in data:
+                return data
+    except Exception as e:
+        logger.warning("could not read %s: %s", ACTIVE_MIC_PATH, e)
+    return {}
+
+
+def _list_capture_devices() -> Dict[str, Any]:
+    """Enumerate the box's microphones by running src/scripts/list_mics.py.
+
+    A subprocess rather than an import: enumerating means SDL_Init(AUDIO), which opens a connection
+    to the sound server and installs handlers — state this long-lived HTTP process has no business
+    holding for the sake of one admin listing. See that script for why SDL is the only enumeration
+    whose indices whisper-stream will agree with.
+    """
+    import subprocess
+    # Resolved from THIS file, not BASE_DIR: list_mics.py is code that ships next to main.py, while
+    # BASE_DIR is JARVIS_HOME — a data root that in some deployments holds config and models but no
+    # source tree. BASE_DIR stays as the fallback for layouts that relocate the code.
+    candidates = [Path(__file__).resolve().parents[2] / "src" / "scripts" / "list_mics.py",
+                  BASE_DIR / "src" / "scripts" / "list_mics.py"]
+    script = next((p for p in candidates if p.exists()), None)
+    if script is None:
+        return {"driver": None, "devices": [],
+                "error": f"list_mics.py is missing from this deployment (looked in {candidates[0].parent})"}
+    try:
+        proc = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=10)
+    except subprocess.TimeoutExpired:
+        # A wedged sound server blocks in SDL_Init rather than returning; don't hang the request.
+        return {"driver": None, "devices": [], "error": "audio enumeration timed out after 10s"}
+    except Exception as e:
+        return {"driver": None, "devices": [], "error": f"could not enumerate audio devices: {e}"}
+    if proc.returncode != 0:
+        return {"driver": None, "devices": [],
+                "error": (proc.stderr or "").strip()[:300] or f"enumeration exited {proc.returncode}"}
+    try:
+        return json.loads(proc.stdout)
+    except Exception:
+        return {"driver": None, "devices": [], "error": "audio enumeration returned unreadable output"}
+
+
+@app.get("/voice/mics")
+def list_mics(request: Request):
+    """The microphones this server can see, for the admin's mic picker.
+
+    Admin-only: which devices are attached, and what they're called, describes the hardware of the
+    box rather than anything a chat user needs.
+
+    `selected` is what the admin picked; `active` on a device means the running listener would use
+    it. Selection is matched by NAME as well as index because SDL's indices are positional — unplug
+    a webcam and every device after it shifts down one, so a stored bare index can quietly come to
+    mean a different microphone. `stale` says the chosen device is not currently present.
+    """
+    _require_admin(request)
+    found = _list_capture_devices()
+    chosen = _read_active_mic()
+    name = chosen.get("name")
+    cid = chosen.get("capture_id", -1)
+    devices = found.get("devices", [])
+    match = next((d for d in devices if d["name"] == name), None) if name else None
+    return {
+        "mics": [{**d, "active": bool(match and d["id"] == match["id"])} for d in devices],
+        "driver": found.get("driver"),
+        "error": found.get("error"),
+        "selected": {"capture_id": cid, "name": name} if chosen else None,
+        # The selection names a device that isn't here right now: the listener will fall back to the
+        # system default rather than open whatever has inherited that index.
+        "stale": bool(chosen and cid >= 0 and name and match is None),
+        "listener_restart_required": True,
+    }
+
+
+@app.post("/voice/mics/select")
+def select_mic(req: MicSelectRequest, request: Request):
+    """Choose the microphone the wake-word listener should use, from the next restart.
+
+    Like /models/switch, this stages a choice rather than pretending to reconfigure a running
+    process: the listener is a separate systemd unit holding an open capture stream, and the honest
+    thing is to record the decision and say what has to happen for it to take effect.
+    """
+    _require_admin(request)
+    found = _list_capture_devices()
+    devices = found.get("devices", [])
+    if req.capture_id < 0:
+        payload = {"capture_id": -1, "name": None}      # back to the system default
+        label = "system default"
+    else:
+        dev = next((d for d in devices if d["id"] == req.capture_id), None)
+        if dev is None:
+            raise HTTPException(status_code=404,
+                                detail=f"No capture device {req.capture_id} on this server")
+        # Store the name alongside the index — the name is what survives a device being unplugged.
+        payload = {"capture_id": dev["id"], "name": dev["name"]}
+        label = dev["name"]
+    try:
+        ACTIVE_MIC_PATH.parent.mkdir(parents=True, exist_ok=True)
+        ACTIVE_MIC_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Could not save the microphone selection: {e}")
+    _audit(request, "voice.mic_select", label)
+    return {"status": "restart_required", "selected": payload,
+            "message": f"Microphone set to “{label}”. Restart the voice listener to use it."}
+
+
+# One capture stream at a time. The microphone is a single piece of hardware: a second ffmpeg on
+# the same PCM either fails to open it or (with dmix) hands out a degraded duplicate, so the honest
+# answer to a second listener is "busy" rather than a stream that quietly misbehaves.
+_SERVER_MIC_LOCK = threading.Lock()
+_SERVER_MIC_MAX_S = 15 * 60     # hard cap; a forgotten open tab must not hold the mic all day
+_PCM_RATE = 16000               # what both the wake detector and Whisper want, so nothing resamples
+
+
+@app.get("/voice/inputs")
+def voice_inputs(request: Request):
+    """Microphones attached to the SERVER, offered to any household member as an audio source.
+
+    Distinct from /voice/mics (admin): that one picks the device the always-on wake-word listener
+    opens. This one is the "use the microphone next to me" option in a user's own voice input — a
+    good USB mic plugged into the box beats a laptop lid array for whoever is sitting near it.
+
+    Devices are ALSA PCM ids from /proc/asound rather than SDL indices: they're stable across
+    replug (`plughw:<card>,<dev>` plus a card name), and they're what ffmpeg captures with.
+    """
+    _require_not_demo()          # a visitor must never reach a live feed of someone's room
+    found = _list_capture_devices()
+    return {"inputs": found.get("alsa", []), "error": found.get("error"),
+            "busy": _SERVER_MIC_LOCK.locked()}
+
+
+def _ffmpeg_reason(stderr: str) -> str:
+    """The one useful sentence out of ffmpeg's several lines of ALSA noise.
+
+    A failed open prints a config-library backtrace, the actual cause, and two generic "Error opening
+    input" lines. Only the middle one tells anybody anything, and it is the line that distinguishes
+    "no /dev/snd in this container" from "another process holds the device"."""
+    lines = [" ".join(ln.split()) for ln in (stderr or "").splitlines() if ln.strip()]
+    best = next((ln for ln in lines if "cannot open audio device" in ln.lower()), None)
+    if best is None:
+        best = next((ln for ln in lines if ln.lower().startswith("error")), None)
+    if best is None:
+        best = lines[-1] if lines else "the device produced no audio"
+    best = re.sub(r"^\[[^\]]*\]\s*", "", best)          # strip ffmpeg's "[alsa @ 0x…]" prefix
+    return best[:160]
+
+
+@app.get("/voice/server-mic/stream")
+async def stream_server_mic(request: Request, device: str):
+    """Stream the server microphone as raw 16 kHz mono PCM (s16le) for the browser to consume.
+
+    The browser wraps this back into a MediaStream, so the *existing* in-tab pipeline — VAD, wake
+    word, Whisper — runs unchanged and transcription stays on the user's device. Deliberately not a
+    server-side transcription endpoint: v3.2.0 moved STT off this 2011 CPU on purpose, and shipping
+    audio instead of text keeps it off.
+
+    This is a live feed of the room the server sits in, so: never in a demo household, one session
+    at a time, hard-capped, and written to the audit log.
+    """
+    _require_not_demo()
+    # The device string becomes a subprocess argument, so it is matched against the enumerated set
+    # rather than sanitised. Anything else — including a value that merely *looks* like a device —
+    # is refused, so no caller-supplied text can turn into an ffmpeg flag.
+    known = {d["device"] for d in _list_capture_devices().get("alsa", [])}
+    if device not in known:
+        raise HTTPException(status_code=404, detail=f"No such capture device: {device}")
+    if not shutil.which("ffmpeg"):
+        raise HTTPException(status_code=503, detail="ffmpeg is not installed on the server")
+    if not _SERVER_MIC_LOCK.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="The server microphone is already in use")
+
+    argv = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "alsa", "-i", device,
+            "-ac", "1", "-ar", str(_PCM_RATE), "-f", "s16le", "-"]
+
+    # Wait for the FIRST bytes before committing to a 200. Once a StreamingResponse starts, the
+    # status is already on the wire and a failure can only appear as a stream that ends — which is
+    # indistinguishable from a silent room. The overwhelmingly common failure here is a container
+    # that can see the card in /proc/asound but has no /dev/snd, and ffmpeg says so precisely; that
+    # sentence is worth far more to whoever is debugging than an empty 200.
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    except Exception as e:
+        _SERVER_MIC_LOCK.release()
+        raise HTTPException(status_code=503, detail=f"Could not start audio capture: {e}")
+    try:
+        first = await asyncio.wait_for(proc.stdout.read(4096), timeout=8)
+    except asyncio.TimeoutError:
+        first = b""
+    if not first:
+        err = ""
+        try:
+            err = (await asyncio.wait_for(proc.stderr.read(600), timeout=2)).decode(errors="replace")
+        except Exception:
+            pass
+        if proc.returncode is None:
+            proc.kill()
+            await proc.wait()
+        _SERVER_MIC_LOCK.release()
+        logger.warning("server mic %s failed to open: %s", device, " ".join(err.split()))
+        raise HTTPException(status_code=503, detail=f"Could not open {device}: {_ffmpeg_reason(err)}")
+
+    _audit(request, "voice.server_mic", device)
+
+    async def pcm():
+        try:
+            yield first
+            deadline = time.time() + _SERVER_MIC_MAX_S
+            while True:
+                if await request.is_disconnected() or time.time() > deadline:
+                    break
+                try:
+                    chunk = await asyncio.wait_for(proc.stdout.read(4096), timeout=5)
+                except asyncio.TimeoutError:
+                    continue                       # silence is not an error; re-check disconnect
+                if not chunk:
+                    # ffmpeg exited mid-session (device unplugged, say). The open failure is already
+                    # ruled out above, so this is genuinely a stream that stopped; log why and end.
+                    err = (await proc.stderr.read(600)).decode(errors="replace").strip()
+                    if err:
+                        logger.warning("server mic capture ended: %s", err)
+                    break
+                yield chunk
+        finally:
+            if proc.returncode is None:
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except ProcessLookupError:
+                    pass
+            _SERVER_MIC_LOCK.release()
+
+    return StreamingResponse(pcm(), media_type="audio/L16; rate=16000; channels=1")
+
+
 @app.post("/tts")
 def tts(req: TTSRequest, request: Request):
     """Synthesize speech (Piper) for arbitrary text → base64 WAV. The web UI uses this to speak
@@ -1138,14 +1400,33 @@ def tts(req: TTSRequest, request: Request):
     return {"audio": audio}
 
 
+# The last acknowledgement spoken, so the next one differs. Hearing the same three words every
+# time you say the wake word is what makes a voice assistant feel like a doorbell rather than a
+# character — and the wake word is the ONE line you hear more than any other.
+_LAST_ACK: List[str] = []
+
+
 def _jarvis_ack() -> str:
-    """A short, time-aware JARVIS acknowledgement — the spoken reply to just the wake word."""
+    """A short, time-aware JARVIS acknowledgement — the spoken reply to just the wake word.
+
+    Never repeats the previous one. With a dozen options that alone is most of the perceived
+    variety: back-to-back repeats are what the ear notices, not the size of the pool.
+    """
     h = datetime.now().hour
     part = "morning" if h < 12 else "afternoon" if h < 18 else "evening"
-    return random.choice([
+    options = [
         "Yes, sir?", "At your service, sir.", "How can I help, sir?",
         f"Good {part}, sir.", "Standing by, sir.", "I'm here, sir.",
-    ])
+        "Listening, sir.", "Sir?", "Go ahead, sir.", "Ready when you are, sir.",
+        "You have my attention, sir.", "What can I do for you, sir?",
+    ]
+    if h < 5:                       # the small hours deserve their own line
+        options += ["Still awake, sir?", "Burning the midnight oil, sir?"]
+    choices = [o for o in options if o not in _LAST_ACK] or options
+    pick = random.choice(choices)
+    _LAST_ACK.clear()
+    _LAST_ACK.append(pick)
+    return pick
 
 
 @app.get("/greeting")
@@ -1184,8 +1465,19 @@ def enroll_face(req: FaceEnrollRequest, request: Request):
 
 @app.get("/faces/enrolled")
 def enrolled_faces(request: Request):
-    """The enrolled set for the edge agent: {name: [embedding, ...]} (a list per person — recognition
-    matches against the best of all)."""
+    """The enrolled set for an always-on camera agent: {name: [embedding, ...]} (a list per person —
+    recognition matches against the best of all).
+
+    **Device keys and admins only.** This hands out every face template in the household, so it is
+    not something an ordinary logged-in member should be able to pull: a face is a credential here
+    (it can drive device authorization), and a template is enough to replay one. A headless camera
+    still needs the set locally — it matches motion-gated at several frames a second and must keep
+    working through a server blip — and trusting a device-bound key you minted for a camera in your
+    own home is a deliberate, revocable grant. Interactive clients (the browser) match through
+    /faces/identify instead and never see a template but their own.
+    """
+    if not (getattr(request.state, "device_id", None) or getattr(request.state, "is_admin", False)):
+        raise HTTPException(status_code=403, detail="device-scoped key (or admin) required")
     household_id = _household(request)
     conn = get_db()
     try:
@@ -1204,157 +1496,44 @@ def enrolled_faces(request: Request):
         conn.close()
 
 
-@app.get("/faces/enroll-request")
-def get_enroll_request(request: Request, device: Optional[str] = None):
-    """The camera agent polls this for a pending enroll request for ITS device (provenance bound to
-    the key, like /events). Returns {"request": {id, name}} or {"request": null}."""
-    dev = getattr(request.state, "device_id", None)
-    if dev:
-        device_id = dev                          # device key → only its own requests
-    elif getattr(request.state, "is_admin", False) and device:
-        device_id = device                       # admin may inspect any device (testing)
-    else:
-        raise HTTPException(status_code=403, detail="device-scoped key (or admin + ?device=) required")
+@app.post("/faces/identify")
+def identify_face(req: FaceIdentifyRequest, request: Request):
+    """Match one freshly-computed embedding against this household's enrolled people.
+
+    This is the whole recognition path for interactive clients. The browser computes the vector
+    on-device (YuNet + SFace in a worker, pixels never leaving the machine) and sends only the
+    vector; the server answers who it belongs to. Matching lives here rather than in the client so
+    that (a) the household's face templates are never handed out to make a comparison, and (b) the
+    threshold and the best-of-many-embeddings rule have exactly one definition.
+
+    Returns {"name": null} when nobody is enrolled, "unknown" when the best match is below
+    FACE_RECOGNIZE_THRESHOLD, and the person's name otherwise. `score` is the best cosine seen
+    either way, which is what makes a failed match diagnosable ("0.31, try better lighting").
+    """
+    household_id = _household(request)
+    vec = req.embedding
     conn = get_db()
     try:
-        row = conn.execute(
-            "SELECT id, name FROM enroll_requests WHERE household_id = ? AND device_id = ? "
-            "AND status = 'pending' ORDER BY id LIMIT 1", (_household(request), device_id)).fetchone()
-        return {"request": dict(row) if row else None}
+        rows = conn.execute(
+            "SELECT p.name AS name, e.embedding AS embedding "
+            "FROM face_embeddings e JOIN persons p ON e.person_id = p.id "
+            "WHERE p.household_id = ?", (household_id,)).fetchall()
     finally:
         conn.close()
-
-
-@app.post("/faces/enroll-result")
-def post_enroll_result(req: EnrollResult, request: Request):
-    """The agent submits the captured embedding (or an error) for a pending request. A device key may
-    only fulfill a request for ITS OWN device — it cannot enroll arbitrary faces (an admin must have
-    created the request first)."""
-    dev = getattr(request.state, "device_id", None)
-    is_admin = getattr(request.state, "is_admin", False)
-    if not dev and not is_admin:
-        raise HTTPException(status_code=403, detail="device-scoped key (or admin) required")
-    conn = get_db()
-    try:
-        household_id = _household(request)
-        # household_id in the WHERE, not just the id: request_id is caller-supplied, so this is the
-        # check that stops an agent in one household from fulfilling (and reading the name of)
-        # another household's pending enrollment.
-        r = conn.execute(
-            "SELECT device_id, name, status, user_id FROM enroll_requests WHERE id = ? AND household_id = ?",
-            (req.request_id, household_id)).fetchone()
-        if r is None:
-            raise HTTPException(status_code=404, detail="No such request")
-        if not is_admin and r["device_id"] != dev:
-            raise HTTPException(status_code=403, detail="Not your device's request")
-        if r["status"] != "pending":
-            raise HTTPException(status_code=409, detail="Request already handled")
-        if req.error or not req.embedding:
-            conn.execute("UPDATE enroll_requests SET status='failed', detail=?, completed_at=datetime('now') "
-                         "WHERE id=? AND household_id=?",
-                         ((req.error or "no face captured")[:200], req.request_id, household_id))
-            conn.commit()
-            return {"status": "failed"}
-        # Resolve the person: prefer the linked account (so the face maps to a user), else by name.
-        prow = None
-        if r["user_id"] is not None:
-            prow = conn.execute("SELECT id FROM persons WHERE household_id = ? AND user_id = ?",
-                                (household_id, r["user_id"])).fetchone()
-        if prow is None:
-            prow = conn.execute("SELECT id FROM persons WHERE household_id = ? AND name = ?",
-                                (household_id, r["name"])).fetchone()
-        if prow is None:
-            person_id = conn.execute(
-                "INSERT INTO persons (household_id, name, user_id) VALUES (?, ?, ?)",
-                (household_id, r["name"], r["user_id"])).lastrowid
-        else:
-            person_id = prow["id"]
-            if r["user_id"] is not None:           # make sure an existing person is linked to the account
-                conn.execute("UPDATE persons SET user_id = ? WHERE id = ? AND household_id = ?",
-                             (r["user_id"], person_id, household_id))
-        conn.execute("INSERT INTO face_embeddings (person_id, embedding, source) VALUES (?, ?, ?)",
-                     (person_id, json.dumps(req.embedding), r["device_id"]))
-        conn.execute("UPDATE enroll_requests SET status='done', completed_at=datetime('now') "
-                     "WHERE id=? AND household_id=?", (req.request_id, household_id))
-        conn.commit()
-        return {"status": "ok", "person_id": person_id}
-    finally:
-        conn.close()
-
-
-# Live enroll preview frames — kept ONLY in memory (never written to disk/DB), short TTL, admin-only
-# to view. This is the one place imagery leaves the device, and only while an admin-initiated enroll
-# is active.
-_ENROLL_PREVIEWS: Dict[int, Dict[str, Any]] = {}
-_PREVIEW_TTL_S = 30
-
-
-@app.post("/faces/enroll-preview")
-def post_enroll_preview(req: EnrollPreview, request: Request):
-    """The agent posts annotated frames for an in-progress enroll (device key, bound to its request)."""
-    dev = getattr(request.state, "device_id", None)
-    is_admin = getattr(request.state, "is_admin", False)
-    if not dev and not is_admin:
-        raise HTTPException(status_code=403, detail="device-scoped key (or admin) required")
-    conn = get_db()
-    try:
-        r = conn.execute("SELECT device_id FROM enroll_requests WHERE id = ? AND household_id = ?",
-                         (req.request_id, _household(request))).fetchone()
-    finally:
-        conn.close()
-    if r is None:
-        raise HTTPException(status_code=404, detail="No such request")
-    if not is_admin and r["device_id"] != dev:
-        raise HTTPException(status_code=403, detail="Not your device's request")
-    now = time.time()
-    for k in [k for k, v in _ENROLL_PREVIEWS.items() if now - v["ts"] > _PREVIEW_TTL_S]:
-        _ENROLL_PREVIEWS.pop(k, None)
-    if len(_ENROLL_PREVIEWS) > 20:                 # safety cap (RAM-only)
-        _ENROLL_PREVIEWS.clear()
-    _ENROLL_PREVIEWS[req.request_id] = {"image": req.image, "captured": req.captured,
-                                        "total": req.total, "ts": now}
-    return {"status": "ok"}
-
-
-@app.get("/faces/enroll-preview")
-def get_enroll_preview(request: Request, request_id: int):
-    """Latest preview frame for an enroll request (admin-only — it's imagery)."""
-    _require_admin(request)
-    p = _ENROLL_PREVIEWS.get(request_id)
-    if not p or time.time() - p["ts"] > _PREVIEW_TTL_S:
-        return {"preview": None}
-    return {"preview": {"image": p["image"], "captured": p["captured"], "total": p["total"]}}
-
-
-@app.get("/faces/enroll-preview-stream")
-async def stream_enroll_preview(request: Request, request_id: int):
-    """Smooth live preview during enrollment over ONE connection (admin-only). Pushes each NEW frame
-    the agent posts as a line of NDJSON {image, captured, total} — so the UI shows ~10 fps video
-    without polling per frame. Bounded: stops on client disconnect, when frames go stale, or after
-    a hard cap (a capture finishes in seconds)."""
-    _require_admin(request)
-
-    async def gen():
-        last_ts, start = 0.0, time.time()
-        idle = 0
-        while True:
-            if await request.is_disconnected():
-                break
-            now = time.time()
-            p = _ENROLL_PREVIEWS.get(request_id)
-            if p and p["ts"] != last_ts and now - p["ts"] <= _PREVIEW_TTL_S:
-                last_ts, idle = p["ts"], 0
-                yield json.dumps({"image": p["image"], "captured": p["captured"],
-                                  "total": p["total"]}) + "\n"
-            else:
-                idle += 1
-                if idle > 150:            # ~12s with no new frame → capture is over/agent gone
-                    break
-            if now - start > 90:          # hard safety cap
-                break
-            await asyncio.sleep(0.08)
-
-    return StreamingResponse(gen(), media_type="application/x-ndjson")
+    best, best_sim = None, -1.0
+    for r in rows:
+        cand = json.loads(r["embedding"])
+        if len(cand) != len(vec):        # a vector from a different model can't be compared
+            continue
+        # Both sides are L2-normalized on the way in, so the dot product IS the cosine.
+        sim = sum(a * b for a, b in zip(vec, cand))
+        if sim > best_sim:
+            best, best_sim = r["name"], sim
+    if best is None:
+        return {"name": None, "score": None}
+    if best_sim >= FACE_RECOGNIZE_THRESHOLD:
+        return {"name": best, "score": round(best_sim, 3)}
+    return {"name": "unknown", "score": round(best_sim, 3)}
 
 
 _AUDIT_CAP = 5000   # keep the most recent N audit rows
@@ -1699,24 +1878,47 @@ _NO_RE = re.compile(r"^\s*(no|nah|nope|don'?t|do not|cancel|leave it|never mind|
 
 def _ha_act(entity: str, action: str):
     """Execute a validated (allowlisted) action. "run" EXECUTES automations/scripts/scenes; "stop"
-    aborts them (automation stays enabled). For plain devices run→on and stop→off. Returns
-    (ok, effective_action) — the effective action drives the reply wording."""
+    aborts them (automation stays enabled). For plain devices run→on and stop→off.
+
+    Returns (ok, effective_action, error_reply) — the effective action drives the reply wording,
+    and error_reply is a ready-to-speak sentence when ok is False.
+
+    Pre-flights the entity, because HA's generic turn_on/turn_off answer 200 with an empty body
+    for an entity_id it does not have. Without this, an entity renamed or deleted in Home
+    Assistant reported a confident success while doing nothing — the most corrosive failure mode
+    there is for something you talk to, because nothing in the reply hints that it lied.
+    """
+    status, _state = ha.probe_entity(entity)
+    if status == ha.ENTITY_MISSING:
+        logger.warning("HA entity %s is allowlisted but Home Assistant does not have it", entity)
+        return False, action, (
+            f"Home Assistant doesn't have {ha.display_name(entity)} any more — it looks renamed or "
+            f"deleted there. I've left it alone. You can remove it in the Smart Home settings.")
+    if status == ha.HA_UNREACHABLE:
+        return False, action, "I couldn't reach Home Assistant to do that."
+
     if action == "run":
         if entity.partition(".")[0] in ha.RUNNABLE_DOMAINS:
-            return ha.run(entity), "run"
+            ok = ha.run(entity)
+            return ok, "run", None if ok else "I couldn't reach Home Assistant to do that."
         action = "on"
     elif action == "stop":
         if entity.partition(".")[0] in ("automation", "script"):
-            return ha.stop(entity), "stop"
+            ok = ha.stop(entity)
+            return ok, "stop", None if ok else "I couldn't reach Home Assistant to do that."
         action = "off"
-    return ha.turn(entity, action), action
+    ok = ha.turn(entity, action)
+    return ok, action, None if ok else "I couldn't reach Home Assistant to do that."
 
 
 def _ha_label(entity: str):
     """("the morning automation", domain, "morning") — appends the kind for automations/scripts/
-    scenes unless the name already contains it."""
-    domain, _, obj = entity.partition(".")
-    nice = obj.replace("_", " ")
+    scenes unless the name already contains it.
+
+    Uses the entity's friendly name, so replies and clarifying questions name the device the way
+    the speaker does ("the Fan") instead of reciting its id ("the 4node smart switch switch 3")."""
+    domain, _, _obj = entity.partition(".")
+    nice = ha.display_name(entity)
     kind = domain if domain in ("automation", "script", "scene") else None
     label = f"the {nice}" if (kind is None or kind in nice.lower()) else f"the {nice} {kind}"
     return label, domain, nice
@@ -1777,9 +1979,9 @@ def _handle_home_command(user_text: str, raw_request: Request, session_id: str) 
                 return "Sorry — you're not authorized to control devices."
             if REQUIRE_PRESENCE_FOR_CONTROL and not _authorized_person_present(_household(raw_request)):
                 return "I don't see anyone authorized in the room, so I can't change that right now."
-            ok, eff = _ha_act(p_entity, p_action)
+            ok, eff, err = _ha_act(p_entity, p_action)
             if not ok:
-                return "I couldn't reach Home Assistant to do that."
+                return err
             _LAST_HOME_ENTITY[session_id] = (p_entity, time.monotonic())
             _audit(raw_request, "device.home_assistant", f"{p_action} {p_entity} (semantic, confirmed)")
             return _ha_reply(p_entity, eff)
@@ -1802,9 +2004,9 @@ def _handle_home_command(user_text: str, raw_request: Request, session_id: str) 
         if r["decision"] == "act":
             if REQUIRE_PRESENCE_FOR_CONTROL and not _authorized_person_present(_household(raw_request)):
                 return "I don't see anyone authorized in the room, so I can't change that right now."
-            ok, eff = _ha_act(r["entity"], r["action"])
+            ok, eff, err = _ha_act(r["entity"], r["action"])
             if not ok:
-                return "I couldn't reach Home Assistant to do that."
+                return err
             _LAST_HOME_ENTITY[session_id] = (r["entity"], time.monotonic())
             _audit(raw_request, "device.home_assistant",
                    f"{r['action']} {r['entity']} (semantic, {r['score']})")
@@ -1813,47 +2015,62 @@ def _handle_home_command(user_text: str, raw_request: Request, session_id: str) 
         verb = "run" if r["action"] == "run" else f"turn {r['action']}"
         return f"Should I {verb} {label}?"
 
-    def clarify_or_none():
-        # Anti-bluff guard: the message names an allowlisted device AND uses a control verb, but we
-        # couldn't extract a clean (action, device) — ASK instead of returning None: None falls
-        # through to the streaming LLM, which has no tools and invents acks ("Done.") while doing
-        # nothing. Ordinary sentences (no device match / no control verb) still reach the LLM.
-        if HOME_CONTROL_VERB.search(user_text):
-            hinted = ha.resolve_entity(user_text)      # fuzzy match over the whole utterance
-            if hinted is not None:
-                nice = hinted.partition(".")[2].replace("_", " ")
-                return (f"I think you want me to control {nice} — try \"turn on/off {nice}\", "
-                        f"\"run {nice}\", or \"stop {nice}\".")
-        return None
+    def tool_or_clarify():
+        # Last two layers before the LLM. The message names an allowlisted device AND uses a
+        # control verb, but no clean (action, device) came out of the rules or the router.
+        #
+        # Returning None here used to hand the turn to the STREAMING LLM, which is offered no
+        # tools at all — so it invented acks ("Done.") while nothing happened. That is the gap
+        # this closes: give the model the home tools for one round-trip and execute what it
+        # calls; only if it calls nothing do we fall back to the canned question.
+        #
+        # Ordinary sentences (no control verb, or no device named) never reach this and so never
+        # pay for the extra call.
+        if not HOME_CONTROL_VERB.search(user_text):
+            return None
+        hinted = ha.resolve_entity(user_text)          # fuzzy match over the whole utterance
+        if hinted is None:
+            return None
+        acted = _home_tool_roundtrip(user_text, raw_request)
+        if acted is not None:
+            return acted
+        nice = ha.display_name(hinted)
+        return (f"I think you want me to control {nice} — try \"turn on/off {nice}\", "
+                f"\"run {nice}\", or \"stop {nice}\".")
 
     cmd = parse_home_command(user_text)
     if cmd is None:
-        return semantic_route() or clarify_or_none()
+        return semantic_route() or tool_or_clarify()
     if cmd["device"].lower() in _HOME_PRONOUNS:
         last = _LAST_HOME_ENTITY.get(session_id)
         entity = last[0] if last and (time.monotonic() - last[1]) < _LAST_HOME_TTL else None
         if entity is None:
             # A device-shaped command with no referent: ASK — never fall through to the LLM,
             # which (toolless on the streaming path) would confidently pretend it acted.
-            allowed = ", ".join(e.partition(".")[2].replace("_", " ") for e in ha.HA_ALLOWED_ENTITIES)
+            allowed = ", ".join(ha.display_name(e) for e in ha.HA_ALLOWED_ENTITIES)
             return f"Which device do you mean? I can control: {allowed or 'nothing yet'}."
     else:
         entity = ha.resolve_entity(cmd["device"])
     if entity is None:
-        return semantic_route() or clarify_or_none()   # meaning first; then the device-y ask; else LLM
+        return semantic_route() or tool_or_clarify()   # meaning, then tools, then the ask; else LLM
     if not _can_control_devices(raw_request):
         return "Sorry — you're not authorized to control devices."
     if REQUIRE_PRESENCE_FOR_CONTROL and not _authorized_person_present(_household(raw_request)):
         return "I don't see anyone authorized in the room, so I can't change that right now."
     if cmd["action"] == "status":
-        st = ha.get_state(entity)
+        # Same distinction as _ha_act: a device HA no longer has is a stale allowlist entry the
+        # user can fix, not an outage.
+        st_status, st = ha.probe_entity(entity)
+        if st_status == ha.ENTITY_MISSING:
+            return (f"Home Assistant doesn't have {ha.display_name(entity)} any more — it looks "
+                    f"renamed or deleted there. You can remove it in the Smart Home settings.")
         if not st:
             return "I couldn't reach Home Assistant."
         _LAST_HOME_ENTITY[session_id] = (entity, time.monotonic())
         return _ha_state_phrase(entity, st)
-    ok, eff = _ha_act(entity, cmd["action"])
+    ok, eff, err = _ha_act(entity, cmd["action"])
     if not ok:
-        return "I couldn't reach Home Assistant to do that."
+        return err
     _LAST_HOME_ENTITY[session_id] = (entity, time.monotonic())
     _audit(raw_request, "device.home_assistant", f"{cmd['action']} {entity} (fast-path)")
     return _ha_reply(entity, eff)
@@ -1956,11 +2173,11 @@ def _tool_home_control(args, raw_request):
     action = str(args.get("action", "")).lower()
     entity = ha.resolve_entity(str(args.get("device", "")))
     if entity is None:
-        allowed = ", ".join(e.partition(".")[2].replace("_", " ") for e in ha.HA_ALLOWED_ENTITIES)
+        allowed = ", ".join(ha.display_name(e) for e in ha.HA_ALLOWED_ENTITIES)
         return f"I'm not sure which device you mean. I can control: {allowed or 'nothing yet — the allowlist is empty'}."
-    ok, eff = _ha_act(entity, action)
+    ok, eff, err = _ha_act(entity, action)
     if not ok:
-        return "I couldn't reach Home Assistant to do that."
+        return err
     _audit(raw_request, "device.home_assistant", f"{action} {entity} (tool)")
     return _ha_reply(entity, eff)
 
@@ -2004,6 +2221,36 @@ def _run_tool_calls(message: Dict[str, Any], raw_request: Request) -> Optional[s
     except Exception as e:
         logger.warning("tool %s failed: %s", fn.get("name"), e)
         return None
+
+
+def _home_tool_roundtrip(user_text: str, raw_request: Request) -> Optional[str]:
+    """Offer the model the HOME tools for one round-trip and execute whatever it calls.
+
+    This is the layer that makes the web UI behave like the voice path. /inbox always called the
+    LLM with tools; /chat/stream called it with none, so any phrasing the rules and the semantic
+    router both missed reached a toolless model — which had no way to act and answered as if it
+    had. Measured on this box, the 2B model emits clean calls for exactly these utterances
+    (home_control{"device":"fan","action":"on"}), so the understanding was there all along; only
+    the wiring was missing.
+
+    Authority is unchanged. The executor (_tool_home_control) re-runs the same
+    can-control-devices, presence and allowlist gates and writes the same audit entry, so this
+    widens what Jarvis UNDERSTANDS without widening what it is permitted to do. Returns None when
+    the model calls nothing, so the caller can fall back.
+    """
+    messages = [
+        {"role": "system",
+         "content": "You control a smart home. If the user is asking to change or check a device, "
+                    "call the appropriate tool. Otherwise say nothing. /no_think"},
+        {"role": "user", "content": user_text},
+    ]
+    try:
+        resp = request_llm_tools(messages, HA_TOOLS, temperature=0.1, n_predict=160)
+    except Exception as e:
+        logger.warning("home tool round-trip failed: %s", e)
+        return None
+    msg = (resp.get("choices") or [{}])[0].get("message", {})
+    return _run_tool_calls(msg, raw_request)
 
 
 def _handle_reminder(user_text: str, raw_request: Request) -> Optional[str]:
@@ -2163,11 +2410,13 @@ def ingest_event(req: EventRequest, request: Request):
         # Heartbeats are liveness pings, not events — keep only the latest per device (don't flood
         # vision_events) so the admin console can show the camera agent as active even in a quiet room.
         if req.type == "heartbeat":
+            # Conflict target is (household_id, device_id), not device_id: the id is unique only
+            # WITHIN a household, so a second household running its own `laptop-cam` gets its own
+            # row instead of taking over this one.
             conn.execute(
                 "INSERT INTO device_heartbeats (device_id, household_id, last_seen) "
                 "VALUES (?, ?, CURRENT_TIMESTAMP) "
-                "ON CONFLICT(device_id) DO UPDATE SET last_seen = CURRENT_TIMESTAMP, "
-                "household_id = excluded.household_id",
+                "ON CONFLICT(household_id, device_id) DO UPDATE SET last_seen = CURRENT_TIMESTAMP",
                 (device_id, household_id),
             )
             # Opportunistically prune long-dead devices so the table can't grow unbounded (an admin
@@ -2200,8 +2449,7 @@ def ingest_event(req: EventRequest, request: Request):
         conn.execute(
             "INSERT INTO device_heartbeats (device_id, household_id, last_seen) "
             "VALUES (?, ?, CURRENT_TIMESTAMP) "
-            "ON CONFLICT(device_id) DO UPDATE SET last_seen = CURRENT_TIMESTAMP, "
-            "household_id = excluded.household_id",
+            "ON CONFLICT(household_id, device_id) DO UPDATE SET last_seen = CURRENT_TIMESTAMP",
             (device_id, household_id),
         )
         conn.execute("DELETE FROM vision_events WHERE id <= ?", (cur.lastrowid - VISION_EVENTS_CAP,))
@@ -2296,7 +2544,7 @@ def process_input(request: QueryRequest, raw_request: Request):
     existing = chat.get_recent_context(session_id)
     needs_title = (len(existing) == 0)
     completion_reserve = request.n_predict if (request.n_predict and request.n_predict > 0) else COMPLETION_RESERVE_DEFAULT
-    messages = chat.build_messages(session_id, user_id, household_id, user_text, request.system_prompt, completion_reserve=completion_reserve, reasoning=request.reasoning)
+    messages = chat.build_messages(session_id, user_id, household_id, user_text, request.system_prompt, completion_reserve=completion_reserve, reasoning=request.reasoning, voice=request.voice)
     max_tokens = chat.clamp_completion_for(messages, request.n_predict)
 
     t0 = time.time()
@@ -2346,7 +2594,7 @@ def chat_stream(request: QueryRequest, raw_request: Request):
     existing = chat.get_recent_context(session_id)
     needs_title = (len(existing) == 0)
     completion_reserve = request.n_predict if (request.n_predict and request.n_predict > 0) else COMPLETION_RESERVE_DEFAULT
-    messages = chat.build_messages(session_id, user_id, household_id, user_text, request.system_prompt, completion_reserve=completion_reserve, reasoning=request.reasoning)
+    messages = chat.build_messages(session_id, user_id, household_id, user_text, request.system_prompt, completion_reserve=completion_reserve, reasoning=request.reasoning, voice=request.voice)
     max_tokens = chat.clamp_completion_for(messages, request.n_predict)
 
     def event_generator():
@@ -2463,7 +2711,7 @@ def admin_list_users(request: Request):
 # Every table keyed by user_id — kept in one place so a purge can't miss one (and so id-reuse can
 # prove an id is residue-free before handing it to a new account).
 _USER_REF_TABLES = ("chat_sessions", "auth_sessions", "api_keys", "user_knowledge",
-                    "persons", "vision_events", "enroll_requests")
+                    "persons", "vision_events")
 
 
 def _purge_user(conn, user_id: int) -> List[str]:
@@ -2480,7 +2728,6 @@ def _purge_user(conn, user_id: int) -> List[str]:
     conn.execute("DELETE FROM auth_sessions WHERE user_id = ?", (user_id,))
     conn.execute("DELETE FROM api_keys WHERE user_id = ?", (user_id,))
     conn.execute("DELETE FROM user_knowledge WHERE user_id = ?", (user_id,))
-    conn.execute("DELETE FROM enroll_requests WHERE user_id = ?", (user_id,))
     conn.execute("UPDATE persons SET user_id = NULL WHERE user_id = ?", (user_id,))
     conn.execute("UPDATE vision_events SET user_id = NULL WHERE user_id = ?", (user_id,))
     conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
@@ -2491,7 +2738,7 @@ def _purge_user(conn, user_id: int) -> List[str]:
 # _purge_user unlinks (rather than deletes) faces: unlinking is right when ONE member leaves a home
 # that continues to exist, but a demo household's faces belong to a member of the public and must
 # actually be destroyed with it.
-_HOUSEHOLD_REF_TABLES = ("global_knowledge", "persons", "vision_events", "enroll_requests",
+_HOUSEHOLD_REF_TABLES = ("global_knowledge", "persons", "vision_events",
                          "device_commands", "device_heartbeats", "audit_log", "household_settings")
 
 
@@ -2900,63 +3147,21 @@ def admin_delete_embedding(embedding_id: int, request: Request):
         conn.close()
 
 
-@app.post("/admin/faces/enroll-request")
-def admin_create_enroll_request(req: EnrollRequestCreate, request: Request):
-    """Ask a camera device to enroll a face: queues a pending request its agent will pick up,
-    capture, and fulfill. The capture happens on the device that has the camera."""
-    _require_admin(request)
-    conn = get_db()
-    try:
-        household_id = _household(request)
-        name = req.name.strip() if req.name else None
-        if req.user_id is not None:
-            urow = conn.execute("SELECT username FROM users WHERE id = ? AND household_id = ?",
-                                (req.user_id, household_id)).fetchone()
-            if not urow:
-                raise HTTPException(status_code=400, detail="No such user")
-            name = name or urow["username"]        # default the person's name to the account's
-        if not name:
-            raise HTTPException(status_code=400, detail="Pick a user (or pass a name)")
-        cur = conn.execute(
-            "INSERT INTO enroll_requests (household_id, device_id, name, user_id, requested_by) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (household_id, req.device_id, name, req.user_id, request.state.user_id))
-        conn.execute("DELETE FROM enroll_requests WHERE created_at < datetime('now', '-7 days')")
-        conn.commit()
-        _audit(request, "face.enroll_request", f"{name} -> {req.device_id}")
-        return {"status": "ok", "id": cur.lastrowid}
-    finally:
-        conn.close()
-
-
-@app.get("/admin/faces/enroll-requests")
-def admin_list_enroll_requests(request: Request):
-    """Recent enroll requests + their status, for the UI to show progress."""
-    _require_admin(request)
-    conn = get_db()
-    try:
-        # Expire requests the agent never completed (offline/crashed mid-capture) so the UI stops
-        # polling a zombie's live preview forever (which would burn the caller's rate budget). A real
-        # capture finishes in seconds; 3 min is generous.
-        conn.execute(
-            "UPDATE enroll_requests SET status='failed', "
-            "detail='timed out — agent did not complete', completed_at=datetime('now') "
-            "WHERE status='pending' AND created_at < datetime('now','-3 minutes')")
-        conn.commit()
-        rows = conn.execute(
-            "SELECT id, device_id, name, status, detail, created_at, completed_at "
-            "FROM enroll_requests WHERE household_id = ? ORDER BY id DESC LIMIT 20",
-            (_household(request),)).fetchall()
-        return {"requests": [dict(r) for r in rows]}
-    finally:
-        conn.close()
-
-
 # ----------------- Knowledge -----------------
 @app.get("/knowledge")
 def list_knowledge(request: Request):
+    """This user's own remembered facts, plus how much of the prompt they currently occupy.
+
+    The budget is reported because the profile block is injected into EVERY prompt and truncated
+    head-first at KNOWLEDGE_TOKEN_CAP — so past the cap, facts stop reaching the model with no
+    other outward sign. On a 4096-token context that ceiling is reachable, and a user who can't
+    see it would just be quietly wrong about what Jarvis knows.
+    """
     facts = memory.get_user_knowledge_list(request.state.user_id)
-    return {"facts": facts, "count": len(facts)}
+    block = memory.get_user_knowledge(request.state.user_id)
+    return {"facts": facts, "count": len(facts),
+            "prompt_chars": len(block),
+            "prompt_char_budget": KNOWLEDGE_TOKEN_CAP * 4}   # truncate_to_tokens' own conversion
 
 
 @app.post("/knowledge")
@@ -3077,6 +3282,16 @@ def serve_admin():
     return FileResponse(INDEX_HTML, media_type="text/html")
 
 
+@app.get("/voice")
+def serve_voice():
+    # Live voice kiosk — another view inside the same SPA (see /admin). Serving the shell is
+    # unauthenticated exactly like "/" is; the page itself renders the login screen until a token
+    # exists, and every endpoint it then calls is authenticated on its own.
+    if not INDEX_HTML.exists():
+        raise HTTPException(status_code=404)
+    return FileResponse(INDEX_HTML, media_type="text/html")
+
+
 @app.get("/favicon.{ext}")
 def serve_favicon(ext: str):
     if ext not in ("png", "ico", "svg"):
@@ -3114,6 +3329,10 @@ if STT_MODELS_DIR.exists():
 # — and the Web Worker that fetches them cannot attach a Bearer token.
 if FACE_MODELS_DIR.exists():
     app.mount("/face-models", StaticFiles(directory=str(FACE_MODELS_DIR)), name="face-models")
+# Wake-word models, same posture as the face and STT bundles: public, SHA-256-pinned upstream
+# weights, no secret in them, and the Web Worker that fetches them cannot attach a Bearer token.
+if WAKE_MODELS_DIR.exists():
+    app.mount("/wake-models", StaticFiles(directory=str(WAKE_MODELS_DIR)), name="wake-models")
 # ONNX Runtime WASM backend, vendored into the SPA build by frontend/scripts/copy-ort.mjs.
 # Served from our own origin so the runtime never reaches for a CDN (see whisper-worker.js).
 _ORT_DIR = REACT_DIST_DIR / "ort"

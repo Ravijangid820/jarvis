@@ -182,11 +182,43 @@ def _migrate_persons_unique(conn: sqlite3.Connection):
     )
 
 
+def _migrate_heartbeats_unique(conn: sqlite3.Connection):
+    """Rebuild `device_heartbeats` if it still carries the global `device_id TEXT PRIMARY KEY`.
+
+    Device ids are unique per household, not globally — `laptop-cam` is the default id in both the
+    camera agent and VOICE_CAMERA, so under a global key two households shared ONE row and the
+    upsert's `household_id = excluded.household_id` handed it to whichever posted last, blanking
+    the other household's camera panel. SQLite cannot drop a PRIMARY KEY with ALTER, so the table
+    is rebuilt. Rows carry their household_id across (still NULL on an upgrade at this point — the
+    generic backfill below sets it, which must happen before the unique index can be created).
+
+    The old key guaranteed device_id was unique, so no row can be lost to a collision here.
+    """
+    sql_row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='device_heartbeats'").fetchone()
+    if not sql_row or "PRIMARY KEY" not in (sql_row["sql"] or "").upper():
+        return   # already rebuilt (or fresh DB created from the current schema)
+    logger.info("Migrating device_heartbeats: device ids are now unique per-household; rebuilding table")
+    conn.executescript(
+        """
+        CREATE TABLE device_heartbeats_new (
+            device_id TEXT NOT NULL,
+            household_id INTEGER REFERENCES households(id),
+            last_seen DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        INSERT INTO device_heartbeats_new (device_id, household_id, last_seen)
+            SELECT device_id, household_id, last_seen FROM device_heartbeats;
+        DROP TABLE device_heartbeats;
+        ALTER TABLE device_heartbeats_new RENAME TO device_heartbeats;
+        """
+    )
+
+
 # Tables that gained household_id, and the column each one is backfilled through. A row whose
 # owner can't be determined falls back to the primary household — the pre-multi-tenancy default,
 # which is correct because every such row predates the feature.
 _HOUSEHOLD_BACKFILL = (
-    "global_knowledge", "persons", "vision_events", "enroll_requests",
+    "global_knowledge", "persons", "vision_events",
     "device_commands", "device_heartbeats", "audit_log",
 )
 
@@ -204,6 +236,10 @@ _HOUSEHOLD_INDEXES = (
     # so the household filter has to be cheap on the recent-events path.
     "CREATE INDEX IF NOT EXISTS idx_vision_events_household ON vision_events(household_id, id DESC)",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_persons_household_name ON persons(household_id, name)",
+    # The uniqueness a device's heartbeat upserts on. Per-household, so two homes may each run a
+    # camera called `laptop-cam` without one silently taking over the other's row.
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_heartbeats_household_device "
+    "ON device_heartbeats(household_id, device_id)",
 )
 
 
@@ -213,6 +249,7 @@ def _migrate_households(conn: sqlite3.Connection):
     for table in _HOUSEHOLD_BACKFILL:
         _safe_exec(conn, f"ALTER TABLE {table} ADD COLUMN household_id INTEGER REFERENCES households(id)")
     _migrate_persons_unique(conn)
+    _migrate_heartbeats_unique(conn)
     # Backfill. Users first: rows below are attributed through their owning user where possible,
     # so the users table has to be correct before anything reads it.
     conn.execute("UPDATE users SET household_id = ? WHERE household_id IS NULL", (PRIMARY_HOUSEHOLD_ID,))
@@ -263,7 +300,11 @@ def init_db():
         _safe_exec(conn, "ALTER TABLE conversation_history ADD COLUMN facts_extracted BOOLEAN DEFAULT 0")
         _safe_exec(conn, "ALTER TABLE users ADD COLUMN can_control_devices INTEGER DEFAULT 0")
         _safe_exec(conn, "ALTER TABLE api_keys ADD COLUMN device_id TEXT")
-        _safe_exec(conn, "ALTER TABLE enroll_requests ADD COLUMN user_id INTEGER REFERENCES users(id)")
+        # Enrollment moved into the browser (see /faces/identify), so the queue an admin used to
+        # push a capture onto a remote camera is gone. Only ever transient request state — device,
+        # name, pending/done/failed — never an embedding, so there is nothing here to preserve;
+        # the faces themselves live in face_embeddings and are untouched.
+        _safe_exec(conn, "DROP TABLE IF EXISTS enroll_requests")
         # Multi-tenancy: households + the household_id backfill. Must run before anything reads a
         # scoped table. The persons rebuild inside it drops and recreates the table, which needs
         # foreign_keys OFF (get_db turns it on) — SQLite only honours the flip outside a txn.

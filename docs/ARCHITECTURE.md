@@ -106,7 +106,10 @@ Why this shape:
   keys never wield admin** (even if minted under an admin account) and can only post events as their
   own device — bounding a stolen camera key. The **last admin** can't be deleted/demoted.
 - Device agents (camera, volume) are **outbound-only** — no inbound port; they pull commands / their
-  enrolled set and POST events. No imagery leaves the device (except a transient, RAM-only, admin-only
-  enroll preview).
+  enrolled set and POST events. **No imagery leaves the device, ever** — the agent has no code path
+  that puts a frame on the wire. Face enrollment happens in the browser of the device holding the
+  camera (detect + align + embed in a Worker; only the vector is sent), and recognition for browsers
+  goes through `/faces/identify`, so face **templates** are never distributed either — `/faces/enrolled`
+  is device-key/admin only.
 - Per-user rate limiting, parameterized SQL everywhere, input validation, security headers (CSP).
 - A full self-audit and the fixes are recorded in [AUDIT.md](AUDIT.md).

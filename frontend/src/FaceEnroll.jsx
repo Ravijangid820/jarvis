@@ -6,6 +6,11 @@
  * agent uses. Only the final 128-D vector is POSTed. No image is ever uploaded, written to disk, or
  * sent to the LLM — which is what makes it defensible to offer this to the public at all.
  *
+ * Recognition asks the SERVER who a vector belongs to (/faces/identify) rather than downloading the
+ * household's enrolled set and comparing here. Both would work; only one of them keeps other
+ * people's face templates out of this page. A template is enough to replay someone's identity, so
+ * the browser gets an answer, never the material to compute one.
+ *
  * Consent is a hard gate, not a notice: the camera does not start until the visitor has read what
  * is stored and pressed the button. A face embedding is biometric data, and a member of the public
  * trying a demo has not agreed to anything by merely arriving.
@@ -16,10 +21,14 @@ import { overlayRect } from "./face-detect.js"
 // How many good frames make an enrollment. The agent captures several too: one frame is one pose
 // under one lighting condition, and matching gets markedly more robust with a handful.
 const CAPTURE_TARGET = 5
-// Cosine threshold SFace is calibrated at — the same value the camera agent uses
-// (detectors.faces.recognize_threshold), so "recognised" means the same thing on both.
-const RECOGNIZE_THRESHOLD = 0.363
 const FRAME_INTERVAL_MS = 400        // ~2.5 fps: plenty for enrollment, gentle on a laptop CPU
+// Recognition runs slower than detection: the box should track your face at 2.5 fps, but the NAME
+// on it costs a round trip and rarely changes, so it is asked for at a fraction of that rate — and
+// once the answer is known, at a fraction of THAT. The server rate-limits each user to 120 requests
+// a minute; asking every 1.2s while someone simply stands in frame would spend 50 of them restating
+// a name that has not changed, leaving little headroom for the rest of the app.
+const IDENTIFY_INTERVAL_MS = 1200        // still working out who this is
+const IDENTIFY_SETTLED_MS = 5000         // a confident match — just confirm it occasionally
 
 export default function FaceEnroll({ token, apiBase, onClose }) {
   const [stage, setStage] = useState("consent")   // consent | loading | live
@@ -29,7 +38,7 @@ export default function FaceEnroll({ token, apiBase, onClose }) {
   const [detection, setDetection] = useState(null)
   const [match, setMatch] = useState(null)
   const [name, setName] = useState("")
-  const [enrolled, setEnrolled] = useState({})
+  const [people, setPeople] = useState([])        // who is enrolled here (names only)
   const [busy, setBusy] = useState(false)
   const [saved, setSaved] = useState("")
 
@@ -38,7 +47,9 @@ export default function FaceEnroll({ token, apiBase, onClose }) {
   const workerRef = useRef(null)
   const streamRef = useRef(null)
   const inflightRef = useRef(false)
-  const enrolledRef = useRef({})
+  const identifyBusyRef = useRef(false)
+  const lastIdentifyRef = useRef(0)
+  const settledRef = useRef(false)          // a confident match is on screen → poll lazily
   const frameSizeRef = useRef({ w: 1, h: 1 })
 
   const authed = useCallback((path, opts = {}) => fetch(apiBase + path, {
@@ -58,32 +69,35 @@ export default function FaceEnroll({ token, apiBase, onClose }) {
 
   useEffect(() => teardown, [teardown])
 
-  const loadEnrolled = useCallback(async () => {
+  /** The names enrolled in this household — shown so "unrecognised" is distinguishable from
+   *  "nobody is enrolled yet". Names only; no vectors are fetched. */
+  const loadPeople = useCallback(async () => {
     try {
-      const res = await authed("/faces/enrolled")
-      if (res.ok) {
-        const { enrolled: set } = await res.json()
-        setEnrolled(set || {})
-        enrolledRef.current = set || {}
-      }
-    } catch { /* recognition just stays empty */ }
+      const res = await authed("/admin/faces")
+      if (res.ok) setPeople(((await res.json()).faces || []).map(f => f.name))
+    } catch { /* the list is context, not function — recognition works without it */ }
   }, [authed])
 
-  useEffect(() => { if (token) loadEnrolled() }, [token, loadEnrolled])
+  useEffect(() => { if (token) loadPeople() }, [token, loadPeople])
 
-  /** Best cosine match for a fresh embedding against this household's enrolled people. */
-  const identify = useCallback((embedding) => {
-    let best = null, bestScore = -1
-    for (const [person, vectors] of Object.entries(enrolledRef.current)) {
-      for (const v of vectors) {
-        let s = 0
-        for (let i = 0; i < v.length && i < embedding.length; i++) s += v[i] * embedding[i]
-        if (s > bestScore) { bestScore = s; best = person }
+  /** Ask the server who this embedding belongs to. One vector out, {name, score} back.
+   *  One request in flight at a time: on a slow link the answers would otherwise queue up and the
+   *  label would lag further behind the face it belongs to with every frame. */
+  const identify = useCallback(async (embedding) => {
+    if (identifyBusyRef.current) return
+    identifyBusyRef.current = true
+    try {
+      const res = await authed("/faces/identify", {
+        method: "POST", body: JSON.stringify({ embedding }),
+      })
+      if (res.ok) {
+        const found = await res.json()
+        setMatch(found)
+        settledRef.current = Boolean(found.name) && found.name !== "unknown"
       }
-    }
-    if (best === null) return null
-    return { name: bestScore >= RECOGNIZE_THRESHOLD ? best : "unknown", score: bestScore }
-  }, [])
+    } catch { /* hold the last label rather than flickering on one dropped request */ }
+    finally { identifyBusyRef.current = false }
+  }, [authed])
 
   const start = async () => {
     setError("")
@@ -121,7 +135,16 @@ export default function FaceEnroll({ token, apiBase, onClose }) {
         // percentages of those, and reading the canvas ref at render time would both violate the
         // rules of hooks and silently use a stale size if the camera resolution changed.
         setDetection(face ? { ...face, frameW: frameSizeRef.current.w, frameH: frameSizeRef.current.h } : null)
-        setMatch(face ? identify(face.embedding) : null)
+        if (!face) {
+          setMatch(null)
+          settledRef.current = false        // they left frame; the next face is not assumed to be them
+        } else {
+          const due = settledRef.current ? IDENTIFY_SETTLED_MS : IDENTIFY_INTERVAL_MS
+          if (Date.now() - lastIdentifyRef.current >= due) {
+            lastIdentifyRef.current = Date.now()
+            identify(face.embedding)        // async; the label updates when the answer lands
+          }
+        }
       } else if (m.type === "error") {
         inflightRef.current = false
         setError(m.error)
@@ -174,8 +197,9 @@ export default function FaceEnroll({ token, apiBase, onClose }) {
         })
         if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`)
       }
-      await loadEnrolled()
+      await loadPeople()
       setCaptured([])
+      lastIdentifyRef.current = 0        // re-identify on the next frame, not up to a second later
       // Deliberately NOT switching to a "done" screen: the payoff of this feature is enrolling and
       // then immediately seeing your own name on the live box, so detection keeps running.
       setSaved(person)
@@ -195,9 +219,11 @@ export default function FaceEnroll({ token, apiBase, onClose }) {
       const res = await authed("/admin/faces")
       const { faces } = res.ok ? await res.json() : { faces: [] }
       for (const f of faces || []) await authed(`/admin/faces/${f.id}`, { method: "DELETE" })
-      await loadEnrolled()
+      await loadPeople()
       setCaptured([])
       setMatch(null)
+      settledRef.current = false         // the match that settled it no longer exists
+      lastIdentifyRef.current = 0
     } catch (e) {
       setError(String(e.message || e))
     } finally {
@@ -206,8 +232,6 @@ export default function FaceEnroll({ token, apiBase, onClose }) {
   }
 
   const close = () => { teardown(); onClose?.() }
-
-  const names = Object.keys(enrolled)
 
   return (
     <div className="jarvis-modal-overlay" onClick={close}>
@@ -258,9 +282,9 @@ export default function FaceEnroll({ token, apiBase, onClose }) {
               <div className="face-box"
                    style={overlayRect(detection.box, detection.frameW, detection.frameH)}>
                 <span className="face-box-label">
-                  {match && match.name !== "unknown"
+                  {match && match.name && match.name !== "unknown"
                     ? `${match.name} · ${match.score.toFixed(2)}`
-                    : names.length ? "unrecognised" : "face detected"}
+                    : people.length ? "unrecognised" : "face detected"}
                 </span>
               </div>
             )}
@@ -287,10 +311,10 @@ export default function FaceEnroll({ token, apiBase, onClose }) {
           </p>
         </div>
 
-        {names.length > 0 && (
+        {people.length > 0 && (
           <div className="face-enrolled">
             <div className="face-enrolled-head">
-              <span>Enrolled here: {names.join(", ")}</span>
+              <span>Enrolled here: {people.join(", ")}</span>
               <button className="hud-btn danger" onClick={deleteAll} disabled={busy}>
                 Delete my face data
               </button>

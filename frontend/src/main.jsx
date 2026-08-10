@@ -4,6 +4,7 @@ import './fonts/fonts.css'
 import './index.css'
 import App from './App.jsx'
 import NotifyHost from './NotifyHost.jsx'
+import { purgeStaleModelCaches } from './model-cache.js'
 
 /**
  * GitHub Pages SPA redirect handler (companion to public/404.html).
@@ -21,6 +22,10 @@ function applyPagesRedirect(l) {
   window.history.replaceState(null, '', l.pathname.slice(0, -1) + decoded + l.hash)
 }
 applyPagesRedirect(window.location)
+
+// Drop model caches from an older CACHE_NAME. Idempotent, off the critical path, and the only
+// thing that makes bumping a model version actually take effect on a returning visitor.
+purgeStaleModelCaches()
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>

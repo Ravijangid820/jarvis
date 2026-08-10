@@ -54,6 +54,9 @@ HH_B = None       # set by the client fixture
 A_SECRET_FACT = "The house key is under the third flowerpot at 12 Aster Lane"
 A_PERSON = "Ravi"
 B_PERSON = "Visitor"
+# A unit vector standing in for A_PERSON's face. Matched against itself the cosine is exactly 1.0,
+# so a cross-household hit would be unmissable rather than borderline.
+A_FACE_VECTOR = [1.0] + [0.0] * 15
 
 
 def _sql(*statements):
@@ -73,7 +76,9 @@ def client():
         # Clear every household-scoped row so assertions about what A and B can see aren't
         # confounded by whatever earlier test modules left in the shared database.
         conn.execute("DELETE FROM users")
-        for t in ("global_knowledge", "persons", "vision_events", "enroll_requests",
+        # face_embeddings is scoped through persons rather than by household_id, so it is cleared
+        # explicitly — a stale vector would make the identify isolation test pass for the wrong reason.
+        for t in ("global_knowledge", "face_embeddings", "persons", "vision_events",
                   "device_heartbeats", "audit_log", "household_settings"):
             conn.execute(f"DELETE FROM {t}")
         conn.execute("DELETE FROM households WHERE id != ?", (HH_A,))
@@ -99,12 +104,14 @@ def client():
             ("INSERT INTO audit_log (household_id, username, action, detail) "
              "VALUES (?, 'alice', 'device.home_assistant', 'on light.kitchen')", (HH_A,)),
             ("INSERT INTO device_heartbeats (device_id, household_id) VALUES ('pi-a', ?)", (HH_A,)),
-            ("INSERT INTO enroll_requests (household_id, device_id, name) VALUES (?, 'pi-a', ?)",
-             (HH_A, A_PERSON)),
             ("INSERT INTO household_settings (household_id, key, value) "
              "VALUES (?, 'ha_url', 'http://ha-a.local:8123')", (HH_A,)),
         )
         _sql(("INSERT INTO persons (household_id, name) VALUES (?, ?)", (HH_B, B_PERSON)))
+        # A's person gets a real face vector, so recognition can be tested across the boundary.
+        _sql(("INSERT INTO face_embeddings (person_id, embedding, source) SELECT id, ?, 'test' "
+              "FROM persons WHERE household_id = ? AND name = ?",
+              (json.dumps(A_FACE_VECTOR), HH_A, A_PERSON)))
         yield c
 
 
@@ -180,11 +187,14 @@ def test_stats_do_not_count_other_households(client, a, b):
     assert client.get("/admin/stats", headers=b).json()["users"] == 1
 
 
-def test_enroll_requests_are_not_shared(client, a, b):
-    a_reqs = client.get("/admin/faces/enroll-requests", headers=a).json()["requests"]
-    b_reqs = client.get("/admin/faces/enroll-requests", headers=b).json()["requests"]
-    assert len(a_reqs) == 1 and a_reqs[0]["name"] == A_PERSON
-    assert b_reqs == []
+def test_identify_does_not_match_across_households(client, a, b):
+    """The sharpest form of the isolation rule: A's own face must resolve to A's person, and the
+    identical vector presented in household B must not resolve to anyone. Recognition drives
+    authorization, so a leak here would hand B's session A's identity."""
+    body = {"embedding": A_FACE_VECTOR}
+    hit = client.post("/faces/identify", headers=a, json=body).json()
+    assert hit["name"] == A_PERSON and hit["score"] == 1.0
+    assert client.post("/faces/identify", headers=b, json=body).json()["name"] is None
 
 
 def test_camera_roster_is_not_shared(client, a, b):
@@ -286,6 +296,40 @@ def test_home_tools_are_not_offered_to_a_household_without_a_smart_home(client, 
     names = [t["function"]["name"] for t in main._active_tools(_R())]
     assert "home_control" not in names and "home_status" not in names
     assert "set_volume" in names          # non-HA tools are unaffected
+
+
+# --- device liveness is per-household ---------------------------------------------------------
+
+def test_same_device_id_in_two_households_does_not_steal_the_row(client, a, b):
+    """`laptop-cam` is the DEFAULT device id in both the camera agent config and VOICE_CAMERA, so
+    two households posting heartbeats under it is the expected case, not a contrived one.
+
+    While device_heartbeats was keyed on device_id alone the upsert also rewrote household_id, so
+    whichever camera reported last took the single row: household A's camera vanished from its own
+    admin console and surfaced on B's. Both consoles must now see their own camera, and A's must
+    survive B reporting after it.
+    """
+    shared = "laptop-cam"
+    assert client.post("/events", headers=a,
+                       json={"device_id": shared, "type": "heartbeat"}).status_code == 200
+    assert client.post("/events", headers=b,
+                       json={"device_id": shared, "type": "heartbeat"}).status_code == 200
+
+    def cameras(headers):
+        services = client.get("/admin/services", headers=headers).json()["services"]
+        return [s["name"] for s in services if s["name"].startswith("Camera")]
+
+    assert f"Camera · {shared}" in cameras(a)      # B reporting last must not blank A
+    assert f"Camera · {shared}" in cameras(b)
+
+    conn = sqlite3.connect(_DB)
+    rows = conn.execute("SELECT household_id FROM device_heartbeats WHERE device_id = ?",
+                        (shared,)).fetchall()
+    conn.close()
+    assert sorted(r[0] for r in rows) == sorted([HH_A, HH_B])   # one row EACH, not one shared
+
+    # A's own camera roster must not have grown B's devices.
+    assert "Camera · pi-a" in cameras(a) and "Camera · pi-a" not in cameras(b)
 
 
 # --- fail-closed: a principal with no household gets nothing --------------------------------

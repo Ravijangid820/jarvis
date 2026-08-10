@@ -41,10 +41,10 @@ def _largest(rows):
     return max(rows, key=lambda r: r[2] * r[3]) if rows else None
 
 
-def capture_average(cam, fd, frames, log_progress=True, on_frame=None):
+def capture_average(cam, fd, frames, log_progress=True):
     """Capture `frames` good face embeddings from an OPEN camera and return their L2-normalized
-    average, or None if too few faces were seen. Shared by the CLI and the agent's enroll handler.
-    `on_frame(frame, row, captured, total)` is called for every read frame (for the live preview)."""
+    average, or None if too few faces were seen. Used by the CLI (`facecli add`) — the headless
+    path, for a device with no browser to enroll from."""
     vecs, tries, last_kept = [], 0, 0.0
     KEEP_GAP = 0.25                          # min seconds between KEPT embeddings (angle variety)
     while len(vecs) < frames and tries < frames * 60:
@@ -53,11 +53,6 @@ def capture_average(cam, fd, frames, log_progress=True, on_frame=None):
         if frame is None:
             time.sleep(0.03); continue
         row = _largest(fd.detect(frame))
-        if on_frame is not None:             # every frame → smooth preview (decoupled from KEEP_GAP)
-            try:
-                on_frame(frame, row, len(vecs), frames)
-            except Exception:
-                pass
         now = time.time()
         if row is not None and now - last_kept >= KEEP_GAP:
             v = fd.embed(frame, row)         # SFace aligns via YuNet's landmarks, then embeds
@@ -65,7 +60,7 @@ def capture_average(cam, fd, frames, log_progress=True, on_frame=None):
                 vecs.append(v); last_kept = now
                 if log_progress:
                     log.info("  captured %d/%d", len(vecs), frames)
-        time.sleep(0.06)                     # ~12 fps read/preview cap
+        time.sleep(0.06)                     # ~12 fps read cap
     if len(vecs) < max(1, frames // 2):
         return None
     dim = len(vecs[0])
@@ -104,7 +99,11 @@ def run(name, frames, config_path, replace=False):
         with urllib.request.urlopen(req, timeout=30, context=net.ssl_context(cfg)) as r:
             json.loads(r.read().decode())
         verb = "replaced — now 1 embedding for" if replace else "added an embedding for"
-        log.info("✓ %s '%s' (averaged %d frames). Manage in the admin Faces page.", verb, name, len(vecs))
+        # No frame count here: it belongs to capture_average's local scope, and reaching for it was
+        # a NameError that the broad `except` below reported as "enroll POST failed" — on an enroll
+        # that had ALREADY succeeded, so the obvious response was to retry and add a duplicate.
+        # The per-frame tally is already on stdout from the "captured n/N" progress lines.
+        log.info("✓ %s '%s'. Manage in the admin Faces page.", verb, name)
     except urllib.error.HTTPError as e:
         sys.exit(f"server HTTP {e.code} — /faces/enroll is admin-only; is the key an admin key?")
     except Exception as e:

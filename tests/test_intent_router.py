@@ -80,6 +80,26 @@ def test_exemplars_unknown_device_generic_only():
     assert all("hot" not in p and "dark" not in p for (_, _, p) in ex)
 
 
+def test_exemplars_are_built_from_the_friendly_name(monkeypatch):
+    """Real hardware gets machine-generated ids. Building phrases from the id produced exemplars
+    nobody would ever say ("turn on the 4node smart switch switch 3"), so the router could not
+    match real speech to a real device."""
+    eid = "switch.4node_smart_switch_switch_3"
+    ex = ir.build_exemplars([eid], {eid: "Fan"})
+    phrases = [p for (_, a, p) in ex if a == "on"]
+    assert "turn on the Fan" in phrases
+    assert not any("4node" in p for p in phrases)
+
+
+def test_semantic_class_keys_on_the_friendly_name(monkeypatch):
+    """The bigger half: the cooling/light classes decide whether "it is hot in here" can reach a
+    device at all, and they match on the NAME. A device called "Fan" whose id is
+    switch.4node_smart_switch_switch_3 got no cooling paraphrases whatsoever."""
+    eid = "switch.4node_smart_switch_switch_3"
+    assert not any("hot" in p for (_, _, p) in ir.build_exemplars([eid], {}))
+    assert any("hot" in p for (_, _, p) in ir.build_exemplars([eid], {eid: "Fan"}))
+
+
 # --- route() decisions ------------------------------------------------------------
 
 def test_exact_phrase_acts(monkeypatch):
@@ -129,6 +149,10 @@ def _flow_setup(monkeypatch):
     monkeypatch.setattr(ha, "HA_TOKEN", "tok")
     monkeypatch.setattr(ha, "HA_ALLOWED_ENTITIES", ["switch.desk_fan"])
     monkeypatch.setattr(ha, "turn", lambda e, a: actions.append((a, e)) or True)
+    # The act path now pre-flights the entity against HA (a 200-with-empty-body for an
+    # entity HA does not have used to read as success). Fake it as present: these tests
+    # fake actuation too, so they must fake existence to match.
+    monkeypatch.setattr(ha, "probe_entity", lambda e: (ha.ENTITY_FOUND, {"state": "off"}))
     monkeypatch.setattr(main, "_can_control_devices", lambda r: True)
     monkeypatch.setattr(main, "REQUIRE_PRESENCE_FOR_CONTROL", False)
     monkeypatch.setattr(main, "_audit", lambda *a, **k: None)

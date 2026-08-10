@@ -29,7 +29,14 @@
 
 import { pipeline, env } from "@huggingface/transformers";
 
-const MODEL_ID = "onnx-community/whisper-base";
+// English-ONLY checkpoint, not the multilingual base of the same size. Measured against Piper
+// ground truth (clean, Opus round-tripped, and noise-mixed): multilingual base scored 3.7% WER,
+// base.en 0% on the same clips, same quantisation, same download size. The multilingual model
+// spends capacity on 98 languages we then forbid it from using.
+//
+// It is NOT a drop-in: an English-only checkpoint THROWS if `language` or `task` are passed to
+// generate (see transcribe() below). Swapping the id alone breaks speech-to-text outright.
+const MODEL_ID = "onnx-community/whisper-base.en";
 
 // Base-aware, not origin-absolute. Vite's BASE_URL is "/" when the orchestrator serves the app
 // but "/jarvis/" for the GitHub Pages build, so a hardcoded "/…" 404s there — and a 404 on an ORT
@@ -173,38 +180,55 @@ async function loadModel() {
 /**
  * Transcribe a Float32Array of 16 kHz mono PCM audio.
  */
-async function transcribe(audio) {
+async function transcribe(audio, id) {
   if (!transcriber) {
-    self.postMessage({ type: "error", error: "Model not loaded" });
+    self.postMessage({ type: "error", error: "Model not loaded", id });
     return;
   }
 
   try {
-    const result = await transcriber(audio, {
-      language: "en",            // English-only for speed; change for multilingual
-      task: "transcribe",
-      chunk_length_s: 30,        // process in 30-second windows
-      stride_length_s: 5,        // 5-second overlap between chunks
-      return_timestamps: false,
-    });
+    // No `language` / `task`: MODEL_ID is an English-only checkpoint and generate() throws on
+    // either ("Cannot specify `task` or `language` for an English-only model"). English is implied.
+    //
+    // Chunking is applied only to audio that actually needs it. Whisper's window is 30 s, so a
+    // three-second utterance takes the single-pass path; forcing the chunked path on short clips
+    // buys nothing and makes the pipeline stitch overlapping windows that aren't there.
+    const seconds = audio.length / 16000;
+    const opts = { return_timestamps: false };
+    if (seconds > 30) {
+      // Whisper's window is 30 s. Longer audio MUST be chunked, and chunked decoding MUST return
+      // timestamps — they are what stitches the overlapping windows back together. Measured on a
+      // 38 s clip whose true transcript is 108 words:
+      //     chunked, return_timestamps:false ->  54 words   (half the audio silently lost)
+      //     chunked, return_timestamps:true  -> 108 words   (complete)
+      //     not chunked at all               ->   9 words   (truncated to the first sentence,
+      //                                                      with only a console warning)
+      // So this is not a tuning preference: without it, long speech is quietly cut in half.
+      opts.chunk_length_s = 30;
+      opts.stride_length_s = 5;
+      opts.return_timestamps = true;
+    }
+    const result = await transcriber(audio, opts);
 
     const text = (result?.text ?? "").trim();
-    self.postMessage({ type: "result", text });
+    self.postMessage({ type: "result", text, id });
   } catch (err) {
-    self.postMessage({ type: "error", error: err?.message || String(err) });
+    self.postMessage({ type: "error", error: err?.message || String(err), id });
   }
 }
 
 // ─── Message router ──────────────────────────────────────────────────────────
 self.addEventListener("message", (e) => {
-  const { type, audio } = e.data || {};
+  // `id` correlates a reply with its request: one warm worker is shared by the chat mic and the
+  // live voice page (see stt-worker.js), so results must be routable rather than broadcast.
+  const { type, audio, id } = e.data || {};
 
   switch (type) {
     case "load":
       loadModel();
       break;
     case "transcribe":
-      transcribe(audio);
+      transcribe(audio, id);
       break;
     default:
       self.postMessage({ type: "error", error: `Unknown message type: ${type}` });

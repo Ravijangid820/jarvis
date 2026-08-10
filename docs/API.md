@@ -171,6 +171,10 @@ and the audit log decide. Ambiguous device names are refused, never guessed.
 |---|---|---|---|
 | `POST` | `/tts` | `{ text }` (≤600) | `{ "audio": "<base64 WAV>" }` — synthesize speech (Piper); `503` if TTS unavailable. The web UI uses this to **speak the greeting**. |
 | `GET` | `/greeting` | — | `{ "text", "audio" }` — a time-aware JARVIS acknowledgement + spoken audio. The voice bridge calls this when it hears just the wake word ("Jarvis" → "Yes, sir?"). |
+| `GET` | `/voice/mics` | — | **admin** · `{ mics: [{id, name, active}], driver, error, selected, stale, listener_restart_required }` — capture devices attached to the **server**, enumerated through SDL so the ids match `whisper-stream -c`. `stale:true` means the chosen device isn't currently attached. An empty list with no error usually means the container has no `/dev/snd`. |
+| `POST` | `/voice/mics/select` | `{ capture_id }` (`-1` = system default) | **admin** · stage the listener's microphone; `404` if that device isn't present. Stores the device **name** alongside the index, and returns `{status:"restart_required", selected, message}` — the listener holds its stream open, so it applies on restart. |
+| `GET` | `/voice/inputs` | — | **any member** · `{ inputs: [{device, name, card}], error, busy }` — server microphones offered as a source for a *user's own* voice input. ALSA PCM ids from `/proc/asound` (`plughw:<card>,<dev>`), which are stable across replug. `403` in a demo household. |
+| `GET` | `/voice/server-mic/stream?device=…` | — | **any member** · raw 16 kHz mono PCM (`s16le`) from that device, for the browser to wrap back into a MediaStream. `device` must be one `/voice/inputs` listed (it becomes an ffmpeg argument). `404` unknown device · `409` already in use · `503` with ffmpeg's own reason if it won't open. One session at a time, 15-minute cap, audit-logged, refused in demo households. |
 
 `/inbox` and `/chat/stream` also return `audio` when the request sets `voice_feedback: true` (the
 voice bridge uses this to speak replies).
@@ -188,25 +192,23 @@ best of them. A person can be **linked to a user account** so identity drives pe
 | Method | Path | Body | Returns |
 |---|---|---|---|
 | `POST` | `/faces/enroll` | `{ name, embedding[8..2048], source?, replace? }` | **admin** · add an embedding to a person (creating them if new); `replace:true` clears their set first. |
-| `GET` | `/faces/enrolled` | — | `{ "enrolled": { name: [embedding, …] } }` — list per person; the set the agent matches against (auth required). |
+| `POST` | `/faces/identify` | `{ embedding[8..2048] }` | `{ name, score }` — who this vector belongs to. `name` is the person, `"unknown"` below the 0.363 cosine threshold, or `null` if nobody is enrolled. Nothing is stored. Any household member. |
+| `GET` | `/faces/enrolled` | — | **device key or admin** · `{ "enrolled": { name: [embedding, …] } }` — every template in the household, for an always-on agent that matches locally. Not readable by ordinary members: use `/faces/identify`. |
 | `GET` | `/admin/faces` | — | **admin** · `{ "faces": [{id, name, user_id, username, embedding_count, last_seen, created_at}] }`. |
 | `GET` | `/admin/faces/{id}/embeddings` | — | **admin** · `{ "embeddings": [{id, source, created_at}] }` for a person. |
 | `PUT` | `/admin/faces/{id}` | `{ name?, user_id? }` | **admin** · rename (UNIQUE) and/or link a user (only fields sent change; `user_id:null` clears). |
 | `DELETE` | `/admin/faces/{id}` | — | **admin** · delete a person + all their embeddings. |
 | `DELETE` | `/admin/faces/embeddings/{id}` | — | **admin** · delete one embedding (person stays). |
 
-**Enroll from the web UI** — an admin queues a request for a camera; that device's agent captures +
-submits on-device (the device key can only *fulfill* a request made for it — it can't enroll arbitrarily):
+**Enroll from the web UI** — the browser that has the camera does the whole job: it detects, aligns
+and embeds frames locally (YuNet + SFace in a worker) and `POST`s only the resulting vector to
+`/faces/enroll`. No imagery reaches the server, so there is no capture to queue on a remote device
+and no preview to relay — the endpoints that did that (`/admin/faces/enroll-request`,
+`/faces/enroll-request`, `/faces/enroll-result`, `/faces/enroll-preview[-stream]`) are **gone**.
+Recognition then goes through `/faces/identify`, so the household's templates are never handed to a
+client to compare against. A headless device with no browser enrolls via
+`jarvis_camera.facecli add` (admin key), which posts to the same `/faces/enroll`.
 
-| Method | Path | Body | Returns |
-|---|---|---|---|
-| `POST` | `/admin/faces/enroll-request` | `{ user_id, device_id }` (or `{ name, device_id }`) | **admin** · queue a pending enroll for a device. With `user_id` the face is enrolled for that account and the person is auto-linked to it; `name` defaults to the username. |
-| `GET` | `/admin/faces/enroll-requests` | — | **admin** · recent requests `[{id, device_id, name, status, detail, …}]`. |
-| `GET` | `/faces/enroll-request` | — | **device key** · the pending request for THIS device (`{request:{id,name}}` or null). |
-| `POST` | `/faces/enroll-result` | `{ request_id, embedding?, error? }` | **device key** (own request) · submit the captured embedding (creates the person/embedding) or report failure. |
-| `POST` | `/faces/enroll-preview` | `{ request_id, image(b64 jpeg), captured, total }` | **device key** (own request) · relay a live preview frame (RAM-only, ~30s TTL). |
-| `GET` | `/faces/enroll-preview?request_id=N` | — | **admin** · latest preview frame `{preview:{image,captured,total}}` (single-shot fallback). |
-| `GET` | `/faces/enroll-preview-stream?request_id=N` | — | **admin** · NDJSON stream pushing each new preview frame `{image,captured,total}` as it arrives (~10 fps smooth live view). One connection; ends on disconnect / stale frames / 90s cap. |
 
 ---
 
