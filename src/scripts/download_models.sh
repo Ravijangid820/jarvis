@@ -47,17 +47,22 @@ else
   fi
 fi
 
-# 1b) Browser-side STT model (Whisper base, ONNX q8) — the FAILSAFE copy.
+# 1b) Browser-side STT model (Whisper base.en, ONNX q8) — the FAILSAFE copy.
+#     base.en, not the multilingual base of the same size: measured against Piper ground truth
+#     (clean / Opus round-tripped / noise-mixed) the multilingual model scored 3.7% WER and base.en
+#     0%, at identical quantisation and download size. This MUST stay in step with MODEL_ID in
+#     frontend/src/whisper-worker.js — if they diverge, the offline path silently serves a
+#     different model than the online one.
 #     The web UI transcribes in the browser, and normally pulls this straight from huggingface.co
 #     (the official first-party source). This local copy exists only so voice input still works when
 #     that fetch can't happen: an air-gapped LAN, blocked egress, or an HF outage. The orchestrator
 #     serves it read-only at /stt-models. Skip with SKIP_STT_MODEL=1 (saves ~76 MB).
-STT_DIR="$REPO/models/stt/onnx-community/whisper-base"
-STT_BASE="${STT_BASE:-https://huggingface.co/onnx-community/whisper-base/resolve/main}"
+STT_DIR="$REPO/models/stt/onnx-community/whisper-base.en"
+STT_BASE="${STT_BASE:-https://huggingface.co/onnx-community/whisper-base.en/resolve/main}"
 if [ "${SKIP_STT_MODEL:-0}" = "1" ]; then
   warn "SKIP_STT_MODEL=1 — browser STT will rely on huggingface.co with no local fallback"
 else
-  cyan "Browser STT model: whisper-base q8 (failsafe copy, ~76 MB)"
+  cyan "Browser STT model: whisper-base.en q8 (failsafe copy, ~76 MB)"
   mkdir -p "$STT_DIR/onnx"
   fetch_stt() {  # $1=file  $2=sha256 — skip when present+verified; else download (retry+resume) + verify
     f="$STT_DIR/$1"
@@ -65,13 +70,13 @@ else
     curl -L --fail --retry 5 --retry-all-errors --retry-delay 5 -C - -o "$f" "$STT_BASE/$1" || return 1
     echo "$2  $f" | sha256sum -c - >/dev/null 2>&1 || { warn "$1 SHA-256 MISMATCH — deleting"; rm -f "$f"; return 1; }
   }
-  if fetch_stt config.json            f4d0608f7d918166da7edb3e188de5ef1bfe70d9802e785d271fd88111e9cf4b \
-  && fetch_stt generation_config.json 61070cf8de25b1e9256e8e102ded49d8d24a8369ed36ef84fdf21549e68125a0 \
+  if fetch_stt config.json            c8a0de5ed8a083565a4319db29d0c210fda35b4d6076c2d711cae53ae00f3cb1 \
+  && fetch_stt generation_config.json 3479b1f44a07e41db799e22599222fee5816738036def94a39841cb9cdbb4120 \
   && fetch_stt preprocessor_config.json a6a76d28c93edb273669eb9e0b0636a2bddbb1272c3261e47b7ca6dfdbac1b8d \
-  && fetch_stt tokenizer.json         27fc476bfe7f17299480be2273fc0608e4d5a99aba2ab5dec5374b4482d1a566 \
-  && fetch_stt tokenizer_config.json  2e036e4dbacfdeb7242c7d4ec4149f4a16e86026048f94d1637e3a8ee9c6a573 \
-  && fetch_stt onnx/encoder_model_quantized.onnx 5862993336bf33acd23736071aae2b32261d3b1b2f37780194460d4ef974dd46 \
-  && fetch_stt onnx/decoder_model_merged_quantized.onnx fa3ef9902734ce5ae6f9ef2bdb2ba9a6c4b5785b09f4f420ce036573dc9d090b; then
+  && fetch_stt tokenizer.json         5eb60cec1e77aeeb6869a2bb5a8e01a84c3fe5d072d75369343021fe6f5310d0 \
+  && fetch_stt tokenizer_config.json  93879c3dccdd4b976f709acd85b44778873f30c275e67026f30ca1e4c975230c \
+  && fetch_stt onnx/encoder_model_quantized.onnx 6e8001198c490bbae018c0044f630c2915efb826bad957006ce36152d0ab2a10 \
+  && fetch_stt onnx/decoder_model_merged_quantized.onnx dd4761a3f7add26afda3512abff4706920404c2517e85a9f2ff090b0c0987909; then
     ok "browser STT failsafe bundle present + verified ($STT_DIR)"
   else
     warn "STT failsafe bundle incomplete — browser voice input will depend on huggingface.co being reachable"
@@ -115,6 +120,73 @@ else
       ok "downloaded (set LLM_GGUF_SHA256 to verify integrity)"
     fi
   else warn "GGUF download failed from $LLM_GGUF_URL"; fi
+fi
+
+# 4b) Browser-side WAKE-WORD models (openWakeWord) — served at /wake-models so the live voice
+#     page can listen for "hey jarvis" locally, without transcribing the room.
+#     Three models run as a chain: melspectrogram -> speech embedding -> the "hey jarvis" classifier
+#     (trained by openWakeWord on ~200k synthetic utterances of that phrase). Together ~3.6 MB, and
+#     cheap enough to run continuously — which is the entire point: a keyword spotter costs a
+#     fraction of running Whisper on every sound in the room.
+#     Verified locally against openWakeWord's own reference implementation: 0.999 on "hey jarvis",
+#     0.0002 on unrelated speech. Skip with SKIP_WAKE_MODELS=1.
+WAKE_DIR="$REPO/models/wake"
+WAKE_BASE="${WAKE_BASE:-https://github.com/dscripka/openWakeWord/releases/download/v0.5.1}"
+if [ "${SKIP_WAKE_MODELS:-0}" = "1" ]; then
+  warn "SKIP_WAKE_MODELS=1 — the wake word will be unavailable in the browser"
+else
+  cyan "Browser wake-word models: openWakeWord hey_jarvis (~3.6 MB)"
+  mkdir -p "$WAKE_DIR"
+  fetch_wake() {  # $1=file  $2=sha256
+    f="$WAKE_DIR/$1"
+    if [ -f "$f" ] && echo "$2  $f" | sha256sum -c - >/dev/null 2>&1; then return 0; fi
+    curl -L --fail --retry 5 --retry-all-errors --retry-delay 5 -C - -o "$f" "$WAKE_BASE/$1" || return 1
+    echo "$2  $f" | sha256sum -c - >/dev/null 2>&1 || { warn "$1 SHA-256 MISMATCH — deleting"; rm -f "$f"; return 1; }
+  }
+  if fetch_wake melspectrogram.onnx  ba2b0e0f8b7b875369a2c89cb13360ff53bac436f2895cced9f479fa65eb176f \
+  && fetch_wake embedding_model.onnx 70d164290c1d095d1d4ee149bc5e00543250a7316b59f31d056cff7bd3075c1f \
+  && fetch_wake hey_jarvis_v0.1.onnx 94a13cfe60075b132f6a472e7e462e8123ee70861bc3fb58434a73712ee0d2cb; then
+    ok "wake-word models present + verified ($WAKE_DIR)"
+  else
+    warn "wake-word models incomplete — the wake word stays off until they download (re-run this script)"
+  fi
+fi
+
+# 5) Browser-side FACE models (YuNet detector + SFace recognizer) — served at /face-models so the
+#    web UI can enroll and recognise faces in the browser, with imagery never leaving the device.
+#    These are the SAME two files (and the same pinned hashes) the camera agent uses, from the
+#    OFFICIAL OpenCV Zoo — identical weights on both sides is what makes a face enrolled in a
+#    browser comparable with one enrolled by a Pi. Unlike the STT model there is no upstream CDN
+#    fallback: the Zoo serves these via git-LFS without permissive CORS, so a browser cannot fetch
+#    them cross-origin. We must host them. Skip with SKIP_FACE_MODELS=1 (saves ~38 MB).
+FACE_DIR="$REPO/models/face"
+FACE_ZOO="${FACE_ZOO:-https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models}"
+if [ "${SKIP_FACE_MODELS:-0}" = "1" ]; then
+  warn "SKIP_FACE_MODELS=1 — browser face enrollment/recognition will be unavailable"
+else
+  cyan "Browser face models: YuNet + SFace (~38 MB)"
+  mkdir -p "$FACE_DIR"
+  fetch_face() {  # $1=dest name  $2=zoo subpath  $3=sha256
+    f="$FACE_DIR/$1"
+    if [ -f "$f" ] && echo "$3  $f" | sha256sum -c - >/dev/null 2>&1; then return 0; fi
+    curl -L --fail --retry 5 --retry-all-errors --retry-delay 5 -C - -o "$f" "$FACE_ZOO/$2" || return 1
+    echo "$3  $f" | sha256sum -c - >/dev/null 2>&1 || { warn "$1 SHA-256 MISMATCH — deleting"; rm -f "$f"; return 1; }
+  }
+  # A local copy already exists under camera/models on a machine that ran the camera setup —
+  # hard-link/copy it rather than re-downloading 38 MB.
+  for m in face_detection_yunet_2023mar.onnx face_recognition_sface_2021dec.onnx; do
+    [ -f "$FACE_DIR/$m" ] || { [ -f "$REPO/camera/models/$m" ] && cp "$REPO/camera/models/$m" "$FACE_DIR/$m"; }
+  done
+  if fetch_face face_detection_yunet_2023mar.onnx \
+       face_detection_yunet/face_detection_yunet_2023mar.onnx \
+       8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4 \
+  && fetch_face face_recognition_sface_2021dec.onnx \
+       face_recognition_sface/face_recognition_sface_2021dec.onnx \
+       0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79; then
+    ok "face models present + verified ($FACE_DIR)"
+  else
+    warn "face models incomplete — browser face features stay off until they download (re-run this script)"
+  fi
 fi
 
 cyan "Model setup pass complete (review any ! warnings above)."

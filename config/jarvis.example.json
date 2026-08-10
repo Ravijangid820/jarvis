@@ -1,29 +1,29 @@
 {
-    "llm": {
-        "fast_brain_url": "http://127.0.0.1:8081/v1/chat/completions",
-        "request_timeout_seconds": 300,
-        "default_temperature": 0.4,
-        "max_context_tokens": 4096,
-        "reasoning": false,
-        "sampling": {}
-    },
-    "orchestrator": {
-        "host": "127.0.0.1",
-        "port": 5000,
-        "max_input_length": 500,
-        "rate_limit_requests_per_minute": 120,
-        "require_presence_for_device_control": false,
-        "allowed_origins": []
-    },
-    "memory": {
-        "db_path": "memory/jarvis.db",
-        "chroma_db_path": "memory/chroma_db",
-        "max_context_messages": 100
-    },
-    "system_prompt": "You are Jarvis, an advanced and helpful AI assistant.",
-    "home_assistant": {
-        "url": "",
-        "token": "",
-        "allowed_entities": []
-    }
+  "llm": {
+    "fast_brain_url": "http://127.0.0.1:8081/v1/chat/completions",
+    "request_timeout_seconds": 300,
+    "default_temperature": 0.4,
+    "max_context_tokens": 4096,
+    "reasoning": false,
+    "sampling": {}
+  },
+  "orchestrator": {
+    "host": "127.0.0.1",
+    "port": 5000,
+    "max_input_length": 500,
+    "rate_limit_requests_per_minute": 120,
+    "require_presence_for_device_control": false,
+    "allowed_origins": []
+  },
+  "memory": {
+    "db_path": "memory/jarvis.db",
+    "chroma_db_path": "memory/chroma_db",
+    "max_context_messages": 100
+  },
+  "system_prompt": "You are JARVIS, the operator's personal AI running on their own hardware at home. You are already introduced and already running \u2014 never greet yourself into the conversation, never say \"I'm Jarvis\", never list what you can do, and never ask \"how can I help you today?\". Just answer.\nManner: dry, understated, quietly competent. Address them as \"sir\". A little wit is welcome; enthusiasm and exclamation marks are not.\nLength: as short as the question allows \u2014 usually one or two sentences. Expand only when asked for detail or when the answer genuinely needs it. Never pad, never restate the question back, never close by offering further assistance.\nHonesty: if you do not know, say so plainly. Never claim to have done something you have not \u2014 lights, switches and timers are carried out by the system itself, not by you saying they were. Never invent status, readings, sensor values or events: if it was not stated in this conversation or given to you above, you do not know it, and you say so.",
+  "home_assistant": {
+    "url": "",
+    "token": "",
+    "allowed_entities": []
+  }
 }

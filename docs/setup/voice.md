@@ -36,6 +36,71 @@ bash src/scripts/run_listener.sh
 | `VOICE_WAKE_WORD` | `jarvis` | wake word that gates a command |
 | `VOICE_KEY_FILE` | `config/voice_listener.key` | the API key file |
 | `WHISPER_BIN` / `WHISPER_MODEL` | `whisper/build/bin/whisper-stream` · `ggml-base.en.bin` | transcription binary + model |
+| `VOICE_CAPTURE_ID` | from `config/active_mic.json` | capture device index; `-1` = system default. Overrides the UI choice |
+
+## Choosing which microphone
+
+There are two separate choices, because there are two separate things listening.
+
+### “Microphone” — where *your* voice is picked up (any user)
+
+**⊕ → Microphone**, or `/mic` in the command palette. One list, both kinds of hardware:
+
+| Source | What it is |
+|---|---|
+| **This device** | inputs the browser can see — the laptop array, a headset, a USB mic plugged in where you're sitting |
+| **On the Jarvis server** | microphones attached to the box, streamed to your tab as audio |
+
+Pick whichever is physically closest to you. If the good mic is plugged into the server and you're
+sitting next to the server, that beats the laptop lid; if you've carried the mic to your desk, the
+opposite. Both push-to-talk voice typing and the live voice page use the choice.
+
+**Transcription always stays in your tab.** Choosing the server's microphone moves where sound is
+*captured*, not where it is *understood* — the server sends raw PCM and your browser runs Whisper on
+it, so the box's CPU is not doing STT either way. Constraints worth knowing:
+
+- **One session at a time.** It is one piece of hardware; a second session gets `409 busy`.
+- **The wake-word listener holds it** if that service is running — stop it to use the mic from a browser.
+- **No echo cancellation.** The browser can't run AEC on another machine's audio, so the half-duplex
+  gate (Jarvis is deaf while speaking) is the only thing preventing a reply-loop. Headphones help.
+- **It's a live feed of the room the server is in.** Any household member can open it, each session
+  is written to the audit log, and it is capped at 15 minutes and refused outright in demo households.
+
+### “Wake-word listener mic” — the always-on listener (admin)
+
+**⊕ → Wake-word listener mic**, or `/listener-mic`. Sets the device `whisper-stream` opens for the
+always-on wake word. The list comes from the server, and this is the one that needs a restart.
+
+The listener holds its capture stream open, so a change applies on restart:
+
+```bash
+sudo systemctl restart jarvis-listener      # or re-run run_listener.sh
+```
+
+To check what the server can see without opening the UI:
+
+```bash
+uv run python src/scripts/list_mics.py
+# {"driver": "alsa", "devices": [{"id": 0, "name": "Boya BY-M1"}], "error": null}
+```
+
+**In a container, the host's sound card is not visible by default.** An empty list on a box with a
+mic plugged in almost always means `/dev/snd` hasn't been passed through to the LXC. For an
+unprivileged Proxmox container, add to `/etc/pve/lxc/<id>.conf`:
+
+```
+lxc.cgroup2.devices.allow: c 116:* rwm
+lxc.mount.entry: /dev/snd dev/snd none bind,optional,create=dir
+```
+
+then restart the container and re-open the panel. Add the container user to `audio` if ALSA reports
+permission errors.
+
+> **Why the choice is stored by name, not just by number.** whisper-stream selects a mic with
+> `-c <index>`, and those indices are positional — unplug a device and everything after it shifts
+> down one, so yesterday's index 1 can be today's different microphone. The selection records the
+> device *name* too and re-resolves it at startup; if the named mic isn't attached, the listener
+> falls back to the system default and logs that, rather than opening whatever inherited the number.
 
 ## Voice volume control
 

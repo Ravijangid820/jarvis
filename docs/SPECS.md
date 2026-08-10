@@ -102,7 +102,6 @@ safety-net migrations.
 | `device_heartbeats` | camera liveness | `device_id` (PK), `last_seen` (powers admin active/inactive) |
 | `persons` | recognizable people | `id`, `name` (unique), `user_id` (→ account for authz), `created_at` |
 | `face_embeddings` | embeddings per person | `id`, `person_id` (→ persons, cascade), `embedding` (JSON), `source` |
-| `enroll_requests` | enroll-from-UI queue | `id`, `device_id`, `name`, `status` (pending/done/failed), `requested_by` |
 | `app_settings` | admin-editable runtime settings (Smart Home url/token/allowlist) | `key` (PK), `value`, `updated_at` |
 
 Long-term recall vectors are **not** in SQLite — they live in ChromaDB (`jarvis_memory_cos`,

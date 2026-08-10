@@ -4,6 +4,167 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## Unreleased — the live page stops shouting its settings
+
+Mode, pause length and microphone were two rows of buttons parked under the reactor. They are
+settings, not controls — you touch them once and then look at that screen for the next twenty
+minutes — so they now live behind a **⚙ in the header**, and the stage keeps only what changes while
+you talk: the reactor, the phase, the go/stop button, and the wake-word state.
+
+- In their place, one dim line reading e.g. `Open mic · 5s pause`, which is also the way in to the
+  panel. Typographic rather than button-shaped, so replacing two rows of buttons doesn't just add a
+  third.
+- The panel gives each setting the sentence of explanation the bare buttons never had room for
+  (what "Hey Jarvis" mode actually does; why the pause length matters in both directions).
+- Mode and microphone stay disabled while live — they take effect when the stream opens — and the
+  panel now says so instead of leaving a greyed-out button unexplained.
+- Escape closes whichever panel is on top, bound once so the settings panel and the mic picker
+  can't disagree about which of them it belongs to.
+
+## Unreleased — "Preparing model…" becomes a first-run event
+
+The speech model was being loaded far more often than it needed to be. Three separate causes stacked
+up, each producing the same symptom, which is why it looked like caching was simply absent:
+
+- **Opening the live page was a full document load.** `/voice` and `/admin` were already SPA views,
+  but we navigated to them with `window.location.href` — discarding the worker, the models and every
+  warm cache on the way in *and* on the way back. They are now `pushState` routes (with `popstate`
+  handling, so back/forward still work).
+- **The chat mic and the live page each built their own Whisper worker**, compiling the same ~76 MB
+  model twice in one session. There is now one document-scoped worker (`stt-worker.js`) shared by
+  both; whichever is used first warms it for the other. Replies are routed by request id, since a
+  shared worker must not broadcast one caller's transcript to the other's handler.
+- **Stopping live mode terminated its workers**, so the next "Go live" paid for the model again.
+  Both are now kept and the wake worker is `reset` instead of rebuilt.
+
+Net effect: the model loads **once per page**, and after the first use anywhere in the app the mic
+button and the live page are instant — `ensureStt()` resolves on the spot and the UI skips its
+loading state entirely rather than flashing it.
+
+For genuinely cold starts (a new tab, a hard refresh), model weights now go into **Cache Storage**
+(`model-cache.js`) instead of relying on the HTTP cache, which is evictable, revalidates on reload,
+and is bypassed by a hard refresh. This covers the wake-word and face models, which are loaded by
+URL rather than through transformers.js (which already cached the Whisper checkpoint itself). Cache
+name is versioned, and stale versions are purged on boot.
+
+One honest limit: a page reload still has to **rebuild the ONNX session** from those cached bytes,
+which costs seconds of CPU no cache can remove. The download is gone; compiling the graph is real
+work. `isSttWarm()` exists so the UI can tell the two apart and say "Preparing…" only when something
+is actually happening.
+
+- Logout calls `releaseStt()` — everywhere else we work to keep the model warm, but leaving one
+  resident for whoever signs in next on a shared machine is the wrong default.
+
+## Unreleased — the live voice page gets a reactor face
+
+The visualizer was four circles and three arcs. It is now an instrument, and which of its two
+identities is showing tells you who currently holds the conversation — before you read a word:
+
+- **Cyan HUD while it's listening to you** — a 120-mark tick bezel, counter-rotating segmented
+  block rings, a sweep hand that quickens from idle to `hearing`, and an amber accent arc that is a
+  genuine **level meter**: it tracks microphone amplitude, so a dead mic leaves it flat rather than
+  animating convincingly over nothing. Six pips light in sequence with level.
+- **Gold burst while it's thinking or speaking** — a volumetric sphere of ~460 fine filaments whose
+  energy rides Piper's output. Directions are sampled uniformly over the sphere and projected
+  orthographically, with near-face filaments drawn brighter; the depth cue is what separates a
+  sphere from a starburst.
+- The burst **blooms over the HUD rather than replacing it**. Cross-fading the rings away left the
+  busiest moment of a conversation looking like the emptiest — the housing is what the sphere needs
+  to sit inside.
+- A blueprint grid and a wash that warms from cyan to gold sit behind the reactor in CSS, and the
+  `J.A.R.V.I.S.` wordmark inside the rings is real DOM text (crisper than canvas glyphs at any DPR,
+  and it survives a screen reader).
+- **Built to stay out of the audio's way.** The VAD callback shares this thread, and starving it
+  drops audio, not frames: ring geometry is rasterised once into an offscreen canvas and blitted,
+  the particle pool is preallocated and recycled in place so no GC lands mid-utterance, DPR is
+  capped at 2, and the filament count **adapts to measured frame cost** — verified to hold 460 on a
+  fast path and back off to 240 under simulated load. "Reduce effects" and `prefers-reduced-motion`
+  thin the spray and drop the glows without ever freezing the amplitude readout.
+
+## Unreleased — speak into whichever microphone is nearest
+
+The previous entry let an admin choose the box's microphone for the wake-word listener. This one
+answers the question a person actually asks — *which mic is closest to me?* — which doesn't care
+which machine the cable goes into.
+
+- **New ⊕ → Microphone** (`/mic`), open to **any** user: one list containing both this device's
+  inputs and the microphones attached to the Jarvis box. Used by push-to-talk voice typing and the
+  live voice page. Not admin-gated, because where your own voice is picked up is your call.
+- **The server's mic is streamed to the browser as audio, not transcribed on the box.**
+  `GET /voice/server-mic/stream` sends raw 16 kHz PCM; `server-mic.js` feeds it through a
+  MediaStreamAudioDestinationNode and hands back an ordinary MediaStream. The entire existing
+  pipeline — VAD, wake word, Whisper — runs unchanged and never learns where the audio came from,
+  so STT stays on the user's device exactly as v3.2.0 intended.
+- **Server devices are ALSA ids read from `/proc/asound`**, not SDL indices: `plughw:<card>,<dev>`
+  is stable across replug, and no `alsa-utils` is needed to enumerate (this container has only
+  ffmpeg). The device string is matched against that enumerated set before it reaches ffmpeg's
+  argv — a value that merely *looks* like a device is refused rather than sanitised.
+- **A microphone that won't open fails loudly.** The endpoint waits for real audio before
+  committing to a 200, so "no `/dev/snd` in the container" arrives as
+  `503 … cannot open audio device plughw:0,0 (No such file or directory)` rather than a stream that
+  starts and says nothing — silence being indistinguishable from a quiet room. If the server mic is
+  unavailable for any reason the browser falls back to the local one and says which it used.
+- Guards on the live feed: one session at a time (`409` otherwise), a 15-minute cap, an audit-log
+  entry per session, and refused outright in demo households.
+
+## Unreleased — pick the server's microphone from the UI
+
+The wake-word listener always opened whatever the OS called the default input. Plug a proper mic
+into the box and there was no way to tell it to use that one short of an env var and a restart —
+so the mic is now selectable the same way the language model is.
+
+- **New: ⊕ → Server microphone** (admin; also `/mic` in the command palette). Lists the capture
+  devices the *server* can see and stages one for the listener. Explicitly not the browser's mic
+  list — voice typing in a tab already records on your own device; this is the hardware attached to
+  the box.
+- **New `GET /voice/mics` and `POST /voice/mics/select`** (admin), mirroring `/models` +
+  `/models/switch`: the choice is *staged*, not applied to a running process, because the listener
+  holds its capture stream open. `config/active_mic.json` holds it, `VOICE_CAPTURE_ID` overrides it.
+- **Enumeration goes through SDL** (`src/scripts/list_mics.py`, ctypes into the already-required
+  libSDL2), because `whisper-stream -c <id>` indexes *SDL's* capture list. A list built from
+  `arecord -l` or `pactl` would look right and hand the listener a different device. Run in a
+  subprocess so neither the HTTP server nor the bridge carries an SDL audio context around.
+- **The selection is stored by device name, not just index.** SDL indices are positional: unplug
+  something ahead of your mic and every later index shifts down, so a stored bare index can come to
+  mean different hardware. The listener re-resolves the name at startup, follows it if it moved,
+  and falls back to the system default with a loud log line if it's gone — an assistant listening
+  on the wrong microphone is a worse failure than one that says it can't find yours.
+- Empty list, no error, on a box that definitely has a mic → the container can't see the sound card.
+  The panel says so and gives the `/dev/snd` LXC passthrough; [setup/voice.md](setup/voice.md) has
+  the config lines.
+
+## Unreleased — the camera stops being able to send pictures
+
+Face recognition had grown two halves that did the same job in opposite directions: a browser that
+enrolled locally, and a server-driven flow that reached out to a remote camera, drove a capture over
+a database state machine, and streamed the frames back so an admin could watch. The second one was
+where all the complexity lived — and the only thing in the system that ever put a camera frame on
+the wire. Enrollment now happens in the browser of whatever device has the camera, which is where
+the person actually is, so the rest of it had nothing left to do.
+
+- **New `POST /faces/identify`** — send one embedding, get back `{name, score}`. Matching moved to
+  the server, so the 0.363 threshold and the best-of-many-embeddings rule have one definition
+  instead of three (agent, browser, config).
+- **`GET /faces/enrolled` is device-key/admin only.** It returns every face template in the
+  household, and any logged-in member could previously read it. A template is enough to replay
+  someone's identity, and faces can drive device authorization. A headless camera still needs the
+  set locally (it matches several frames a second and must survive a server blip); a browser does
+  not, and now asks `/faces/identify` instead.
+- **Removed: the remote-enroll and preview-relay path** — `/admin/faces/enroll-request`,
+  `/admin/faces/enroll-requests`, `/faces/enroll-request`, `/faces/enroll-result`,
+  `/faces/enroll-preview`, `/faces/enroll-preview` (GET), `/faces/enroll-preview-stream`, the
+  RAM-only preview store, and the `enroll_requests` table (dropped by migration — it held request
+  status, never an embedding; `face_embeddings` is untouched).
+- **Camera agent: 376 → 266 lines.** Gone are the 4-second enroll poll, the ~10 fps base64-JPEG
+  preview uploader and its hand-rolled keep-alive/reconnect HTTP client. The agent's remaining
+  traffic is events out and a long-poll for commands in — **it now has no code path that can
+  transmit an image at all**, which makes "no imagery leaves the device" a property of the code
+  rather than a promise about how it's used.
+- **Admin → Faces** loses the enroll-from-a-camera panel, the live preview, and the "Verify" button
+  that worked by polling the global event log for 18 seconds hoping a motion-gated sighting showed
+  up. Verification is immediate in the ⊕ → Face ID panel: look at the camera, read the name.
+- Enrollment on a headless device (no browser) is unchanged: `jarvis_camera.facecli add`.
+
 ## v3.2.1 — 2026-08-03 — two silent-failure fixes found after tagging
 
 Both of these broke without raising anything — the page rendered, and only a console line or a

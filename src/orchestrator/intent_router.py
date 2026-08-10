@@ -72,16 +72,20 @@ _GENERIC_TEMPLATES: Dict[str, List[str]] = {
 }
 
 
-def _nice(entity_id: str) -> str:
-    return entity_id.partition(".")[2].replace("_", " ")
+def build_exemplars(allowlist: List[str],
+                    names: Optional[Dict[str, str]] = None) -> List[Tuple[str, str, str]]:
+    """[(entity_id, action, phrase)] for every allowlisted entity. Pure — unit-testable.
 
-
-def build_exemplars(allowlist: List[str]) -> List[Tuple[str, str, str]]:
-    """[(entity_id, action, phrase)] for every allowlisted entity. Pure — unit-testable."""
+    Phrases are built from the entity's DISPLAY name (friendly name, else the id's object part).
+    That matters twice over on real hardware: an id like `switch.4node_smart_switch_switch_3`
+    produced exemplars nobody would ever utter ("turn on the 4node smart switch switch 3"), and
+    the semantic classes below — which decide whether "it is hot in here" reaches this device at
+    all — are keyed on the name, so a device called "Fan" never got its cooling paraphrases.
+    """
     out: List[Tuple[str, str, str]] = []
     for ent in allowlist:
         domain = ent.partition(".")[0]
-        name = _nice(ent)
+        name = ha.display_name(ent, names)
         if domain in ha.RUNNABLE_DOMAINS:
             for phrase in _GENERIC_TEMPLATES["run"]:
                 out.append((ent, "run", phrase.format(n=name)))

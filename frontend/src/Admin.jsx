@@ -1,4 +1,5 @@
 import { useState, useEffect, Fragment } from 'react'
+import { confirmDialog, promptDialog } from './notify.js'
 
 // Admin console, rendered by App when the path is /admin and the user is an admin.
 // Lives in the React app so it inherits the HUD styling, fonts, and active theme.
@@ -31,13 +32,8 @@ export default function Admin({ token, onExit, apiBase = "" }) {
   const [mintedDev, setMintedDev] = useState("")
   const [expanded, setExpanded] = useState(null)   // person id whose embeddings are shown
   const [embs, setEmbs] = useState([])
-  const [enrollUser, setEnrollUser] = useState("")   // user id the face is enrolled for
-  const [enrollDev, setEnrollDev] = useState("")
-  const [enrollReqs, setEnrollReqs] = useState([])
   const [recogs, setRecogs] = useState([])           // recent face_seen events (recognitions feed)
   const [present, setPresent] = useState([])         // people the cameras see right now
-  const [verifying, setVerifying] = useState(null)   // {id, device, status, text, ok} for the verify flow
-  const [preview, setPreview] = useState(null)     // {image, captured, total} during an active enroll
   const [globalFacts, setGlobalFacts] = useState([])   // household/global knowledge
   const [gContent, setGContent] = useState("")
   const [gCat, setGCat] = useState("home")
@@ -69,12 +65,12 @@ export default function Admin({ token, onExit, apiBase = "" }) {
 
   const load = async () => {
     try {
-      const [s, u, k, f, sv, er, rc, gk, pr] = await Promise.all([
+      const [s, u, k, f, sv, rc, gk, pr] = await Promise.all([
         api("/admin/stats"), api("/admin/users"), api("/admin/api_keys"),
-        api("/admin/faces"), api("/admin/services"), api("/admin/faces/enroll-requests"),
+        api("/admin/faces"), api("/admin/services"),
         api("/admin/events?type=face_seen&limit=20"), api("/admin/knowledge/global"), api("/presence")])
       setStats(s); setUsers(u.users || []); setKeys(k.keys || [])
-      setFaces(f.faces || []); setServices(sv.services || []); setEnrollReqs(er.requests || [])
+      setFaces(f.faces || []); setServices(sv.services || [])
       setSysInfo({ version: sv.version, summary: sv.summary, checkedAt: Date.now() })
       setRecogs(rc.events || []); setGlobalFacts(gk.facts || []); setPresent(pr.present || []); setErr("")
     } catch {
@@ -131,14 +127,14 @@ export default function Admin({ token, onExit, apiBase = "" }) {
   }
   const toggleAllowed = (eid) =>
     setHaAllowed(a => a.includes(eid) ? a.filter(x => x !== eid) : [...a, eid])
-  // Refresh status periodically (services, faces, enroll requests) without disrupting form edits.
+  // Refresh status periodically (services, faces, sightings) without disrupting form edits.
   useEffect(() => {
     const t = setInterval(async () => {
       try {
-        const [sv, f, er, rc, pr] = await Promise.all([
-          api("/admin/services"), api("/admin/faces"), api("/admin/faces/enroll-requests"),
+        const [sv, f, rc, pr] = await Promise.all([
+          api("/admin/services"), api("/admin/faces"),
           api("/admin/events?type=face_seen&limit=20"), api("/presence")])
-        setServices(sv.services || []); setFaces(f.faces || []); setEnrollReqs(er.requests || [])
+        setServices(sv.services || []); setFaces(f.faces || [])
         setSysInfo({ version: sv.version, summary: sv.summary, checkedAt: Date.now() })
         setRecogs(rc.events || []); setPresent(pr.present || [])
       } catch { /* keep last */ }
@@ -146,67 +142,18 @@ export default function Admin({ token, onExit, apiBase = "" }) {
     return () => clearInterval(t)
   }, [])  // eslint-disable-line react-hooks/exhaustive-deps
 
-  // While an enroll is in progress, poll its live preview (fast) + status/faces (so it flips to DONE
-  // and the new person appears promptly).
-  const activeReqId = enrollReqs.find(r => r.status === "pending")?.id
-  useEffect(() => {
-    if (!activeReqId) { setPreview(null); return }
-    let alive = true, waited = 0
-    const STOP_AFTER = 120000   // a capture takes seconds; stop polling a stalled request (server expires it too)
-    // Smooth live preview: one streaming connection that pushes each frame the agent sends (~10 fps),
-    // instead of polling per frame. The status poll below still detects completion.
-    const ctrl = new AbortController()
-    const stream = async () => {
-      try {
-        const res = await fetch(`${apiBase}/faces/enroll-preview-stream?request_id=${activeReqId}`,
-          { headers: { Authorization: "Bearer " + token }, signal: ctrl.signal })
-        if (!res.ok || !res.body) return
-        const reader = res.body.getReader(), dec = new TextDecoder()
-        let buf = ""
-        while (alive) {
-          const { done, value } = await reader.read()
-          if (done) break
-          buf += dec.decode(value, { stream: true })
-          let nl
-          while ((nl = buf.indexOf("\n")) >= 0) {
-            const line = buf.slice(0, nl); buf = buf.slice(nl + 1)
-            if (line.trim()) { try { if (alive) setPreview(JSON.parse(line)) } catch { /* ignore */ } }
-          }
-        }
-      } catch { /* aborted / network — status poll keeps the UI honest */ }
-    }
-    const st = async () => {
-      try {
-        const d = await api("/admin/faces/enroll-requests")
-        if (!alive) return
-        setEnrollReqs(d.requests || [])
-        // refresh the people list once, when our request leaves 'pending' (don't re-fetch every tick)
-        if (!(d.requests || []).some(r => r.id === activeReqId && r.status === "pending")) {
-          const f = await api("/admin/faces"); if (alive) setFaces(f.faces || [])
-        }
-      } catch { /* ignore */ }
-    }
-    stream(); st()
-    const t2 = setInterval(() => {
-      waited += 4000
-      st()
-      if (waited >= STOP_AFTER) { clearInterval(t2); ctrl.abort() }   // give up; server marks it failed
-    }, 4000)
-    return () => { alive = false; clearInterval(t2); ctrl.abort() }
-  }, [activeReqId])  // eslint-disable-line react-hooks/exhaustive-deps
-
   const createUser = async () => {
     if (!uName || !uPass) return setErr("Username and password required")
     try { await api("/admin/users", "POST", { username: uName, password: uPass, role: "user" }); setUName(""); setUPass(""); load() }
     catch (e) { setErr(e.message) }
   }
   const delUser = async (id) => {
-    if (!confirm("Terminate this user and purge their data?")) return
+    if (!await confirmDialog("Terminate this user and purge their data?", { title: "Delete user", confirmLabel: "Terminate", danger: true })) return
     try { await api("/admin/users/" + id, "DELETE"); load() } catch (e) { setErr(e.message) }
   }
   const setRole = async (id, role) => {
     const verb = role === "admin" ? "Grant admin clearance to" : "Revoke admin clearance from"
-    if (!confirm(verb + " this user?")) return
+    if (!await confirmDialog(verb + " this user?", { title: "Change clearance", confirmLabel: role === "admin" ? "Grant" : "Revoke" })) return
     try { await api("/admin/users/" + id + "/role", "PUT", { role }); load() } catch (e) { setErr(e.message) }
   }
   const adminCount = users.filter(u => u.role === "admin").length
@@ -219,11 +166,11 @@ export default function Admin({ token, onExit, apiBase = "" }) {
     } catch (e) { setErr(e.message) }
   }
   const delKey = async (id) => {
-    if (!confirm("Sever this uplink? External scripts lose access immediately.")) return
+    if (!await confirmDialog("External scripts using this key lose access immediately.", { title: "Sever uplink", confirmLabel: "Sever", danger: true })) return
     try { await api("/admin/api_keys/" + id, "DELETE"); load() } catch (e) { setErr(e.message) }
   }
   const delFace = async (id) => {
-    if (!confirm("Delete this person and all their face embeddings?")) return
+    if (!await confirmDialog("This person and all of their face embeddings will be deleted.", { title: "Delete person", confirmLabel: "Delete", danger: true })) return
     try { await api("/admin/faces/" + id, "DELETE"); setExpanded(null); load() } catch (e) { setErr(e.message) }
   }
   const linkFace = async (id, userId) => {
@@ -231,7 +178,7 @@ export default function Admin({ token, onExit, apiBase = "" }) {
     catch (e) { setErr(e.message) }
   }
   const renameFace = async (id, current) => {
-    const name = prompt("Rename person:", current)
+    const name = await promptDialog("Rename this person.", current, { title: "Rename person", confirmLabel: "Rename" })
     if (!name || name.trim() === current) return
     try { await api("/admin/faces/" + id, "PUT", { name: name.trim() }); load() } catch (e) { setErr(e.message) }
   }
@@ -241,18 +188,12 @@ export default function Admin({ token, onExit, apiBase = "" }) {
     catch (e) { setErr(e.message) }
   }
   const delEmb = async (embId, personId) => {
-    if (!confirm("Delete this one embedding?")) return
+    if (!await confirmDialog("Delete this one embedding?", { title: "Delete embedding", confirmLabel: "Delete", danger: true })) return
     try {
       await api("/admin/faces/embeddings/" + embId, "DELETE")
       const d = await api(`/admin/faces/${personId}/embeddings`); setEmbs(d.embeddings || [])
       load()                                   // refresh the person's count
     } catch (e) { setErr(e.message) }
-  }
-
-  const requestEnroll = async () => {
-    if (!enrollUser || !enrollDev) return setErr("Pick a user and a camera")
-    try { await api("/admin/faces/enroll-request", "POST", { user_id: Number(enrollUser), device_id: enrollDev }); setEnrollUser(""); load() }
-    catch (e) { setErr(e.message) }
   }
 
   const loadGlobal = async () => {
@@ -265,13 +206,13 @@ export default function Admin({ token, onExit, apiBase = "" }) {
     catch (e) { setErr(e.message) }
   }
   const editGlobal = async (f) => {
-    const content = prompt("Edit household fact:", f.content)
+    const content = await promptDialog("Edit this household fact.", f.content, { title: "Edit fact", confirmLabel: "Save" })
     if (content == null || content.trim() === f.content) return
     try { await api("/admin/knowledge/global/" + f.id, "PUT", { content: content.trim(), category: f.category }); loadGlobal() }
     catch (e) { setErr(e.message) }
   }
   const delGlobal = async (id) => {
-    if (!confirm("Delete this household fact?")) return
+    if (!await confirmDialog("Delete this household fact?", { title: "Delete fact", confirmLabel: "Delete", danger: true })) return
     try { await api("/admin/knowledge/global/" + id, "DELETE"); loadGlobal() } catch (e) { setErr(e.message) }
   }
   const sendGlobalChat = async () => {
@@ -296,7 +237,7 @@ export default function Admin({ token, onExit, apiBase = "" }) {
     try { await api("/admin/backup", "POST"); await loadBackups() } catch (e) { setErr(e.message) } finally { setBackingUp(false) }
   }
   const delBackup = async (name) => {
-    if (!confirm("Delete backup " + name + "?")) return
+    if (!await confirmDialog("Delete backup " + name + "?", { title: "Delete backup", confirmLabel: "Delete", danger: true })) return
     try { await api("/admin/backups/" + encodeURIComponent(name), "DELETE"); loadBackups() } catch (e) { setErr(e.message) }
   }
   const downloadBackup = async (name) => {
@@ -310,51 +251,7 @@ export default function Admin({ token, onExit, apiBase = "" }) {
   }
   const fmtBytes = (n) => n > 1e6 ? (n / 1e6).toFixed(1) + " MB" : (n / 1e3).toFixed(0) + " KB"
 
-  // Verify recognition for one enrolled person. Recognition is motion-gated, so a new face_seen
-  // only fires when the person moves — we therefore accept the latest sighting that's either NEW
-  // since the click (skew-free) OR recent (within FRESH). We resolve INSTANTLY on a correct match,
-  // but tolerate transient "unknown"/wrong reads until a short deadline before reporting failure.
-  const verifyFace = async (face) => {
-    const device = cameraDevices.length === 1 ? cameraDevices[0] : (enrollDev || cameraDevices[0])
-    if (!device) return setErr("No camera available to verify on")
-    let startId = 0
-    try { const d0 = await api("/admin/events?type=face_seen&limit=1"); startId = d0.events?.[0]?.id || 0 }
-    catch (e) { return setErr(e.message) }
-    setVerifying({ id: face.id, device, ok: null, text: `Look at the camera on “${device}” (move a little)…` })
-    const ageMs = (s) => { const t = Date.parse((s || "").replace(" ", "T") + "Z"); return isNaN(t) ? 0 : Date.now() - t }
-    const FRESH = 12000, deadline = Date.now() + 18000
-    let lastSeen = null
-    const tick = async () => {
-      try {
-        const d = await api("/admin/events?type=face_seen&limit=10")
-        const evs = (d.events || []).filter(e => e.device_id === device)   // newest first
-        const newest = evs[0]
-        const live = newest && (newest.id > startId || ageMs(newest.created_at) <= FRESH) ? newest : null
-        if (live) {
-          lastSeen = live
-          if (live.data?.name === face.name) {                              // correct match → done now
-            setVerifying({ id: face.id, device, ok: true, text: `✓ Recognized as ${live.data.name} (score ${live.data.score})` })
-            return
-          }
-        }
-      } catch { /* keep polling */ }
-      if (Date.now() > deadline) {
-        const nm = lastSeen?.data?.name, sc = lastSeen?.data?.score
-        if (lastSeen && nm !== "unknown" && nm != null)
-          setVerifying({ id: face.id, device, ok: false, text: `⚠ Recognized as “${nm}” (score ${sc}), not ${face.name}.` })
-        else if (lastSeen)
-          setVerifying({ id: face.id, device, ok: false, text: `✗ Not recognized (best score ${sc}). Try better lighting / more angles.` })
-        else
-          setVerifying({ id: face.id, device, ok: false, text: `No face seen on “${device}” — be in frame, move a little, and make sure the agent is running (not --dry-run).` })
-        return
-      }
-      setTimeout(tick, 1000)
-    }
-    tick()
-  }
-
   const cameras = services.filter(s => s.name.startsWith("Camera"))
-  const cameraDevices = cameras.map(s => s.name.replace(/^Camera · /, "")).filter(d => d && d !== "agent")
 
   return (
     <div className="adm">
@@ -527,51 +424,14 @@ export default function Admin({ token, onExit, apiBase = "" }) {
           </div>
 
           <div className="adm-panel">
-            <h2>Enroll a face (from a camera)</h2>
-            <p className="adm-hint">Pick the user and a camera — the request goes to that device's agent,
-              which captures + registers the face on-device (the person there should look at the camera) and
-              links it to the chosen account. Run it again for the same user to add more angles.
-              <strong> CLI alternative:</strong>
+            <h2>Enroll a face</h2>
+            <p className="adm-hint">Enrollment happens in the browser of the device that has the camera:
+              open the <strong>⊕ menu → Face ID</strong> on any signed-in device, capture a few angles and
+              save. The frames are detected, aligned and embedded on that machine — only the resulting
+              vector reaches this server, and every camera in the household recognizes the person
+              afterwards. Run it again to add more angles.
+              <strong> CLI alternative</strong> (for a headless device):
               <code> .venv\Scripts\python -m jarvis_camera.facecli add --name "Name"</code>.</p>
-            <div className="adm-form">
-              <select className="hud-input" value={enrollUser} onChange={e => setEnrollUser(e.target.value)} style={{ maxWidth: 220 }}>
-                <option value="">— select user —</option>
-                {users.map(u => <option key={u.id} value={u.id}>{u.username}</option>)}
-              </select>
-              <select className="hud-input" value={enrollDev} onChange={e => setEnrollDev(e.target.value)} style={{ maxWidth: 220 }}>
-                <option value="">— select camera —</option>
-                {cameraDevices.map(d => <option key={d} value={d}>{d}</option>)}
-              </select>
-              <button className="hud-btn" onClick={requestEnroll} disabled={cameraDevices.length === 0 || users.length === 0}>Request Enrollment</button>
-            </div>
-            {cameraDevices.length === 0 && <p className="adm-hint">No camera agents seen yet — start one (run the agent) so it can receive the request.</p>}
-            {activeReqId && (
-              <div style={{ margin: "12px 0" }}>
-                {preview && preview.image ? (
-                  <>
-                    <img src={`data:image/jpeg;base64,${preview.image}`} alt="live enroll preview"
-                         style={{ maxWidth: 480, width: "100%", border: "1px solid var(--holo-cyan)", display: "block", clipPath: "var(--clip-angle-sm)" }} />
-                    <p className="adm-hint">● LIVE — capturing {preview.captured}/{preview.total}. Look at the camera; the green box is the detected face.</p>
-                  </>
-                ) : (
-                  <p className="adm-hint">Waiting for the camera feed… make sure the agent is running on that device.</p>
-                )}
-              </div>
-            )}
-            {enrollReqs.length > 0 && (
-              <table className="adm-table" style={{ marginTop: 4 }}>
-                <thead><tr><th>Requested</th><th>Name</th><th>Camera</th><th>Status</th></tr></thead>
-                <tbody>
-                  {enrollReqs.slice(0, 6).map(r => (
-                    <tr key={r.id}>
-                      <td>{r.created_at}</td><td className="adm-em">{r.name}</td><td>{r.device_id}</td>
-                      <td><span className={"adm-svc-state " + (r.status === "done" ? "active" : r.status === "failed" ? "inactive" : "")}>
-                        {r.status.toUpperCase()}</span>{r.detail ? ` · ${r.detail}` : ""}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
           </div>
 
           <div className="adm-panel">
@@ -600,18 +460,10 @@ export default function Admin({ token, onExit, apiBase = "" }) {
                       </td>
                       <td>{f.last_seen || <span style={{ opacity: 0.4 }}>never</span>}</td>
                       <td style={{ display: "flex", gap: 6 }}>
-                        <button className="hud-btn" onClick={() => verifyFace(f)}
-                                disabled={cameraDevices.length === 0 || (verifying && verifying.ok === null)}>Verify</button>
                         <button className="hud-btn" onClick={() => renameFace(f.id, f.name)}>Rename</button>
                         <button className="hud-btn warn" onClick={() => delFace(f.id)}>Delete</button>
                       </td>
                     </tr>
-                    {verifying && verifying.id === f.id && (
-                      <tr><td colSpan="5" className={verifying.ok === true ? "adm-em" : ""}
-                              style={{ color: verifying.ok === true ? "var(--holo-cyan)" : verifying.ok === false ? "var(--holo-amber, #f0a)" : undefined }}>
-                        {verifying.ok === null ? "● " : ""}{verifying.text}
-                      </td></tr>
-                    )}
                     {expanded === f.id && (
                       <tr><td colSpan="5" style={{ background: "rgba(103,199,235,0.03)" }}>
                         {embs.length === 0 ? <span className="adm-empty">No embeddings (re-enroll to add one)</span> : (
@@ -631,7 +483,7 @@ export default function Admin({ token, onExit, apiBase = "" }) {
                     )}
                   </Fragment>
                 ))}
-                {faces.length === 0 && <tr><td colSpan="5" className="adm-empty">No one enrolled yet — use the enroll command above.</td></tr>}
+                {faces.length === 0 && <tr><td colSpan="5" className="adm-empty">No one enrolled yet — enroll from the ⊕ menu → Face ID.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -765,15 +617,28 @@ export default function Admin({ token, onExit, apiBase = "" }) {
           <p className="adm-hint">Tick the devices Jarvis may control. Only these can ever be actuated —
             everything else in your home stays off-limits, even if asked. Click <b>Load devices</b> to pull
             the list from Home Assistant, then <b>Save</b> on the panel above.</p>
+          {haDevices.some(d => d.available === false) && (
+            <p className="adm-hint" style={{ opacity: 0.95 }}>⚠️ Rows marked <b>stale</b> are allowlisted but
+              Home Assistant no longer has them (renamed or deleted there). Untick them and <b>Save</b> — a
+              stale entry with the same name as a real device makes Jarvis refuse both as ambiguous.</p>
+          )}
           {haDevices.length > 0 ? (
             <table className="adm-table">
               <thead><tr><th>Allow</th><th>Device</th><th>Entity ID</th><th>Domain</th><th>State</th></tr></thead>
               <tbody>
                 {haDevices.map(d => (
-                  <tr key={d.entity_id}>
+                  /* available === false: allowlisted, but Home Assistant no longer has it (renamed
+                     or deleted there). Shown so it can be UNTICKED — it used to be invisible here
+                     while still being saved back on every write, and a stale entry doesn't just sit
+                     there: it ties with a real device of the same name and makes Jarvis refuse
+                     both. */
+                  <tr key={d.entity_id} style={d.available === false ? { opacity: 0.75 } : undefined}>
                     <td><input type="checkbox" checked={haAllowed.includes(d.entity_id)}
                       onChange={() => toggleAllowed(d.entity_id)} /></td>
-                    <td className="adm-em">{d.name}</td>
+                    <td className="adm-em">
+                      {d.name}
+                      {d.available === false && <span className="adm-tab-badge" style={{ marginLeft: 6 }}>stale</span>}
+                    </td>
                     <td style={{ opacity: 0.8, fontFamily: "monospace" }}>{d.entity_id}</td>
                     <td>{d.domain}</td>
                     <td>{d.state}</td>

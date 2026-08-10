@@ -1,0 +1,62 @@
+# Jarvis — PUBLIC DEMO runtime.
+#
+# A demo container is a separate thing from the lab/production one, not a flag on it:
+#   - its own volume, so it never opens the real database;
+#   - JARVIS_MODE=demo, which turns on demo signup and makes the login screen offer
+#     "Try the Demo" plus the demo/demo hint (a production container shows neither);
+#   - no HA_URL / HA_TOKEN, so there is no smart home for it to reach at all.
+#
+# Usage:
+#   cp .env.demo.example .env.demo && nano .env.demo
+#   docker compose --env-file .env.demo -f docker-compose.demo.yml up -d
+#
+# Run it alongside the production stack (docker-compose.prod.yml) — different project name,
+# different volume, different port:
+#   docker compose -p jarvis-demo --env-file .env.demo -f docker-compose.demo.yml up -d
+
+services:
+  llama:
+    image: ${LLAMA_IMAGE:-ghcr.io/ravijangid820/jarvis-llama:latest}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+
+  orchestrator:
+    image: ${ORCH_IMAGE:-ghcr.io/ravijangid820/jarvis-orchestrator:latest}
+    depends_on:
+      llama:
+        condition: service_healthy
+    environment:
+      - JARVIS_FAST_BRAIN_URL=${JARVIS_FAST_BRAIN_URL:-http://llama:8081/v1/chat/completions}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:5001}
+      - EMBED_MODEL=${EMBED_MODEL:-google/embeddinggemma-300m}
+      # THE switch. Everything demo-specific follows from it: /demo/session starts answering,
+      # /health reports demo_signup=true so the UI renders the demo affordances, and demo/demo
+      # becomes a valid (sandbox-minting) login.
+      - JARVIS_MODE=demo
+      - DEMO_TTL_MINUTES=${DEMO_TTL_MINUTES:-60}
+      - DEMO_MINT_PER_IP_HOURLY=${DEMO_MINT_PER_IP_HOURLY:-10}
+      # The demo container still has one built-in admin account (household 1). It is NOT the
+      # demo/demo login — that mints throwaway sandboxes — so give it a real password anyway:
+      # it can see the seeded household and the service board.
+      - ADMIN_USER=${ADMIN_USER:-admin}
+      - ADMIN_PASS=${ADMIN_PASS:?set ADMIN_PASS in .env.demo}
+      - HOST_PORT=5000
+      # Deliberately NO HA_URL / HA_TOKEN. Smart-home control is out of scope for the public
+      # demo, and the surest way to guarantee that is to give this container no credentials for
+      # any Home Assistant in the first place.
+    ports:
+      - "${HOST_PORT:-5001}:5000"
+    volumes:
+      - ${CONFIG_DIR:-./config}:/app/config
+      # A DIFFERENT named volume from the production stack's jarvis-prod-data. This is the hard
+      # line between the two runtimes: the demo process has no path to the real database.
+      - jarvis-demo-data:/app/memory
+    restart: unless-stopped
+
+volumes:
+  jarvis-demo-data:

@@ -221,15 +221,21 @@ Each device fetches *that* server's CA and verifies against it:
 (There's no agent on a phone — it only browses the web UI, so it just needs the browser to trust the
 CA.) If you regenerate the CA, every device re-copies `ca.crt` / re-imports.
 
-**Enroll from the web UI (no CLI / no admin key on the device):** in **admin → Faces → “Enroll a face
-(from a camera)”**, pick the camera + a name and click *Request Enrollment*. A **live preview** (the
-camera frame with the detected face boxed) appears so you can see what's being captured. The server
-queues a request; the running agent on that device picks it up, captures + embeds on-camera, and
-registers it —
-so the camera key never gains general enroll rights (it can only fulfill a request an admin created
-for it). Each person can hold **multiple embeddings**; enroll again (any angle) to add more, and
-**view/delete individual embeddings** or **rename**/link people in the same page. The agent pulls the
-enrolled set from `/faces/enrolled` and recognizes locally (best match across a person's embeddings).
+**Enroll from the web UI (no CLI / no admin key on the device):** open the **⊕ menu → Face ID** in the
+web UI **on the device that has the camera** — a laptop, a phone, whatever you're sitting at. It runs
+the same YuNet + SFace models this agent runs, in a Web Worker: frames are detected, aligned and
+embedded **in the browser**, and only the resulting 128-D vector is POSTed to `/faces/enroll`. No
+image is uploaded. Capture a few angles, give a name, save — and every camera in the household
+recognizes that person from then on, because the face lives on the server, not on the machine that
+captured it.
+
+That is why there is no "enroll on a remote camera" flow any more: you enrol wherever the person
+actually is, rather than queueing a capture onto a device across the house and streaming its frames
+back to watch. Each person can hold **multiple embeddings**; enroll again (any angle) to add more,
+and **view/delete individual embeddings** or **rename**/link people in **admin → Faces**. The agent
+pulls the enrolled set from `/faces/enrolled` and recognizes locally (best match across a person's
+embeddings); browsers instead ask `/faces/identify`, which answers with a name and never hands out a
+template.
 
 ## Security & attack surface
 
@@ -237,10 +243,14 @@ This module is built to be hard to abuse even if the laptop/Pi it runs on is com
 
 - **Nothing listens.** The agent is **outbound-only** — it POSTs events to the server and never opens
   a port. There is no inbound network surface to attack on the camera device.
-- **No imagery leaves the device** — with one scoped exception: the **live enroll preview**. While an
-  admin-initiated enrollment is active, the agent relays annotated frames so the admin can see the
-  capture. Those frames are held **in server RAM only** (never written to disk/DB), expire in ~30s,
-  and are **admin-only** to view. Normal operation still sends only JSON events.
+- **No imagery leaves the device. No exception.** The agent sends JSON events and nothing else. (It
+  used to relay preview frames during an admin-initiated enrollment; enrollment moved into the
+  browser, so that path — and the only code that could ever put a camera frame on the wire — is
+  gone.)
+- **Face templates are not handed out.** `/faces/enrolled` returns every template in the household,
+  so it answers only to **device keys and admins** — a camera needs the set to match locally at
+  several frames a second, an ordinary logged-in member does not. Browsers call `/faces/identify`
+  with one vector and get back a name.
 - **Least-privilege credential.** ⚠️ **Mint the camera's device key under a *non-admin* user.** A
   device-bound key can post events as its device and read the enrolled set — nothing more. (The
   server also *enforces* this: a device-scoped key is denied admin even if it was minted under an
@@ -273,7 +283,7 @@ camera/
     models.py          download + sha256-verify the OpenCV-Zoo models (used by the .exe first run)
     events.py          event client (POST + offline queue + retry)
     keyfile.py         shared API-key loader (device vs admin key separation + perm checks)
-    agent.py           main loop + motion-gated scheduler (+ pulls enrolled faces)
+    agent.py           main loop + motion-gated scheduler (+ pulls enrolled faces, long-polls commands)
     app.py             .exe dispatcher: run / verify / setup / install-service / uninstall-service
     facecli.py         manage faces: list / verify / add / delete (device vs admin key)
     enroll.py          enroll a face → server (capture, average embedding, POST; admin key)
@@ -297,10 +307,13 @@ auto-downloaded ONNX files; `score_threshold` tunes detection, `recognize_thresh
    `vision_events`. (Acting on them — notifications/automation — can hang off this.)
 3. ✅ **Faces / pose / gestures:** implemented (faces identity is optional, model-gated). **Now:
    benchmark on the Pi** and tune `interval_s` / which to enable.
-4. ✅ **Enrollment + face management:** `jarvis_camera.enroll` (CLI) → server `faces` store; admin
-   **Faces** page lists / links face→user / deletes; the agent pulls `/faces/enrolled`. Future:
-   in-browser capture enrollment.
+4. ✅ **Enrollment + face management:** **in-browser** capture (⊕ → Face ID) → `/faces/enroll`; admin
+   **Faces** page lists / links face→user / deletes; the agent pulls `/faces/enrolled`, browsers ask
+   `/faces/identify`. `jarvis_camera.facecli add` remains for headless devices.
 5. **Identity → authorization:** link a recognized face's user to the per-user device permissions
    (the "only certain people can control the lights" goal).
 6. **Actions:** map gestures → actions — define what "volume" targets (server media, a player,
    or the Pi's own audio) before wiring.
+7. **Pi phase (not started):** always-on presence, human tracking and gestures on a Raspberry Pi —
+   the reason this agent still exists. Streaming, if it ever happens, belongs here and *only* here:
+   a fixed camera the household installed deliberately, never a personal laptop or phone.

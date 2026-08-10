@@ -33,10 +33,12 @@ import main  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 
-def _seed_user(username, password, role):
+def _seed_user(username, password, role, household_id=1):
+    """Seed a user. household_id defaults to 1 — the primary household every migration backfills
+    into — so the existing single-tenant tests read as before; the isolation tests pass a second."""
     c = sqlite3.connect(_DB)
-    c.execute("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
-              (username, auth.hash_password(password), role))
+    c.execute("INSERT INTO users (username, password_hash, role, household_id) VALUES (?, ?, ?, ?)",
+              (username, auth.hash_password(password), role, household_id))
     c.commit()
     c.close()
 
@@ -404,6 +406,63 @@ def test_delete_missing_knowledge_404(client):
     assert client.delete("/knowledge/999999", headers={"Authorization": "Bearer " + tok}).status_code == 404
 
 
+def test_voice_kiosk_shell_is_served_like_admin(client):
+    """/voice is an SPA view, so the shell must be reachable without a token — the page itself
+    renders the login screen until one exists, and every endpoint it calls is authenticated.
+    Without the route AND the middleware allowlist entry, opening it is a bare 401/404."""
+    r = client.get("/voice")
+    assert r.status_code in (200, 404)          # 404 only when no frontend build is present
+    if r.status_code == 200:
+        assert "text/html" in r.headers["content-type"]
+    # the middleware must not demand a Bearer token for it (that would be a 401)
+    assert r.status_code != 401
+
+
+# --- personal memory: the "About me" panel's backing store -------------------------------------
+
+def test_personal_facts_reach_the_users_own_prompt(client):
+    """A fact added here has to end up in the USER PROFILE block, or the panel is decorative."""
+    import chat
+    tok = _tok(client, "pepper", "pw-user")
+    h = {"Authorization": "Bearer " + tok}
+    assert client.post("/knowledge", headers=h,
+                       json={"content": "I prefer concise answers.", "category": "preferences"}).status_code == 200
+    c = sqlite3.connect(_DB)
+    user_id = c.execute("SELECT id FROM users WHERE username='pepper'").fetchone()[0]
+    c.close()
+    system_prompt = chat.build_messages("s-mem", user_id, 1, "hello")[0]["content"]
+    assert "--- USER PROFILE ---" in system_prompt
+    assert "I prefer concise answers." in system_prompt
+
+
+def test_personal_facts_report_their_prompt_budget(client):
+    """The panel shows a budget meter because the block is truncated head-first at the cap — past
+    it, facts silently stop reaching the model. The numbers have to come from the server so the
+    UI can't drift from truncate_to_tokens' actual conversion."""
+    h = {"Authorization": "Bearer " + _tok(client, "pepper", "pw-user")}
+    d = client.get("/knowledge", headers=h).json()
+    assert d["prompt_char_budget"] > 0
+    assert d["prompt_chars"] > 0                      # pepper has a fact by now
+    assert d["prompt_chars"] <= d["prompt_char_budget"]
+
+
+def test_personal_facts_are_private_to_their_owner(client):
+    """Unlike household knowledge, these are per-USER: another account in the same household must
+    neither read nor delete them."""
+    ph = {"Authorization": "Bearer " + _tok(client, "pepper", "pw-user")}
+    th = {"Authorization": "Bearer " + _tok(client, "tony", "pw-admin")}
+    fid = client.post("/knowledge", headers=ph,
+                      json={"content": "Pepper's private note.", "category": "personal"}).json()["id"]
+    mine = client.get("/knowledge", headers=ph).json()
+    theirs = client.get("/knowledge", headers=th).json()
+    assert any(f["id"] == fid for f in mine["facts"])
+    assert not any(f["content"] == "Pepper's private note." for f in theirs["facts"])
+    # an admin of the same household still cannot reach another user's fact by id
+    assert client.delete(f"/knowledge/{fid}", headers=th).status_code == 404
+    assert client.put(f"/knowledge/{fid}", headers=th,
+                      json={"content": "hijacked", "category": "personal"}).status_code == 404
+
+
 def test_create_user_role_must_be_valid(client):
     admin = _tok(client, "tony", "pw-admin")
     r = client.post("/admin/users", headers={"Authorization": "Bearer " + admin},
@@ -547,57 +606,53 @@ def test_face_enroll_replace(client):
     client.delete(f"/admin/faces/{pid}", headers=h)
 
 
-def test_enroll_request_flow(client):
-    admin = _tok(client, "tony", "pw-admin")
-    h = {"Authorization": "Bearer " + admin}
-    rid = client.post("/admin/faces/enroll-request", headers=h, json={"name": "Neo", "device_id": "pi-door"}).json()["id"]
-    other = _seed_device_key("pepper", "pi-other")
-    key = _seed_device_key("pepper", "pi-door")
-    # the wrong device sees nothing; the right device sees the request
-    assert client.get("/faces/enroll-request", headers={"Authorization": "Bearer " + other}).json()["request"] is None
-    got = client.get("/faces/enroll-request", headers={"Authorization": "Bearer " + key}).json()["request"]
-    assert got and got["name"] == "Neo"
-    # a device may NOT fulfill another device's request
-    assert client.post("/faces/enroll-result", headers={"Authorization": "Bearer " + other},
-                       json={"request_id": rid, "embedding": [0.1] * 16}).status_code == 403
-    # the right device submits → person created
-    assert client.post("/faces/enroll-result", headers={"Authorization": "Bearer " + key},
-                       json={"request_id": rid, "embedding": [0.1] * 16}).status_code == 200
-    assert "Neo" in client.get("/faces/enrolled", headers=h).json()["enrolled"]
-    # already handled → can't be re-fulfilled
-    assert client.post("/faces/enroll-result", headers={"Authorization": "Bearer " + key},
-                       json={"request_id": rid, "embedding": [0.2] * 16}).status_code == 409
-    pid = next(f["id"] for f in client.get("/admin/faces", headers=h).json()["faces"] if f["name"] == "Neo")
-    client.delete(f"/admin/faces/{pid}", headers=h)
-
-
 def test_ca_cert_is_public(client):
     # /ca.crt must be reachable WITHOUT a token (devices bootstrap trust from it). In the test env
     # there's no tls/ca.crt, so it's 404 (reachable, no cert) — crucially NOT 401 (auth required).
     assert client.get("/ca.crt").status_code == 404
 
 
-def test_enroll_request_create_requires_admin(client):
+def test_faces_enrolled_is_not_readable_by_ordinary_members(client):
+    """The enrolled set is every face TEMPLATE in the household — enough to replay someone's
+    identity — so it is device-keys-and-admins only. Ordinary members recognise via /faces/identify,
+    which answers a question without handing over the material to answer it themselves."""
     user = _tok(client, "pepper", "pw-user")
-    assert client.post("/admin/faces/enroll-request", headers={"Authorization": "Bearer " + user},
-                       json={"name": "x", "device_id": "d"}).status_code == 403
+    assert client.get("/faces/enrolled", headers={"Authorization": "Bearer " + user}).status_code == 403
+    admin = _tok(client, "tony", "pw-admin")
+    assert client.get("/faces/enrolled", headers={"Authorization": "Bearer " + admin}).status_code == 200
+    key = _seed_device_key("pepper", "cam-enrolled")          # a camera still needs the set locally
+    assert client.get("/faces/enrolled", headers={"Authorization": "Bearer " + key}).status_code == 200
 
 
-def test_enroll_preview_relay(client):
+def test_face_identify_matches_names_and_rejects_strangers(client):
     admin = _tok(client, "tony", "pw-admin")
     h = {"Authorization": "Bearer " + admin}
-    rid = client.post("/admin/faces/enroll-request", headers=h, json={"name": "Pv", "device_id": "pv-cam"}).json()["id"]
-    key = _seed_device_key("pepper", "pv-cam")
-    other = _seed_device_key("pepper", "pv-other")
-    img = "QUJD"  # opaque base64; server stores/returns it verbatim
-    # a different device may NOT post a preview for this request
-    assert client.post("/faces/enroll-preview", headers={"Authorization": "Bearer " + other},
-                       json={"request_id": rid, "image": img, "captured": 1, "total": 7}).status_code == 403
-    # the right device posts; admin reads it back
-    assert client.post("/faces/enroll-preview", headers={"Authorization": "Bearer " + key},
-                       json={"request_id": rid, "image": img, "captured": 2, "total": 7}).status_code == 200
-    pv = client.get(f"/faces/enroll-preview?request_id={rid}", headers=h).json()["preview"]
-    assert pv and pv["image"] == img and pv["captured"] == 2
-    # viewing imagery is admin-only — a device key cannot read the preview
-    assert client.get(f"/faces/enroll-preview?request_id={rid}",
-                      headers={"Authorization": "Bearer " + key}).status_code == 403
+    user = {"Authorization": "Bearer " + _tok(client, "pepper", "pw-user")}
+    # Nobody enrolled yet → name is null, which the UI must distinguish from "unknown".
+    assert client.post("/faces/identify", headers=user, json={"embedding": [1.0] + [0.0] * 15}
+                       ).json()["name"] is None
+    vec = [1.0] + [0.0] * 15                                  # unit vector, as the client sends
+    assert client.post("/faces/enroll", headers=h, json={"name": "Ident", "embedding": vec}).status_code == 200
+    # The same face → the person's name, at cosine 1.0.
+    hit = client.post("/faces/identify", headers=user, json={"embedding": vec}).json()
+    assert hit["name"] == "Ident" and hit["score"] == 1.0
+    # An orthogonal vector scores 0.0, below the 0.363 threshold → "unknown", never a false accept.
+    miss = client.post("/faces/identify", headers=user, json={"embedding": [0.0, 1.0] + [0.0] * 14}).json()
+    assert miss["name"] == "unknown" and miss["score"] == 0.0
+    # Recognising must not leak the vectors themselves back to an ordinary member.
+    assert "embedding" not in hit and "embedding" not in miss
+    pid = next(f["id"] for f in client.get("/admin/faces", headers=h).json()["faces"] if f["name"] == "Ident")
+    client.delete(f"/admin/faces/{pid}", headers=h)
+
+
+def test_face_identify_ignores_wrong_width_vectors(client):
+    """A vector from a different model can't be compared. It must be skipped, not zip()-truncated
+    into a bogus partial cosine that could clear the threshold."""
+    admin = _tok(client, "tony", "pw-admin")
+    h = {"Authorization": "Bearer " + admin}
+    assert client.post("/faces/enroll", headers=h, json={"name": "Wide", "embedding": [1.0] + [0.0] * 31}
+                       ).status_code == 200
+    got = client.post("/faces/identify", headers=h, json={"embedding": [1.0] + [0.0] * 15}).json()
+    assert got["name"] is None and got["score"] is None
+    pid = next(f["id"] for f in client.get("/admin/faces", headers=h).json()["faces"] if f["name"] == "Wide")
+    client.delete(f"/admin/faces/{pid}", headers=h)

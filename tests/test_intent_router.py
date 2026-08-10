@@ -12,6 +12,27 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "orchestrat
 import ha  # noqa: E402
 import intent_router as ir  # noqa: E402
 
+class _FakeState:
+    """Minimal stand-in for request.state — enough for the household/authz lookups."""
+    def __init__(self, user_id=1, household_id=1, is_admin=True):
+        self.user_id = user_id
+        self.household_id = household_id
+        self.is_admin = is_admin
+        self.device_id = None
+
+
+class _FakeRequest:
+    def __init__(self, **kw):
+        self.state = _FakeState(**kw)
+
+
+def _req(**kw):
+    """A principal in household 1 — the household that owns the smart home in these tests.
+    The home fast-path and the HA tools now require one: they check that the CALLER's household
+    actually owns the smart home before touching Home Assistant."""
+    return _FakeRequest(**kw)
+
+
 
 import zlib
 def _bow_embed(texts):
@@ -57,6 +78,26 @@ def test_exemplars_fan_gets_cooling_paraphrases():
 def test_exemplars_unknown_device_generic_only():
     ex = ir.build_exemplars(["switch.garage_door_opener"])
     assert all("hot" not in p and "dark" not in p for (_, _, p) in ex)
+
+
+def test_exemplars_are_built_from_the_friendly_name(monkeypatch):
+    """Real hardware gets machine-generated ids. Building phrases from the id produced exemplars
+    nobody would ever say ("turn on the 4node smart switch switch 3"), so the router could not
+    match real speech to a real device."""
+    eid = "switch.4node_smart_switch_switch_3"
+    ex = ir.build_exemplars([eid], {eid: "Fan"})
+    phrases = [p for (_, a, p) in ex if a == "on"]
+    assert "turn on the Fan" in phrases
+    assert not any("4node" in p for p in phrases)
+
+
+def test_semantic_class_keys_on_the_friendly_name(monkeypatch):
+    """The bigger half: the cooling/light classes decide whether "it is hot in here" can reach a
+    device at all, and they match on the NAME. A device called "Fan" whose id is
+    switch.4node_smart_switch_switch_3 got no cooling paraphrases whatsoever."""
+    eid = "switch.4node_smart_switch_switch_3"
+    assert not any("hot" in p for (_, _, p) in ir.build_exemplars([eid], {}))
+    assert any("hot" in p for (_, _, p) in ir.build_exemplars([eid], {eid: "Fan"}))
 
 
 # --- route() decisions ------------------------------------------------------------
@@ -108,6 +149,10 @@ def _flow_setup(monkeypatch):
     monkeypatch.setattr(ha, "HA_TOKEN", "tok")
     monkeypatch.setattr(ha, "HA_ALLOWED_ENTITIES", ["switch.desk_fan"])
     monkeypatch.setattr(ha, "turn", lambda e, a: actions.append((a, e)) or True)
+    # The act path now pre-flights the entity against HA (a 200-with-empty-body for an
+    # entity HA does not have used to read as success). Fake it as present: these tests
+    # fake actuation too, so they must fake existence to match.
+    monkeypatch.setattr(ha, "probe_entity", lambda e: (ha.ENTITY_FOUND, {"state": "off"}))
     monkeypatch.setattr(main, "_can_control_devices", lambda r: True)
     monkeypatch.setattr(main, "REQUIRE_PRESENCE_FOR_CONTROL", False)
     monkeypatch.setattr(main, "_audit", lambda *a, **k: None)
@@ -122,11 +167,11 @@ def test_confirm_then_yes_executes(monkeypatch):
     monkeypatch.setattr(main.intent_router, "route",
                         lambda text, f: {"decision": "confirm", "entity": "switch.desk_fan",
                                          "action": "on", "score": 0.7})
-    reply = main._handle_home_command("i am kind of warm", None, "s1")
+    reply = main._handle_home_command("i am kind of warm", _req(), "s1")
     assert reply is not None and reply.lower().startswith("should i turn on")
     assert main._PENDING_HOME.get("s1") is not None and actions == []   # asked, did NOT act
 
-    reply = main._handle_home_command("yes please", None, "s1")
+    reply = main._handle_home_command("yes please", _req(), "s1")
     assert "fan is now on" in reply.lower()
     assert actions == [("on", "switch.desk_fan")]
     assert "s1" not in main._PENDING_HOME                               # consumed
@@ -138,8 +183,8 @@ def test_confirm_then_no_cancels(monkeypatch):
     monkeypatch.setattr(main.intent_router, "route",
                         lambda text, f: {"decision": "confirm", "entity": "switch.desk_fan",
                                          "action": "on", "score": 0.7})
-    main._handle_home_command("i am kind of warm", None, "s1")
-    reply = main._handle_home_command("no, leave it", None, "s1")
+    main._handle_home_command("i am kind of warm", _req(), "s1")
+    reply = main._handle_home_command("no, leave it", _req(), "s1")
     assert "leaving it" in reply.lower() and actions == []
 
 
@@ -147,7 +192,7 @@ def test_unrelated_message_drops_the_proposal(monkeypatch):
     main, actions = _flow_setup(monkeypatch)
     main._PENDING_HOME["s1"] = ("switch.desk_fan", "on", time.monotonic())
     monkeypatch.setattr(main.intent_router, "ready", lambda: False)     # router quiet now
-    reply = main._handle_home_command("what is the capital of france", None, "s1")
+    reply = main._handle_home_command("what is the capital of france", _req(), "s1")
     assert reply is None and actions == []                              # goes to the LLM
     assert "s1" not in main._PENDING_HOME                               # proposal dropped
 
@@ -158,6 +203,6 @@ def test_act_decision_executes_immediately(monkeypatch):
     monkeypatch.setattr(main.intent_router, "route",
                         lambda text, f: {"decision": "act", "entity": "switch.desk_fan",
                                          "action": "on", "score": 0.85})
-    reply = main._handle_home_command("i'm melting in here", None, "s1")
+    reply = main._handle_home_command("i'm melting in here", _req(), "s1")
     assert "fan is now on" in reply.lower()
     assert actions == [("on", "switch.desk_fan")]

@@ -191,6 +191,12 @@ STATIC_DIR = Path(__file__).parent / "static"
 # Failsafe copy of the in-browser speech-to-text model (official HF is tried first). Populated by
 # src/scripts/download_models.sh; served read-only at /stt-models when present.
 STT_MODELS_DIR = BASE_DIR / "models" / "stt"
+# YuNet + SFace for BROWSER-side face detection/recognition, served read-only at /face-models.
+# Unlike the STT bundle there is no upstream fallback: the OpenCV Zoo serves these through git-LFS
+# without permissive CORS, so a browser cannot fetch them cross-origin — we host or the feature is
+# simply off. Populated (and SHA-256-verified) by src/scripts/download_models.sh.
+FACE_MODELS_DIR = BASE_DIR / "models" / "face"
+WAKE_MODELS_DIR = BASE_DIR / "models" / "wake"
 INDEX_HTML = REACT_DIST_DIR / "index.html"
 SCHEMA_PATH = BASE_DIR / "config" / "schema.sql"
 ADMIN_MAX_INPUT = 10000
@@ -202,3 +208,45 @@ JARVIS_MODE: str = (os.environ.get("JARVIS_MODE") or CONFIG.get("mode") or "prod
 if JARVIS_MODE not in ("production", "development", "demo"):
     logger.warning("Unknown JARVIS_MODE '%s', defaulting to 'production'", JARVIS_MODE)
     JARVIS_MODE = "production"
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name) or default)
+    except (TypeError, ValueError):
+        logger.warning("%s is not an integer; using %d", name, default)
+        return default
+
+
+# --- Public demo -------------------------------------------------------------
+# Demo signup follows the RUNTIME: a container started with JARVIS_MODE=demo is the public demo and
+# offers demo sessions; anything else (the lab/production instance) does not, and its login screen
+# shows no demo affordance at all. Tying this to the mode rather than to a standalone flag means one
+# container is one thing — there is no way to accidentally leave signup enabled on the real
+# instance by setting the wrong variable.
+#
+# DEMO_PUBLIC_SIGNUP=1 can still force it on for a non-demo runtime (useful for testing), but the
+# default follows the mode and no production deployment gains it by upgrading.
+_DEMO_SIGNUP_ENV = (os.environ.get("DEMO_PUBLIC_SIGNUP", "") or "").strip().lower()
+DEMO_PUBLIC_SIGNUP: bool = (_DEMO_SIGNUP_ENV in ("1", "true", "yes")
+                            if _DEMO_SIGNUP_ENV else JARVIS_MODE == "demo")
+
+# The credentials the demo login screen suggests. Typing them mints a fresh, isolated demo session
+# rather than signing in to any shared account — so the on-screen hint is honest and two visitors
+# using it never land in the same household.
+DEMO_USERNAME = "demo"
+DEMO_PASSWORD = "demo"
+
+# How long a demo household lives from its LAST activity. Refreshing the page must not lose the
+# session, so the token outlives a reload; an abandoned tab is reclaimed by this instead.
+DEMO_TTL_MINUTES: int = _env_int("DEMO_TTL_MINUTES", 60)
+
+# Per-IP cap on how many demo households one client may mint per hour. Not a throughput control —
+# it stops a script from growing the households/users tables without bound.
+DEMO_MINT_PER_IP_HOURLY: int = _env_int("DEMO_MINT_PER_IP_HOURLY", 10)
+
+# Demo accounts get ids from their own high range so a purged demo id is never recycled into a
+# real account. _lowest_free_user_id checks SQLite for residue but cannot see ChromaDB, so a
+# recycled id whose vector delete had failed would serve the previous holder's RAG memories to
+# whoever got the id next. Separating the ranges removes that class of bug entirely.
+DEMO_USER_ID_BASE: int = 100_000

@@ -73,6 +73,40 @@ def get_state(entity_id: str) -> Optional[Dict[str, Any]]:
     return _request("GET", f"/api/states/{entity_id}")
 
 
+# Outcomes of asking Home Assistant about one entity. "HA does not have this" and "HA did not
+# answer" must never reach the user as the same sentence: the first is a stale allowlist they can
+# fix in the admin page, the second is a network blip they can only wait out.
+ENTITY_FOUND = "found"
+ENTITY_MISSING = "missing"
+HA_UNREACHABLE = "unreachable"
+
+
+def probe_entity(entity_id: str) -> tuple:
+    """(status, state_object) — status is ENTITY_FOUND / ENTITY_MISSING / HA_UNREACHABLE.
+
+    Exists because HA's generic homeassistant.turn_on/turn_off answer 200 with an empty body for
+    an entity_id they do NOT have, so acting was indistinguishable from succeeding: a device
+    renamed or deleted in HA produced a confident "the fan is now off" while nothing happened.
+    A 404 from /api/states is the one unambiguous, race-free signal — unlike reading state back
+    after acting, which a physical switch may not have reported yet.
+    """
+    if not configured():
+        return HA_UNREACHABLE, None
+    req = urllib.request.Request(f"{HA_URL}/api/states/{entity_id}",
+                                 headers={"Authorization": f"Bearer {HA_TOKEN}"})
+    try:
+        with urllib.request.urlopen(req, timeout=_TIMEOUT) as r:
+            return ENTITY_FOUND, json.loads(r.read().decode() or "null")
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return ENTITY_MISSING, None
+        logger.warning("Home Assistant probe %s failed: HTTP %s", entity_id, e.code)
+        return HA_UNREACHABLE, None
+    except Exception as e:
+        logger.warning("Home Assistant probe %s failed: %s", entity_id, e)
+        return HA_UNREACHABLE, None
+
+
 def test_connection(url: Optional[str], token: Optional[str]) -> tuple:
     """Probe /api/ with the given creds (falling back to the live ones), WITHOUT mutating state —
     lets the admin UI validate a URL/token before saving. Returns (ok: bool, detail: str)."""
@@ -93,16 +127,30 @@ def test_connection(url: Optional[str], token: Optional[str]) -> tuple:
 
 
 def list_entities() -> List[Dict[str, Any]]:
-    """Controllable entities for the UI picker: [{entity_id, name, state, domain, allowed}].
-    Empty list on any failure (unconfigured, unreachable, bad token)."""
+    """Controllable entities for the UI picker:
+    [{entity_id, name, state, domain, allowed, available}].
+    Empty list on any failure (unconfigured, unreachable, bad token).
+
+    Includes allowlisted entities Home Assistant NO LONGER KNOWS, flagged available=False. They
+    are listed precisely because they are broken: an entity that has been renamed or deleted in HA
+    stays in the stored allowlist forever otherwise — the picker only ever rendered what HA
+    currently returns, so there was no way to untick it, and every save wrote it straight back.
+    Worse than untidy, a stale entry actively breaks resolution: a dead `input_boolean.fan` ties
+    with a real switch named "Fan", and the tie makes resolve_entity refuse BOTH — which reads to
+    the user as "the allowlist didn't save".
+    """
     states = _request("GET", "/api/states")
     if not isinstance(states, list):
         return []
     allowed = set(HA_ALLOWED_ENTITIES)
     out = []
+    known = set()
     for s in states:
         eid = (s or {}).get("entity_id", "")
         domain = eid.partition(".")[0]
+        if not eid:
+            continue
+        known.add(eid)
         if domain not in CONTROLLABLE_DOMAINS:
             continue
         out.append({
@@ -111,8 +159,22 @@ def list_entities() -> List[Dict[str, Any]]:
             "state": s.get("state"),
             "domain": domain,
             "allowed": eid in allowed,
+            "available": True,
         })
     out.sort(key=lambda e: (e["domain"], e["name"].lower()))
+    # Stale allowlist entries last, so the normal list keeps its familiar order and the broken
+    # ones are grouped where the UI can call them out.
+    for eid in HA_ALLOWED_ENTITIES:
+        if eid in known:
+            continue
+        out.append({
+            "entity_id": eid,
+            "name": eid.partition(".")[2].replace("_", " "),
+            "state": "unknown to Home Assistant",
+            "domain": eid.partition(".")[0],
+            "allowed": True,
+            "available": False,
+        })
     return out
 
 
@@ -169,12 +231,53 @@ def _norm(s: str) -> set:
     return set(re.sub(r"[^a-z0-9]+", " ", s.lower()).split())
 
 
-def resolve_entity(text: str, allowlist: Optional[List[str]] = None) -> Optional[str]:
-    """Map what the model said ('kitchen light', 'input_boolean.test_light') to ONE allowlisted
-    entity id. Exact id match first; else word-overlap against each id's object part (and domain).
+# entity_id -> friendly_name, cached from /api/states. THE reason this exists: real hardware gets
+# machine-generated ids ("switch.4node_smart_switch_switch_3") while the human name people actually
+# speak ("Fan") lives only in the friendly_name attribute. Resolving on the id alone meant "turn on
+# the fan" matched nothing at all, and the LLM's own (correct) tool call — device:"fan" — was thrown
+# away by the resolver. Refreshed off-request (startup + admin save), never from a chat turn.
+_FRIENDLY: Dict[str, str] = {}
+
+
+def refresh_names() -> int:
+    """Re-read entity_id -> friendly_name from HA. Returns how many names were cached (0 on any
+    failure, leaving the previous cache intact — a transient HA blip must not un-name every device
+    and silently degrade resolution back to machine ids)."""
+    global _FRIENDLY
+    states = _request("GET", "/api/states")
+    if not isinstance(states, list):
+        return 0
+    names = {}
+    for s in states:
+        eid = (s or {}).get("entity_id")
+        nice = ((s or {}).get("attributes") or {}).get("friendly_name")
+        if eid and nice:
+            names[eid] = str(nice)
+    if names:
+        _FRIENDLY = names
+    return len(names)
+
+
+def friendly_names() -> Dict[str, str]:
+    """A copy of the cached entity_id -> friendly_name map (injectable into the pure helpers)."""
+    return dict(_FRIENDLY)
+
+
+def display_name(entity_id: str, names: Optional[Dict[str, str]] = None) -> str:
+    """What a human calls this entity: its friendly name, else the object part of the id."""
+    names = _FRIENDLY if names is None else names
+    return (names.get(entity_id) or entity_id.partition(".")[2].replace("_", " ")).strip()
+
+
+def resolve_entity(text: str, allowlist: Optional[List[str]] = None,
+                   names: Optional[Dict[str, str]] = None) -> Optional[str]:
+    """Map what the model said ('kitchen light', 'Fan', 'input_boolean.test_light') to ONE
+    allowlisted entity id. Exact id match first; else word-overlap against each entity's NAME words
+    — its friendly name plus its id's object part — and its domain.
     Returns None when nothing (or more than one thing) matches — the caller asks for clarification.
-    Pure function (allowlist injectable) so it's unit-testable without HA."""
+    Pure function (allowlist AND names injectable) so it's unit-testable without HA."""
     allowlist = HA_ALLOWED_ENTITIES if allowlist is None else allowlist
+    names = _FRIENDLY if names is None else names
     text = (text or "").strip().lower()
     if not text or not allowlist:
         return None
@@ -187,18 +290,28 @@ def resolve_entity(text: str, allowlist: Optional[List[str]] = None) -> Optional
     domain_words = set()
     for e in allowlist:
         domain_words |= _norm(e.partition(".")[0])
-    candidates = []   # (name_overlap, entity) for anything the words touch at all
+    candidates = []   # (fully_named, name_overlap, entity) for anything the words touch at all
     for ent in allowlist:
         dom, _, obj = ent.partition(".")
-        name_overlap = len(words & (_norm(obj) - domain_words))
-        loose_overlap = len(words & (_norm(obj) | _norm(dom)))
+        name_overlap = len(words & ((_norm(obj) | _norm(names.get(ent, ""))) - domain_words))
+        loose_overlap = len(words & (_norm(obj) | _norm(dom) | _norm(names.get(ent, ""))))
+        # Whether the utterance contains this device's WHOLE display name. With a "Light" and a
+        # "Tube Light" both allowlisted, "turn on the light" overlaps each by one word — but only
+        # "Light" is named completely, and that is the one the speaker meant. "tube light" names
+        # both completely, and the overlap count then picks the more specific one.
+        #
+        # Computed from the DISPLAY name alone, never the union with the id: a device whose id is
+        # `switch.4node_smart_switch_switch_1` would otherwise need the speaker to recite "4node
+        # smart 1" before it counted as fully named, which is the whole problem being fixed.
+        display_words = _norm(names.get(ent) or obj) - domain_words
+        fully_named = bool(display_words) and display_words <= words
         if loose_overlap:
-            candidates.append((name_overlap, ent))
+            candidates.append((fully_named, name_overlap, ent))
     if not candidates:
         return None
     if len(candidates) == 1:
-        return candidates[0][1]          # unique however it matched ("the switch" with one switch)
+        return candidates[0][2]          # unique however it matched ("the switch" with one switch)
     candidates.sort(reverse=True)
-    if candidates[0][0] > candidates[1][0]:
-        return candidates[0][1]          # a NAME distinguishes it ("kitchen light")
+    if candidates[0][:2] > candidates[1][:2]:
+        return candidates[0][2]          # a NAME distinguishes it ("kitchen light", "tube light")
     return None                          # ambiguous — never guess which device to actuate

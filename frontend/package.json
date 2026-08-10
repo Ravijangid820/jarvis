@@ -11,10 +11,12 @@
     "predev": "node scripts/copy-ort.mjs",
     "prebuild": "node scripts/copy-ort.mjs",
     "postbuild": "node scripts/check-build.mjs",
-    "prepreview": "node scripts/copy-ort.mjs"
+    "prepreview": "node scripts/copy-ort.mjs",
+    "test": "node --test \"test/*.test.mjs\""
   },
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",
+    "onnxruntime-web": "1.24.3",
     "react": "^19.2.6",
     "react-dom": "^19.2.6"
   },

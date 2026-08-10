@@ -10,6 +10,17 @@ from config import DB_PATH, SCHEMA_PATH
 logger = logging.getLogger("jarvis")
 
 
+PRIMARY_HOUSEHOLD_ID = 1     # "Home" — owns everything that predates multi-tenancy
+
+
+def _seed_primary_household(conn: sqlite3.Connection):
+    """Ensure household 1 exists. It is the tenant every pre-multi-tenancy row is backfilled into,
+    so a single-household deployment sees no behaviour change at all."""
+    conn.execute(
+        "INSERT INTO households (id, name, is_demo) VALUES (?, 'Home', 0) "
+        "ON CONFLICT(id) DO NOTHING", (PRIMARY_HOUSEHOLD_ID,))
+
+
 def _seed_initial_admin(conn: sqlite3.Connection):
     """Industry-standard bootstrapping: automatically seed an initial admin account if users table is empty."""
     try:
@@ -27,8 +38,9 @@ def _seed_initial_admin(conn: sqlite3.Connection):
             else:
                 logger.info("Seeding initial admin account ('%s') from environment variables.", admin_user)
             conn.execute(
-                "INSERT INTO users (username, password_hash, role, can_control_devices) VALUES (?, ?, 'admin', 1)",
-                (admin_user, hash_password(admin_pass))
+                "INSERT INTO users (username, password_hash, role, can_control_devices, household_id) "
+                "VALUES (?, ?, 'admin', 1, ?)",
+                (admin_user, hash_password(admin_pass), PRIMARY_HOUSEHOLD_ID)
             )
     except Exception as e:
         logger.warning("Failed to check/seed initial admin account: %s", e)
@@ -64,6 +76,38 @@ def set_setting(key: str, value: str) -> None:
             "INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP",
             (key, value))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_household_setting(household_id: int, key: str, default=None):
+    """Read one household-scoped runtime setting (see household_settings in schema.sql).
+
+    Separate from get_setting/app_settings on purpose: the values here (the Home Assistant URL and
+    long-lived token) belong to ONE household, and a global lookup would hand them to any admin on
+    the box.
+    """
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT value FROM household_settings WHERE household_id = ? AND key = ?",
+            (household_id, key)).fetchone()
+        return row["value"] if row is not None else default
+    finally:
+        conn.close()
+
+
+def set_household_setting(household_id: int, key: str, value: str) -> None:
+    """Upsert a household-scoped runtime setting."""
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT INTO household_settings (household_id, key, value, updated_at) "
+            "VALUES (?, ?, ?, CURRENT_TIMESTAMP) "
+            "ON CONFLICT(household_id, key) DO UPDATE SET value = excluded.value, "
+            "updated_at = CURRENT_TIMESTAMP",
+            (household_id, key, value))
         conn.commit()
     finally:
         conn.close()
@@ -107,6 +151,136 @@ def _migrate_plaintext_api_keys(conn: sqlite3.Connection):
                      (hash_token(ks), r["key_prefix"] or ks[:10], r["rowid"]))
 
 
+def _migrate_persons_unique(conn: sqlite3.Connection):
+    """Rebuild `persons` if it still carries the global `name TEXT NOT NULL UNIQUE`.
+
+    Uniqueness moved from global to per-household (two households may each know an "Alice", and a
+    demo visitor enrolling their own name must not collide with — or thereby detect — a real one).
+    SQLite cannot drop a column constraint with ALTER, so the table is rebuilt. face_embeddings
+    references persons(id), so ids are preserved and the FK survives; the rebuild runs inside the
+    caller's transaction with foreign_keys deferred by the pragma flip below.
+    """
+    sql_row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='persons'").fetchone()
+    if not sql_row or "UNIQUE" not in (sql_row["sql"] or "").upper():
+        return   # already rebuilt (or fresh DB created from the current schema)
+    logger.info("Migrating persons: name uniqueness is now per-household; rebuilding table")
+    conn.executescript(
+        """
+        CREATE TABLE persons_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            household_id INTEGER REFERENCES households(id),
+            name TEXT NOT NULL,
+            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        INSERT INTO persons_new (id, household_id, name, user_id, created_at)
+            SELECT id, 1, name, user_id, created_at FROM persons;
+        DROP TABLE persons;
+        ALTER TABLE persons_new RENAME TO persons;
+        """
+    )
+
+
+def _migrate_heartbeats_unique(conn: sqlite3.Connection):
+    """Rebuild `device_heartbeats` if it still carries the global `device_id TEXT PRIMARY KEY`.
+
+    Device ids are unique per household, not globally — `laptop-cam` is the default id in both the
+    camera agent and VOICE_CAMERA, so under a global key two households shared ONE row and the
+    upsert's `household_id = excluded.household_id` handed it to whichever posted last, blanking
+    the other household's camera panel. SQLite cannot drop a PRIMARY KEY with ALTER, so the table
+    is rebuilt. Rows carry their household_id across (still NULL on an upgrade at this point — the
+    generic backfill below sets it, which must happen before the unique index can be created).
+
+    The old key guaranteed device_id was unique, so no row can be lost to a collision here.
+    """
+    sql_row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='device_heartbeats'").fetchone()
+    if not sql_row or "PRIMARY KEY" not in (sql_row["sql"] or "").upper():
+        return   # already rebuilt (or fresh DB created from the current schema)
+    logger.info("Migrating device_heartbeats: device ids are now unique per-household; rebuilding table")
+    conn.executescript(
+        """
+        CREATE TABLE device_heartbeats_new (
+            device_id TEXT NOT NULL,
+            household_id INTEGER REFERENCES households(id),
+            last_seen DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        INSERT INTO device_heartbeats_new (device_id, household_id, last_seen)
+            SELECT device_id, household_id, last_seen FROM device_heartbeats;
+        DROP TABLE device_heartbeats;
+        ALTER TABLE device_heartbeats_new RENAME TO device_heartbeats;
+        """
+    )
+
+
+# Tables that gained household_id, and the column each one is backfilled through. A row whose
+# owner can't be determined falls back to the primary household — the pre-multi-tenancy default,
+# which is correct because every such row predates the feature.
+_HOUSEHOLD_BACKFILL = (
+    "global_knowledge", "persons", "vision_events",
+    "device_commands", "device_heartbeats", "audit_log",
+)
+
+
+# Indexes spanning household_id. These live here rather than in schema.sql because schema.sql is
+# applied with executescript() BEFORE the ALTERs below run — so on an upgraded database the column
+# they index does not exist yet and the whole script would abort. Created once the column is
+# guaranteed present. (The households table's own index stays in schema.sql: it's a new table, so
+# its columns always exist.)
+_HOUSEHOLD_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_users_household ON users(household_id)",
+    "CREATE INDEX IF NOT EXISTS idx_global_knowledge_household ON global_knowledge(household_id)",
+    "CREATE INDEX IF NOT EXISTS idx_audit_household ON audit_log(household_id, id DESC)",
+    # Presence ("who is home right now") is derived from vision_events and injected into prompts,
+    # so the household filter has to be cheap on the recent-events path.
+    "CREATE INDEX IF NOT EXISTS idx_vision_events_household ON vision_events(household_id, id DESC)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_persons_household_name ON persons(household_id, name)",
+    # The uniqueness a device's heartbeat upserts on. Per-household, so two homes may each run a
+    # camera called `laptop-cam` without one silently taking over the other's row.
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_heartbeats_household_device "
+    "ON device_heartbeats(household_id, device_id)",
+)
+
+
+def _migrate_households(conn: sqlite3.Connection):
+    """Add household_id everywhere it's missing and backfill existing rows into household 1."""
+    _safe_exec(conn, "ALTER TABLE users ADD COLUMN household_id INTEGER REFERENCES households(id)")
+    for table in _HOUSEHOLD_BACKFILL:
+        _safe_exec(conn, f"ALTER TABLE {table} ADD COLUMN household_id INTEGER REFERENCES households(id)")
+    _migrate_persons_unique(conn)
+    _migrate_heartbeats_unique(conn)
+    # Backfill. Users first: rows below are attributed through their owning user where possible,
+    # so the users table has to be correct before anything reads it.
+    conn.execute("UPDATE users SET household_id = ? WHERE household_id IS NULL", (PRIMARY_HOUSEHOLD_ID,))
+    for table in _HOUSEHOLD_BACKFILL:
+        conn.execute(f"UPDATE {table} SET household_id = ? WHERE household_id IS NULL",
+                     (PRIMARY_HOUSEHOLD_ID,))
+    # Only now is every indexed column guaranteed to exist, and every row non-NULL — so the
+    # unique index over (household_id, name) can't trip over a table full of NULL households.
+    for stmt in _HOUSEHOLD_INDEXES:
+        _safe_exec(conn, stmt)
+
+
+def _migrate_ha_settings_to_household(conn: sqlite3.Connection):
+    """Move the Home Assistant connection out of the instance-global app_settings into the
+    primary household's settings.
+
+    A smart home belongs to the household that owns it — leaving the token in a global table
+    would mean any admin of any household (including a demo visitor) could reach it. Copied, not
+    moved-and-deleted, on the first pass: if a rollback to an older build is needed the old keys
+    still work. They are ignored by the new read path.
+    """
+    rows = conn.execute(
+        "SELECT key, value FROM app_settings WHERE key IN ('ha_url', 'ha_token', 'ha_allowed_entities')"
+    ).fetchall()
+    for r in rows:
+        conn.execute(
+            "INSERT INTO household_settings (household_id, key, value) VALUES (?, ?, ?) "
+            "ON CONFLICT(household_id, key) DO NOTHING",
+            (PRIMARY_HOUSEHOLD_ID, r["key"], r["value"]))
+
+
 def init_db():
     if not SCHEMA_PATH.exists():
         # Fail loudly — a silent no-op leaves every query failing with "no such table".
@@ -126,7 +300,23 @@ def init_db():
         _safe_exec(conn, "ALTER TABLE conversation_history ADD COLUMN facts_extracted BOOLEAN DEFAULT 0")
         _safe_exec(conn, "ALTER TABLE users ADD COLUMN can_control_devices INTEGER DEFAULT 0")
         _safe_exec(conn, "ALTER TABLE api_keys ADD COLUMN device_id TEXT")
-        _safe_exec(conn, "ALTER TABLE enroll_requests ADD COLUMN user_id INTEGER REFERENCES users(id)")
+        # Enrollment moved into the browser (see /faces/identify), so the queue an admin used to
+        # push a capture onto a remote camera is gone. Only ever transient request state — device,
+        # name, pending/done/failed — never an embedding, so there is nothing here to preserve;
+        # the faces themselves live in face_embeddings and are untouched.
+        _safe_exec(conn, "DROP TABLE IF EXISTS enroll_requests")
+        # Multi-tenancy: households + the household_id backfill. Must run before anything reads a
+        # scoped table. The persons rebuild inside it drops and recreates the table, which needs
+        # foreign_keys OFF (get_db turns it on) — SQLite only honours the flip outside a txn.
+        _seed_primary_household(conn)
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys=OFF")
+        try:
+            _migrate_households(conn)
+            conn.commit()
+        finally:
+            conn.execute("PRAGMA foreign_keys=ON")
+        _migrate_ha_settings_to_household(conn)
         # Drop the legacy FTS5 search infra + unused table (superseded by ChromaDB vectors).
         for stmt in (
             "DROP TRIGGER IF EXISTS conversation_ai",
