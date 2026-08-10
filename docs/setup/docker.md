@@ -83,11 +83,15 @@ Logs go to `docker compose logs -f` (or stream live if you run `up` without `-d`
   [jarvis]   Web UI / API : http://localhost:5000   (HTTP — add a TLS proxy for HTTPS)
   [jarvis]   Admin user   : admin (created)
   [jarvis]   Embedding    : ready
+  [jarvis]   Web UI       : served from this container at /
+  [jarvis]   Browser model bundles : face wake stt
   [jarvis]   Database     : ready   (persisted in the /app/memory volume)
-  [jarvis]   LLM backend  : http://llama:8081   (the 'llama' service)
+  [jarvis]   LLM backend  : http://llama:8081/v1/chat/completions
   [jarvis] ────────────────────────────────────────────────────────────
   ```
   If the embedding line says `UNAVAILABLE`, the image's ONNX bundle is missing — rebuild/pull a fresh image.
+  A `face:MISSING` / `wake:MISSING` / `stt:MISSING` in the bundles line means that browser-side feature
+  will 404 in the UI — see [Browser-side model bundles](#browser-side-model-bundles-face--wake-word--stt).
 
 ## The model
 **Simple by default, flexible when you need it.** A default model (**Qwen3.5-2B**) is **baked into the
@@ -161,6 +165,54 @@ values in `jarvis.json`.
 > with it baked in carries redistribution obligations — the required NOTICE + Terms + Prohibited Use
 > Policy live in `licenses/gemma/` and are baked into the image. To avoid them, pick a permissive
 > `EMBED_MODEL`.
+
+## Browser-side model bundles (face / wake word / STT)
+
+Three of Jarvis's features run **entirely in the browser**, in Web Workers, on models the page
+downloads: face enrolment + recognition (YuNet + SFace), the "hey jarvis" wake word (openWakeWord),
+and a failsafe copy of Whisper `base.en` for speech-to-text.
+
+The thing to know when building images: **those workers fetch their models from whichever origin
+serves the SPA, never from the API.** They build URLs from Vite's `BASE_URL`, so an image that
+serves the UI must also carry the weights, or the feature 404s in the browser with nothing in the
+server log to explain it. Two of the three have no upstream fallback at all — the OpenCV Zoo serves
+the face models over git-LFS without CORS headers, so a browser *cannot* fetch them cross-origin.
+
+| Bundle | Served at | Size | If missing |
+| --- | --- | --- | --- |
+| `models/face` — YuNet + SFace | `/face-models/` | 38 MB | face enrolment/recognition unavailable |
+| `models/wake` — openWakeWord | `/wake-models/` | 3.6 MB | wake word never fires |
+| `models/stt` — Whisper base.en q8 | `/stt-models/` | 76 MB | browser STT falls back to huggingface.co |
+
+`models/` is gitignored, so these can never arrive via the build context on CI. Every image that
+serves the SPA (`jarvis-orchestrator`, `jarvis-combined`, `jarvis-frontend`) downloads them in a
+dedicated build stage via **`src/scripts/fetch_browser_models.sh`** — the one place their sources
+and SHA-256 pins live, shared with the native installer and the GitHub Pages workflow. **A failed
+or tampered download fails the build**, rather than publishing an image with a dead feature.
+
+Trade size for a feature deliberately with build-args: `--build-arg SKIP_STT_MODEL=1` (−76 MB),
+`SKIP_FACE_MODELS=1` (−38 MB), `SKIP_WAKE_MODELS=1`.
+
+## Frontend image (`jarvis-frontend`) — how it reaches the API
+
+Optional: the orchestrator already serves the SPA. Run this when you want the web tier separate.
+
+The SPA is built with **`VITE_API_URL=/api`** and nginx proxies `/api/` → **`$JARVIS_API_UPSTREAM`**
+(default `http://orchestrator:5000`). That one variable is the entire wiring between the two
+containers, and because the API is same-origin from the browser's point of view, no CORS grant is
+needed. Consequences worth remembering:
+
+- Override the backend location with `-e JARVIS_API_UPSTREAM=…` (e.g. `https://orchestrator:5000`
+  when the orchestrator has TLS certs mounted). The config is rendered from a template at start-up.
+- Changing the API prefix means **rebuilding** the SPA (`--build-arg VITE_API_URL=…`) — the prefix
+  is compiled into the bundle.
+- `VITE_BASE_PATH` must stay `/` for this image; the `/jarvis/` base belongs to the Pages build.
+- nginx resolves the upstream hostname at start-up, so it must not race the orchestrator — the
+  compose service gates on `service_healthy`.
+
+```bash
+docker compose --env-file .env.prod -f docker-compose.prod.yml --profile web up -d
+```
 
 ## Admin login & API keys
 Nothing to bootstrap at build time — there's no master key or signing secret. The admin account is
@@ -326,23 +378,38 @@ LLM is Apache-2.0, the embedding (Gemma) carries the Gemma Terms (bundled in `li
 Build-time args:
 - **`LLAMA_IMAGE`** (combined) — the official llama base to build on. **Pin a specific tag**
   (`ghcr.io/ggml-org/llama.cpp:server-b<NNNN>`) for reproducible production builds; `:server` floats.
-- **`LLM_GGUF_URL` / `LLM_GGUF_SHA256` / `DEFAULT_MODEL`** (combined) — the LLM baked in, SHA-verified.
+- **`LLM_GGUF_URL` / `LLM_GGUF_SHA256` / `DEFAULT_MODEL`** (combined, llama) — the LLM baked in,
+  SHA-verified. Whatever it's named in `./models`, it lands in the image as `$DEFAULT_MODEL`, because
+  the llama image's `CMD` names that filename literally.
 - **`EMBED_MODEL`** (both) — the embedding model baked in.
+- **`SKIP_FACE_MODELS` / `SKIP_WAKE_MODELS` / `SKIP_STT_MODEL`** (orchestrator, combined, frontend) —
+  set to `1` to leave a browser-side bundle out and lose that feature. See
+  [Browser-side model bundles](#browser-side-model-bundles-face--wake-word--stt).
+- **`VITE_API_URL` / `VITE_BASE_PATH`** (frontend) — compiled into the SPA; defaults `/api` and `/`.
 
 Rebuild: `docker compose build --no-cache` (orchestrator), or re-run the Actions workflow.
 
+**Path filters in CI**: `.github/workflows/build-push.yml` skips images whose inputs didn't change.
+If you add a `COPY` to a Dockerfile, add that path to the image's filter — otherwise a change to it
+publishes nowhere and you debug a container built from stale source. (`frontend/**` counts for
+`jarvis-orchestrator` and `jarvis-combined` too: both bundle the built SPA.)
+
 ## Notes / known rough edges (verify on first build)
-- **Image size**: CPU **torch** (embeddings) plus the **baked-in model** make the image large (several GB
-  + the GGUF). Both containers share the one image (cached once on disk); the `llama` container simply
-  doesn't use the Python side. Fine for local build-and-run; heavy if you push it to a registry.
+- **Image size**: the baked embedding bundle, the browser-side model bundles (~118 MB) and — for
+  `jarvis-combined` / `jarvis-llama` — the GGUF make these images large. Torch is long gone (the
+  embedder is ONNX), and llama.cpp is the official upstream binary, not something we compile.
 - **Build context**: `./models` is sent to the daemon (that's how the GGUF gets baked) — keep only the
   model you want as the default there.
-- **llama.cpp build**: compiled statically (`BUILD_SHARED_LIBS=OFF`) so the runtime stage needs only the
-  single `llama-server` binary. If a future llama.cpp release relocates the binary or needs extra libs,
-  the build will say so — adjust the `COPY --from=native` line.
-- **Piper** is fetched at build time (`piper_setup.sh`); if that step fails the build continues and TTS
-  is simply unavailable until fixed.
-- **GGUF path**: the `llama` command hard-codes `qwen3.5_2b/Qwen3.5-2B-Q4_K_M.gguf` — change it in
-  `docker-compose.yml` if you use a different model file.
+- **Piper** is fetched at build time (`piper_setup.sh`, pinned + SHA-verified) and the build **fails**
+  if it doesn't land. An image that silently lacks TTS looks fine until someone presses "speak".
+- **GGUF path**: the `llama` service's command hard-codes `Qwen3.5-2B-Q4_K_M.gguf` — set `LLM_MODEL`
+  in `docker-compose.yml`/`.env` if you use a different model file.
+- **`/app/config` bind-mounts** hide `schema.sql` and the config templates the image ships there. The
+  entrypoint restores them from `/opt/jarvis/config-template` on every start, so an empty host
+  directory works — but that is why those files reappear in your `./config`.
+- **Server microphone**: `/voice/server-mic/stream` shells out to `ffmpeg`, which is **not** in the
+  images, and needs the host's sound devices anyway. It returns a clean `503` in a container. To use
+  it, add `ffmpeg` to the orchestrator image and `devices: ["/dev/snd"]` to the compose service. The
+  browser microphone — the default — needs none of this.
 - **Agents reach the server** over your LAN/VPN at the published `:5000` (HTTP) — point them at the
   proxy URL if you add TLS.

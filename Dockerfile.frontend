@@ -1,24 +1,64 @@
 # syntax=docker/dockerfile:1
 # DEDICATED FRONTEND CONTAINER IMAGE (jarvis-frontend)
 #
-# Multi-stage build: compiles the React SPA via Vite and serves it
-# using a lightweight, high-performance Nginx web server.
+# Multi-stage build: compiles the React SPA via Vite and serves it with Nginx, which also
+# reverse-proxies the API to the orchestrator container. Use this when you want the whole thing
+# self-hosted and offline instead of putting the SPA on a CDN (GitHub Pages / Cloudflare Pages).
+#
+# Two things make it a working front end rather than a bag of static files:
+#   1. VITE_API_URL defaults to /api, and nginx proxies /api/ -> $JARVIS_API_UPSTREAM. That is the
+#      wiring to the orchestrator; without it the SPA would call this container's own root and get
+#      index.html back for every API request.
+#   2. The browser-side model bundles (face / wake word / STT failsafe) are baked in. The SPA's
+#      Web Workers fetch them from whoever serves the SPA — this image — so if they are absent,
+#      face enrolment and the wake word simply do not work, with no server-side error to show it.
 
-# --- Stage 1: Build React SPA ---
+# --- Stage 1: browser-side model assets (face / wake word / STT failsafe) ---
+# models/ is gitignored, so these can never come from the build context on CI. Downloaded from
+# their first-party sources and SHA-256-pinned by the shared script; the build fails if any is
+# missing. Set SKIP_* build-args to trade a feature for image size, deliberately.
+FROM debian:12-slim AS browser-models
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+COPY src/scripts/fetch_browser_models.sh /fetch.sh
+ARG SKIP_FACE_MODELS=0
+ARG SKIP_WAKE_MODELS=0
+ARG SKIP_STT_MODEL=0
+RUN sed -i 's/\r$//' /fetch.sh && bash /fetch.sh /out
+
+# --- Stage 2: Build React SPA ---
 FROM node:20-slim AS builder
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
-ARG VITE_API_URL=""
+# /api is same-origin, so the SPA needs no CORS grant from the orchestrator and works over
+# whatever scheme/host this container is reached on. Point it at an absolute URL only if you are
+# NOT using the bundled proxy — and then set ALLOWED_ORIGINS on the orchestrator to match.
+ARG VITE_API_URL="/api"
+# The nginx root serves the app at "/", so the base path must stay "/" for this image. (The
+# /jarvis/ base belongs to the GitHub Pages build.)
 ARG VITE_BASE_PATH="/"
 ENV VITE_API_URL=${VITE_API_URL} \
     VITE_BASE_PATH=${VITE_BASE_PATH}
+# `npm run build` also runs the pre/post hooks: vendoring the ONNX Runtime into public/ort, and
+# failing the build on a CSP-blocked inline <script> or a missing ORT .wasm variant — both of
+# which break silently at runtime.
 RUN npm run build
 
-# --- Stage 2: Serve via Nginx ---
+# --- Stage 3: Serve via Nginx ---
 FROM nginx:alpine AS runtime
 COPY --from=builder /app/dist /usr/share/nginx/html
-COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
+# Served at /face-models, /wake-models, /stt-models — the paths the workers build from BASE_URL.
+COPY --from=browser-models /out/face /usr/share/nginx/html/face-models
+COPY --from=browser-models /out/wake /usr/share/nginx/html/wake-models
+COPY --from=browser-models /out/stt  /usr/share/nginx/html/stt-models
+# Rendered by the base image's envsubst hook at start-up. The filter keeps substitution to our own
+# ${JARVIS_*} variables so nginx's $uri / $host / $scheme are left alone.
+COPY docker/nginx.conf.template /etc/nginx/templates/default.conf.template
+ENV NGINX_ENVSUBST_FILTER="^JARVIS_" \
+    JARVIS_API_UPSTREAM="http://orchestrator:5000"
 EXPOSE 80
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget -qO- http://localhost/ >/dev/null 2>&1 || exit 1
 CMD ["nginx", "-g", "daemon off;"]

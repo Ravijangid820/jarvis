@@ -34,27 +34,37 @@ jobs:
       - uses: dorny/paths-filter@v3
         id: filter
         with:
+          # A filter must list EVERY path its image copies in. jarvis-combined and
+          # jarvis-orchestrator both bundle the built SPA, so a frontend-only commit changes what
+          # they ship — leaving 'frontend/**' out of them is how a UI change gets published to
+          # jarvis-frontend and quietly skipped everywhere else.
           filters: |
             combined:
               - 'Dockerfile.combined'
               - 'src/**'
               - 'config/**'
+              - 'licenses/**'
+              - 'frontend/**'
+              - 'docker/**'
               - 'pyproject.toml'
               - 'uv.lock'
             orchestrator:
               - 'Dockerfile.orchestrator'
               - 'src/**'
               - 'config/**'
+              - 'licenses/**'
+              - 'frontend/**'
+              - 'docker/**'
               - 'pyproject.toml'
               - 'uv.lock'
-              - 'docker/**'
             llama:
               - 'Dockerfile.llama'
               - 'models/**'
             frontend:
               - 'Dockerfile.frontend'
               - 'frontend/**'
-              - 'docker/nginx.conf'
+              - 'src/scripts/fetch_browser_models.sh'
+              - 'docker/nginx.conf.template'
 
   # ---- jarvis-combined: single self-contained container ----
   build-combined:

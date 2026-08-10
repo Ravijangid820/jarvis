@@ -45,7 +45,9 @@ services:
       # it can see the seeded household and the service board.
       - ADMIN_USER=${ADMIN_USER:-admin}
       - ADMIN_PASS=${ADMIN_PASS:?set ADMIN_PASS in .env.demo}
-      - HOST_PORT=5000
+      # Banner only — it must echo the port a person actually types, i.e. the published one below,
+      # not the container's internal 5000.
+      - HOST_PORT=${HOST_PORT:-5001}
       # Deliberately NO HA_URL / HA_TOKEN. Smart-home control is out of scope for the public
       # demo, and the surest way to guarantee that is to give this container no credentials for
       # any Home Assistant in the first place.
@@ -57,6 +59,9 @@ services:
       # line between the two runtimes: the demo process has no path to the real database.
       - jarvis-demo-data:/app/memory
     restart: unless-stopped
+    # The image serves the SPA itself, so the demo is complete at http://<host>:${HOST_PORT}. The
+    # public site on GitHub Pages is the same build pointed at this API by VITE_API_URL — which is
+    # what ALLOWED_ORIGINS above has to name.
 
 volumes:
   jarvis-demo-data:
