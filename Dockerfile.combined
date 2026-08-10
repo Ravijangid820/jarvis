@@ -12,12 +12,29 @@
 ARG LLAMA_IMAGE=ghcr.io/ggml-org/llama.cpp:server
 
 # --- Stage 1: build the React frontend ---
+# `npm run build` runs the prebuild hook that vendors the ONNX Runtime into public/ort and the
+# postbuild hook that fails on an inline <script> (CSP-blocked) or a missing ORT .wasm variant —
+# both of which break silently at runtime. Do not bypass it.
 FROM node:20-slim AS web
 WORKDIR /web
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
 RUN npm run build
+
+# --- Stage 1b: browser-side model assets (face / wake word / STT failsafe) ---
+# The SPA's Web Workers fetch these from whoever serves the SPA — here, the orchestrator, at
+# /face-models, /wake-models and /stt-models. models/ is gitignored so they cannot come from the
+# build context; the shared script downloads them from their first-party sources with SHA-256
+# pins, and the build FAILS if any is missing rather than shipping a dead feature.
+FROM debian:12-slim AS browser-models
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+COPY src/scripts/fetch_browser_models.sh /fetch.sh
+ARG SKIP_FACE_MODELS=0
+ARG SKIP_WAKE_MODELS=0
+ARG SKIP_STT_MODEL=0
+RUN sed -i 's/\r$//' /fetch.sh && bash /fetch.sh /out
 
 # --- Stage 2: resolve/bake the default model (from ./models, else download + verify) ---
 FROM debian:12-slim AS model
@@ -84,11 +101,20 @@ ENV EMBED_ONNX_DIR=/opt/jarvis/embed_onnx
 COPY src/ ./src/
 COPY config/ ./config/
 COPY licenses/ ./licenses/
+# Pristine config copy — a bind-mount over /app/config would otherwise hide schema.sql and the
+# templates, and database init dies with "schema.sql not found". The entrypoint restores from here.
+RUN cp -a config /opt/jarvis/config-template
 COPY --from=web /web/dist ./frontend/dist
+# Browser-side models the SPA's workers fetch (FACE_MODELS_DIR / WAKE_MODELS_DIR / STT_MODELS_DIR
+# in config.py, all relative to JARVIS_HOME).
+COPY --from=browser-models /out ./models
 # Baked default model — kept at /opt so a ./models bind-mount never hides it.
 COPY --from=model /out/ /opt/jarvis/models/
+# Piper: a hard failure, not a warning. An image that silently lacks TTS looks fine until someone
+# presses "speak", and piper_setup.sh already retries a flaky download five times.
 RUN sed -i 's/\r$//' src/scripts/*.sh; \
-    bash src/scripts/piper_setup.sh || echo "WARN: piper_setup failed — TTS unavailable until fixed"
+    bash src/scripts/piper_setup.sh; \
+    test -x piper/piper && test -f piper/voices/en_GB-alan-medium.onnx
 COPY docker/ ./docker/
 RUN sed -i 's/\r$//' docker/*.sh && chmod +x docker/*.sh
 EXPOSE 5000

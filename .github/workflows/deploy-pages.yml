@@ -11,10 +11,13 @@ name: Deploy frontend to GitHub Pages
 
 on:
   push:
-    branches: [main, production-setup, github-pages-deploy]
+    # main only. `production-setup` and `github-pages-deploy` used to be listed here and both were
+    # deleted long ago — a trigger naming a branch that doesn't exist is a trigger that never fires.
+    branches: [main]
     paths:
       - 'frontend/**'
       - '.github/workflows/deploy-pages.yml'
+      - 'src/scripts/fetch_browser_models.sh'   # the face + wake bundles this site serves
   workflow_dispatch:      # manual trigger from Actions tab
 
 permissions:
@@ -48,9 +51,28 @@ jobs:
         working-directory: frontend
         env:
           VITE_BASE_PATH: /jarvis/
-          # Uncomment and set when the backend is publicly reachable:
+          # The public API origin. It must appear in the demo container's ALLOWED_ORIGINS as
+          # https://ravi-mk42.me (the origin this page is served from), or every call is blocked
+          # by CORS. Unlike the container images, this build is cross-origin to its backend.
           VITE_API_URL: https://api.ravi-mk42.me
         run: npm run build
+
+      # The face and wake-word workers fetch their models from BASE_URL — i.e. from Pages, not
+      # from the API host — and neither upstream can be fetched cross-origin by a browser (the
+      # OpenCV Zoo serves over git-LFS without permissive CORS). If they are not in dist/, face
+      # enrolment and the wake word are dead on the public site with nothing in the API logs to
+      # say so. Same SHA-256-pinned script the container images use.
+      #
+      # The STT failsafe is deliberately skipped: on Pages the worker uses huggingface.co, which
+      # is the official first-party source and does send CORS headers.
+      - name: Add browser-side model bundles (face + wake word)
+        env:
+          SKIP_STT_MODEL: "1"
+        run: |
+          bash src/scripts/fetch_browser_models.sh "$RUNNER_TEMP/browser-models"
+          mv "$RUNNER_TEMP/browser-models/face" frontend/dist/face-models
+          mv "$RUNNER_TEMP/browser-models/wake" frontend/dist/wake-models
+          ls -la frontend/dist/face-models frontend/dist/wake-models
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

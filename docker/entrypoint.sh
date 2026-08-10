@@ -7,7 +7,19 @@ cd /app
 log()  { printf '[jarvis] %s\n' "$1"; }
 rule() { printf '[jarvis] %s\n' "────────────────────────────────────────────────────────────"; }
 
-# 1) Config — seed jarvis.json from the Docker template on first run (relative paths, llama URL).
+# 1) Config. /app/config is routinely bind-mounted (that's how you keep jarvis.json across
+#    upgrades), and a mount REPLACES the directory — so everything the image shipped in it
+#    disappears, including schema.sql, without which db.init_db() raises outright. Restore the
+#    read-only files from the pristine copy baked at /opt/jarvis/config-template, then seed
+#    jarvis.json from the Docker template (relative paths, llama URL) on first run.
+TEMPLATE_DIR=/opt/jarvis/config-template
+if [ -d "$TEMPLATE_DIR" ]; then
+  for f in schema.sql jarvis.docker.json jarvis.example.json; do
+    if [ ! -f "config/$f" ] && [ -f "$TEMPLATE_DIR/$f" ]; then
+      cp "$TEMPLATE_DIR/$f" "config/$f" && log "restored config/$f (hidden by the /app/config mount)"
+    fi
+  done
+fi
 if [ ! -f config/jarvis.json ]; then
   cp config/jarvis.docker.json config/jarvis.json && log "created config/jarvis.json from the Docker template"
 fi
@@ -49,6 +61,16 @@ else
   ADMIN="$ADMIN_USER (already exists — unchanged)"
 fi
 
+# 4b) Browser-side assets. The SPA and the three model bundles its Web Workers fetch are served
+#     from THIS origin (/, /face-models, /wake-models, /stt-models). Missing ones don't crash
+#     anything — main.py skips the mount — they just make a feature 404 in the browser, which is
+#     exactly the kind of silent gap worth naming in the banner.
+if [ -f frontend/dist/index.html ]; then UI="served from this container at /"; else UI="NOT BUNDLED — serve the SPA elsewhere (jarvis-frontend / Pages) and set ALLOWED_ORIGINS"; fi
+BROWSER_ASSETS=""
+for pair in "face:models/face" "wake:models/wake" "stt:models/stt"; do
+  [ -d "${pair#*:}" ] && BROWSER_ASSETS="${BROWSER_ASSETS}${pair%%:*} " || BROWSER_ASSETS="${BROWSER_ASSETS}${pair%%:*}:MISSING "
+done
+
 # 5) TLS — opt in by mounting a tls/ dir holding server.crt + server.key (e.g. from setup_tls.sh).
 #    Present -> serve HTTPS; absent -> HTTP (put a TLS proxy in front, or mount certs).
 SSL_ARGS=(); SCHEME="http"; TLS="off — HTTP (add a TLS proxy, or mount tls/ for HTTPS)"
@@ -67,8 +89,10 @@ log "  TLS          : ${TLS}"
 log "  Admin user   : ${ADMIN}"
 [ "$WEAK_PASS" = yes ] && log "  Admin pass   : 'admin' (DEFAULT — set ADMIN_PASS to change; do so for anything exposed)"
 log "  Embedding    : ${EMB}"
+log "  Web UI       : ${UI}"
+log "  Browser model bundles : ${BROWSER_ASSETS}"
 log "  Database     : ${DB}   (persisted in the /app/memory volume)"
-log "  LLM backend  : http://llama:8081   (the 'llama' service)"
+log "  LLM backend  : ${JARVIS_FAST_BRAIN_URL:-http://llama:8081 (from config/jarvis.json)}"
 log "  Mint API key : docker compose exec orchestrator uv run python src/scripts/manage.py mint-key <user>"
 rule
 echo

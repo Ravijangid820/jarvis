@@ -1,11 +1,29 @@
 # syntax=docker/dockerfile:1
-# PURE BACKEND ORCHESTRATOR image: FastAPI API + embeddings (memory) + Piper TTS.
-# Dedicated backend microservice for production deployments paired with an external LLM
-# container (jarvis-llama) and Edge CDN frontend (GitHub Pages / Cloudflare Pages).
+# ORCHESTRATOR image: FastAPI API + built React UI + embeddings (memory) + Piper TTS.
+# The backend half of the two-container split (paired with jarvis-llama, or with the official
+# ghcr.io/ggml-org/llama.cpp:server as in docker-compose.yml).
+#
+# It ships the SPA as well as the API because that is the documented default experience —
+# `docker compose up -d` then http://localhost:5000. Deployments that serve the SPA from a CDN
+# (GitHub Pages / Cloudflare Pages) or from jarvis-frontend simply never request it; the extra
+# layer costs bandwidth on pull, not correctness. What it buys is that ONE container is a whole,
+# working Jarvis minus the LLM.
 #
 # Published as ghcr.io/<owner>/jarvis-orchestrator.
 
-# --- Stage 1: Torch-free ONNX embedding bundle (full ST pipeline in one graph) ---
+# --- Stage 1: build the React SPA -------------------------------------------------------------
+# `npm run build` runs the prebuild hook that vendors the ONNX Runtime into public/ort (it is
+# gitignored — a build artifact copied from the lockfile) and the postbuild hook that fails the
+# build on the two mistakes that break silently at runtime: an inline <script> the CSP will block,
+# and a missing ORT .wasm variant (which hangs rather than errors). Do not bypass `npm run build`.
+FROM node:20-slim AS web
+WORKDIR /web
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
+# --- Stage 2: torch-free ONNX embedding bundle (full ST pipeline in one graph) -----------------
 FROM debian:12-slim AS embed
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
@@ -19,7 +37,21 @@ RUN set -eu; mkdir -p /out; cd /out; \
     dl tokenizer_config.json 7f4973d11e065de3097b85319ef7c43e143aa7f1df619ebe1056f81b8de97edb; \
     dl meta.json             b149d450b0bd383a207b3328cb9dd093082077c84eb4e178418a2db0f4f2dccf
 
-# --- Stage 2: Python runtime (orchestrator) ---
+# --- Stage 3: browser-side model assets (face / wake word / STT failsafe) ----------------------
+# Served at /face-models, /wake-models and /stt-models to the SPA's Web Workers. models/ is
+# gitignored, so these can never come from the build context on CI — they are downloaded here from
+# their first-party sources and SHA-256-pinned by the shared script. The build FAILS if any is
+# missing: a face-ID or wake-word feature that 404s at runtime is worse than a red build.
+FROM debian:12-slim AS browser-models
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+COPY src/scripts/fetch_browser_models.sh /fetch.sh
+ARG SKIP_FACE_MODELS=0
+ARG SKIP_WAKE_MODELS=0
+ARG SKIP_STT_MODEL=0
+RUN sed -i 's/\r$//' /fetch.sh && bash /fetch.sh /out
+
+# --- Stage 4: Python runtime (orchestrator) ---------------------------------------------------
 FROM python:3.13-slim AS app
 ENV JARVIS_HOME=/app \
     JARVIS_CONFIG=/app/config/jarvis.json \
@@ -40,10 +72,24 @@ ENV EMBED_ONNX_DIR=/opt/jarvis/embed_onnx
 COPY src/ ./src/
 COPY config/ ./config/
 COPY licenses/ ./licenses/
-# Piper TTS (normalize CRLF from Windows checkouts first).
+# Pristine copy of the config dir. A deployment that bind-mounts ./config over /app/config would
+# otherwise hide schema.sql and the templates that live in it, and the database init would die with
+# "schema.sql not found". The entrypoint restores anything the mount hides from here.
+RUN cp -a config /opt/jarvis/config-template
+# The built SPA, and the browser-side models its workers fetch (config.py: REACT_DIST_DIR,
+# FACE_MODELS_DIR, WAKE_MODELS_DIR, STT_MODELS_DIR — all relative to JARVIS_HOME).
+COPY --from=web /web/dist ./frontend/dist
+COPY --from=browser-models /out ./models
+# Piper TTS (normalize CRLF from Windows checkouts first). NOT tolerated as a warning: an image
+# that silently lacks TTS looks fine until someone presses "speak". piper_setup.sh already retries
+# a flaky download five times, so a failure here is a real one.
 RUN sed -i 's/\r$//' src/scripts/*.sh; \
-    bash src/scripts/piper_setup.sh || echo "WARN: piper_setup failed — TTS will be unavailable until fixed"
+    bash src/scripts/piper_setup.sh; \
+    test -x piper/piper && test -f piper/voices/en_GB-alan-medium.onnx
 COPY docker/ ./docker/
 RUN sed -i 's/\r$//' docker/*.sh && chmod +x docker/*.sh
 EXPOSE 5000
+# The compose stacks gate the orchestrator on llama's health; this gates anything in front of it.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=5 \
+  CMD curl -fsSk http://localhost:5000/health || curl -fsSk https://localhost:5000/health || exit 1
 ENTRYPOINT ["/app/docker/entrypoint.sh"]

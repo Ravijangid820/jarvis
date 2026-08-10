@@ -15,10 +15,13 @@ ARG LLM_GGUF_URL=https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwe
 ARG LLM_GGUF_SHA256=aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223
 ARG DEFAULT_MODEL=Qwen3.5-2B-Q4_K_M.gguf
 COPY models/ /staged/
+# Whatever the GGUF is called in ./models, it lands at /out/$DEFAULT_MODEL. The runtime stage's CMD
+# names that path literally — a Dockerfile CMD cannot expand an ARG — so passing a differently
+# named file through under its own name would build an image that exits the moment it starts.
 RUN set -eu; mkdir -p /out; \
     existing="$(find /staged -name "$DEFAULT_MODEL" -type f | head -n1 || true)"; \
     [ -z "$existing" ] && existing="$(find /staged -name '*.gguf' -type f | sort | head -n1 || true)"; \
-    if [ -n "$existing" ]; then echo "Baking model from build context: $existing"; cp "$existing" /out/; \
+    if [ -n "$existing" ]; then echo "Baking model from build context: $existing"; cp "$existing" "/out/$DEFAULT_MODEL"; \
     elif [ -n "$LLM_GGUF_URL" ]; then \
       echo "Downloading LLM model from LLM_GGUF_URL..."; \
       curl -L --fail --retry 5 --retry-all-errors --retry-delay 5 -C - -o "/out/$DEFAULT_MODEL" "$LLM_GGUF_URL"; \
