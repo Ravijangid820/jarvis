@@ -15,6 +15,13 @@ services:
   # --- LLM: the OFFICIAL llama.cpp server (all-CPU-variant, runs on AVX/AVX2/AVX-512). For production,
   #     pin LLAMA_IMAGE to a specific tag (e.g. ghcr.io/ggml-org/llama.cpp:server-b<NNNN>). ---
   llama:
+    # Blocks privilege escalation outright: a setuid binary inside the image cannot gain
+    # anything, and the container starts with no capabilities at all. Neither the
+    # orchestrator, llama-server nor unprivileged nginx needs any.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     image: ${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server}
     command: >
       -m /models/${LLM_MODEL:-Qwen3.5-2B-Q4_K_M.gguf}
@@ -34,6 +41,13 @@ services:
   # --- Orchestrator: the only image we build (FastAPI + UI + embeddings + TTS, no LLM). Talks to the
   #     llama service at http://llama:8081 (config/jarvis.docker.json). ---
   orchestrator:
+    # Blocks privilege escalation outright: a setuid binary inside the image cannot gain
+    # anything, and the container starts with no capabilities at all. Neither the
+    # orchestrator, llama-server nor unprivileged nginx needs any.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     image: ${ORCH_IMAGE:-ghcr.io/ravijangid820/jarvis-orchestrator:latest}
     build:
       context: .

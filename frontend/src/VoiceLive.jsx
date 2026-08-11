@@ -13,9 +13,15 @@
  *
  * Two modes:
  *   - Open mic: the page IS the gate — one click, then every utterance is a turn.
- *   - "Hey Jarvis": armed until the wake word fires (openWakeWord, ~3 small ONNX models per 80 ms).
- *     While armed NOTHING is transcribed — only keyword-spotted — which is what makes always-on
- *     affordable here, where running Whisper on the room is not.
+ *   - "Hey Jarvis": armed until it hears its name. Two detectors run side by side:
+ *       * openWakeWord (~3 small ONNX models per 80 ms) fires INSTANTLY on "hey jarvis" — it is a
+ *         classifier trained on that one phrase, and upstream ships no model for any other, so it
+ *         cannot be extended by configuration.
+ *       * short utterances are transcribed and matched against an editable phrase list, which is
+ *         how "jarvis, are you there" and "wake up jarvis" work at all. Anything longer than a few
+ *         seconds is discarded unheard — that is the room talking, not someone addressing Jarvis.
+ *     So while armed the room IS transcribed, briefly and locally: audio never leaves the tab, and
+ *     an utterance that does not name Jarvis is dropped without being stored or sent anywhere.
  *
  * One thing it deliberately does NOT do:
  *   - No full duplex. The recognizer is gated shut while Jarvis speaks. Even with the browser's
@@ -26,6 +32,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react"
 import { RATE as WAKE_RATE } from "./wake-detect.js"
 import { openSelectedMic } from "./mic-select.js"
 import { createHud } from "./voice-hud.js"
+import { DEFAULT_WAKE_PHRASES, isGreetingRemainder, matchWakePhrase, parsePhraseList } from "./wake-phrases.js"
 import { ensureStt, isSttWarm, transcribeAudio } from "./stt-worker.js"
 
 const MicPicker = lazy(() => import("./MicPicker.jsx"))
@@ -72,6 +79,13 @@ const CONVERSATION_MS = 8000
 // well-known failure where Whisper invents text to fill a long silence. A little is kept so the
 // final word is not clipped.
 const KEEP_TAIL_MS = 300
+// While ARMED the only thing worth hearing is a wake phrase, which is short and followed by a
+// natural gap. Waiting out the conversational pause (up to 8s) before even looking would make
+// "jarvis, are you there" feel broken, so the armed state segments on its own much tighter pause.
+const WAKE_PAUSE_MS = 420
+// A wake phrase is a few words. Anything longer is someone talking in the room, not addressing
+// Jarvis — discard it without transcribing rather than spend Whisper on the conversation.
+const WAKE_MAX_UTTERANCE_MS = 3500
 
 const rms = (buf) => {
   let sum = 0
@@ -93,6 +107,10 @@ export default function VoiceLive({ token, apiBase, onExit }) {
   // "wake"  — armed: nothing is sent until "hey Jarvis", then it acknowledges and listens
   const [mode, setMode] = useState(() => localStorage.getItem("jarvis_voice_mode") || "open")
   const [wakeReady, setWakeReady] = useState(false)
+  // Editable, because the trained spotter answers to exactly one phrase and this list is what
+  // gives "jarvis, are you there" and "wake up jarvis" a way to work at all.
+  const [wakePhrases, setWakePhrases] = useState(
+    () => parsePhraseList(localStorage.getItem("jarvis_wake_phrases")))
   // How long a pause means "I've finished". Persisted, because it is a personal setting and
   // getting it wrong in either direction is the single most irritating thing this page can do.
   const [pauseMs, setPauseMs] = useState(() => {
@@ -107,6 +125,7 @@ export default function VoiceLive({ token, apiBase, onExit }) {
   const noiseRef = useRef(0.01)
 
   const runTurnRef = useRef(null)      // transcribe() is declared before runTurn is
+  const wakePhrasesRef = useRef(wakePhrases)   // read from the audio callback, which never re-binds
   const streamRef = useRef(null)
   const stopMicRef = useRef(null)      // source-specific teardown (server stream vs local tracks)
   const actxRef = useRef(null)
@@ -335,6 +354,11 @@ export default function VoiceLive({ token, apiBase, onExit }) {
   // useCallbacks having to be reordered around each other.
   useEffect(() => { runTurnRef.current = runTurn }, [runTurn])
 
+  useEffect(() => {
+    wakePhrasesRef.current = wakePhrases
+    localStorage.setItem("jarvis_wake_phrases", wakePhrases.join(", "))
+  }, [wakePhrases])
+
   const transcribe = useCallback(async (float32, sourceRate) => {
     gateRef.current = true
     setPhaseBoth("thinking")
@@ -416,6 +440,34 @@ export default function VoiceLive({ token, apiBase, onExit }) {
     setPhaseBoth("off")
   }, [setPhaseBoth])
 
+
+  /** An utterance heard while ARMED: transcribe it and decide whether it was addressed to Jarvis.
+   *
+   *  Anything that does not match a wake phrase is dropped without a trace — no turn, no history,
+   *  nothing sent anywhere. That is the whole bargain of this mode: the room is listened to, but
+   *  only the sentences that name Jarvis ever leave the VAD. */
+  const listenForWakePhrase = useCallback(async (float32, sourceRate) => {
+    try {
+      const pcm = await resampleTo16k(float32, sourceRate)
+      const heard = (await transcribeAudio(pcm)).trim()
+      // Whisper labels non-speech with bracketed markers; they must not be matched against.
+      const clean = heard.replace(/[[(][^\])]*[\])]/g, "").trim()
+      if (!clean) return
+      const { matched, remainder } = matchWakePhrase(clean, wakePhrasesRef.current)
+      if (!matched) return                       // not for us — stay armed, say nothing
+      if (isGreetingRemainder(remainder)) {
+        onWake()                                 // acknowledge aloud, then listen for the command
+        return
+      }
+      // The command arrived in the same breath ("Jarvis, what's the weather") — no reason to make
+      // them say it twice. Open the conversation window and answer it directly.
+      awakeUntilRef.current = Date.now() + CONVERSATION_MS
+      gateRef.current = true
+      setPhaseBoth("thinking")
+      runTurnRef.current?.(remainder)
+    } catch { /* a failed transcription while armed is not worth surfacing; stay armed */ }
+  }, [resampleTo16k, onWake, setPhaseBoth])
+
   const start = useCallback(async () => {
     setError("")
     setPhaseBoth("loading")
@@ -494,6 +546,8 @@ export default function VoiceLive({ token, apiBase, onExit }) {
       const maxBlocks = inBlocks(MAX_UTTERANCE_MS)
       const warmupBlocks = inBlocks(WARMUP_MS)
       const keepTailBlocks = inBlocks(KEEP_TAIL_MS)
+      const wakeEndBlocks = inBlocks(WAKE_PAUSE_MS)
+      const wakeMaxBlocks = inBlocks(WAKE_MAX_UTTERANCE_MS)
       nodeRef.current = node
 
       const srcRate = actx.sampleRate
@@ -519,17 +573,15 @@ export default function VoiceLive({ token, apiBase, onExit }) {
         // Wake mode, armed: the ONLY thing done with this audio is keyword spotting. Nothing is
         // buffered, nothing is transcribed, nothing leaves the tab — which is the whole reason a
         // keyword spotter is worth having instead of running Whisper on the room.
-        if (modeRef.current === "wake" && !conversationOpen()) {
+        // ARMED: the trained spotter listens for "hey jarvis" and fires instantly, as before. In
+        // parallel the VAD now captures short utterances so they can be transcribed and matched
+        // against the phrase list — that is what makes "jarvis, are you there" and "wake up
+        // jarvis" work, since openWakeWord has no trained model for either.
+        const armed = modeRef.current === "wake" && !conversationOpen()
+        if (armed) {
           const w = wakeWorkerRef.current
           if (w) w.postMessage({ type: "audio", pcm: downsampleTo16k(new Float32Array(input)) })
-          levelRef.current = Math.min(1, rms(input) * 12)
           if (phaseRef.current !== "armed") setPhaseBoth("armed")
-          // Keep the noise floor learning while armed, so the VAD is ready the instant it wakes.
-          if (warmedRef.current === 0) noiseRef.current = rms(input)
-          warmedRef.current++
-          blocksRef.current.length = 0
-          capturingRef.current = false
-          return
         }
 
         const level = rms(input)
@@ -560,15 +612,17 @@ export default function VoiceLive({ token, apiBase, onExit }) {
             capturingRef.current = true
             quietRef.current = 0
             spokenRef.current = voicedRef.current   // the blocks that opened it were speech too
-            if (phaseRef.current !== "hearing") setPhaseBoth("hearing")
+            if (!armed && phaseRef.current !== "hearing") setPhaseBoth("hearing")
           }
           return
         }
 
         quietRef.current = loud ? 0 : quietRef.current + 1
         if (loud) spokenRef.current++
-        const tooLong = blocksRef.current.length >= maxBlocks
-        if (quietRef.current < endBlocksRef.current && !tooLong) return
+        const endAfter = armed ? wakeEndBlocks : endBlocksRef.current
+        const capBlocks = armed ? wakeMaxBlocks : maxBlocks
+        const tooLong = blocksRef.current.length >= capBlocks
+        if (quietRef.current < endAfter && !tooLong) return
 
         // Utterance closed. Drop all but a short tail of the trailing pause — it is silence by
         // definition and only slows transcription down.
@@ -584,12 +638,16 @@ export default function VoiceLive({ token, apiBase, onExit }) {
         // of quiet by construction, and that alone is several times MIN_UTTERANCE_MS — so testing
         // the buffer length made this guard unreachable, and a cough went to Whisper as a turn.
         if (spoken < minBlocks) return   // a click or a cough, not a sentence
+        // Too long to be a wake phrase: the room is talking, not addressing Jarvis. Drop it
+        // unheard rather than pay for a transcription that cannot match anything.
+        if (armed && tooLong) return
 
         const total = blocks.reduce((n, b) => n + b.length, 0)
         const clip = new Float32Array(total)
         let off = 0
         for (const b of blocks) { clip.set(b, off); off += b.length }
-        transcribe(clip, actx.sampleRate)
+        if (armed) listenForWakePhrase(clip, actx.sampleRate)
+        else transcribe(clip, actx.sampleRate)
       }
 
       source.connect(node)
@@ -605,7 +663,7 @@ export default function VoiceLive({ token, apiBase, onExit }) {
         : `Could not open the microphone: ${e?.message || e}`)
       stop()
     }
-  }, [createSpeaker, transcribe, setPhaseBoth, stop, mode, onWake, apiBase, token])
+  }, [createSpeaker, transcribe, listenForWakePhrase, setPhaseBoth, stop, mode, onWake, apiBase, token])
 
   useEffect(() => stop, [stop])   // release the mic the moment this page goes away
 
@@ -718,6 +776,22 @@ export default function VoiceLive({ token, apiBase, onExit }) {
                     onClick={() => setMode("open")} disabled={phase !== "off"}>Open mic</button>
                   <button type="button" className={`hud-btn${mode === "wake" ? " active" : ""}`}
                     onClick={() => setMode("wake")} disabled={phase !== "off"}>“Hey Jarvis”</button>
+                </div>
+              </div>
+
+              <div className="vs-row">
+                <div className="vs-label">
+                  <strong>Wake phrases</strong>
+                  <span>What it answers to while armed, separated by commas. “Hey Jarvis” is
+                    recognised instantly by a trained model; the rest are matched from the
+                    transcript a moment later, which is why they can be anything you like.</span>
+                </div>
+                <div className="vs-choices vs-phrases">
+                  <textarea className="hud-input" rows="3" defaultValue={wakePhrases.join(", ")}
+                    onBlur={e => setWakePhrases(parsePhraseList(e.target.value))}
+                    placeholder={DEFAULT_WAKE_PHRASES.join(", ")} />
+                  <button type="button" className="hud-btn"
+                    onClick={() => setWakePhrases([...DEFAULT_WAKE_PHRASES])}>Reset</button>
                 </div>
               </div>
 

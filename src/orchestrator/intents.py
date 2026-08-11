@@ -162,3 +162,48 @@ def parse_home_command(text: str) -> Optional[Dict[str, str]]:
             if 0 < len(dev) <= 60:
                 return {"action": action, "device": dev}
     return None
+
+
+# --- "was that ONLY a command?" -----------------------------------------------------------------
+# Filler that carries no information once the command itself is understood. Stripping it is what
+# lets "can you please turn off the light?" be recognised as a bare command while "I'm freezing,
+# turn off the fan" is recognised as a sentence that also said something.
+_COMMAND_FILLER = re.compile(
+    r"\b(?:please|kindly|thanks|thank you|now|for me|hey|ok|okay|alright|"
+    r"jarvis|can|could|would|will|you|your|i|want|need|to|the|my|a|an|and|then|"
+    r"just|also|maybe|quickly|again|back|it|that|this|them|"
+    r"turn|switch|power|shut|toggle|put|set|run|trigger|execute|activate|launch|start|stop|"
+    r"on|off|up|down|is|are|was|were|do|does|did|let|lets|us)\b",
+    re.I)
+_NON_WORD = re.compile(r"[^a-z0-9\s]+", re.I)
+
+
+def command_residual(text: str, device_words: str = "") -> str:
+    """What the sentence said BEYOND the smart-home command it contains.
+
+    Returns "" when the utterance was purely a command, so the caller can answer instantly with the
+    deterministic acknowledgement, and non-empty when the person said something a template cannot
+    honour ("I'm feeling cold, turn off the fan" deserves more than "Okay - the Fan is now off.").
+
+    Deliberately crude: it strips control verbs, polite scaffolding and the device's own name, then
+    reports whatever is left. Over-reporting a residual costs one LLM turn; under-reporting costs a
+    person being answered by a template when they said something real, which is the failure this
+    whole change exists to fix.
+
+    `device_words` is the resolved device's display name, whose words are not "extra" either.
+    """
+    cleaned = _NON_WORD.sub(" ", (text or "").lower())
+    for word in (device_words or "").lower().split():
+        cleaned = re.sub(rf"\b{re.escape(word)}\b", " ", cleaned)
+    cleaned = _COMMAND_FILLER.sub(" ", cleaned)
+    return " ".join(cleaned.split())
+
+
+def says_more_than_command(text: str, device_words: str = "", min_words: int = 2) -> bool:
+    """True when the utterance carries enough beyond the command to deserve a composed reply.
+
+    Two words rather than one: a single stray token is usually a filler this list does not know
+    or a speech-to-text artifact ("uh"), and promoting those to a full LLM turn would make the
+    common case — flipping a light — slow again for no gain.
+    """
+    return len(command_residual(text, device_words).split()) >= min_words

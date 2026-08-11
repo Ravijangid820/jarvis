@@ -6,16 +6,21 @@ Depends on config, db, and llm — never on chat/main (keeps the import graph ac
 import json
 import os
 import queue
+import re
 import threading
 import time
+from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
 from config import (
     BASE_DIR, CHROMA_DB_PATH, EMBED_DOC_PREFIX, EMBED_MODEL_NAME, EMBED_ONNX_DIR, EMBED_QUERY_PREFIX,
-    FACT_DEDUP_SIM, FACT_DEDUP_WORD, FACT_EXTRACTION_PROMPT, IDLE_CHECK_INTERVAL,
+    FACT_DEDUP_SIM, FACT_DEDUP_WORD, FACT_EXTRACTION_BATCH, FACT_EXTRACTION_MAX_ATTEMPTS,
+    FACT_EXTRACTION_MIN_TOKENS, FACT_EXTRACTION_PROMPT, FACT_EXTRACTION_TOKENS,
+    IDLE_CHECK_INTERVAL, MAX_CONTEXT_TOKENS, PROMPT_SAFETY_MARGIN,
     IDLE_THRESHOLD_SECONDS, RAG_DISTANCE_THRESHOLD,
     RAG_MAX_RESULTS, VALID_FACT_CATEGORIES, logger,
 )
+from budget import estimate_message_tokens, estimate_tokens, truncate_to_tokens
 from db import get_db
 from llm import llm_content, request_llm
 
@@ -47,15 +52,27 @@ def init_embeddings():
     onnx_model = None
     try:
         meta_path = os.path.join(EMBED_ONNX_DIR, "meta.json")
-        if not os.path.isfile(meta_path) and os.environ.get("JARVIS_AUTO_DOWNLOAD_MODELS", "1") != "0":
-            logger.info("ONNX embedding bundle not found at %s. Auto-downloading via download_models.sh...", EMBED_ONNX_DIR)
-            try:
-                import subprocess
-                script_path = BASE_DIR / "src" / "scripts" / "download_models.sh"
-                if script_path.exists():
-                    subprocess.run(["bash", str(script_path)], check=True)
-            except Exception as e:
-                logger.warning("Auto-download of embedding model failed: %s", e)
+        if not os.path.isfile(meta_path):
+            # Fetching models is SETUP work, not something a request-serving process should do:
+            # it means network egress, a multi-hundred-MB write and an arbitrary-length stall
+            # inside the app's own startup — and under the hardened unit it cannot succeed anyway
+            # (ProtectSystem=strict). setup.sh and download_models.sh are where this belongs, and
+            # the images bake the bundle at /opt/jarvis/embed_onnx, so nothing needs it by default.
+            # JARVIS_AUTO_DOWNLOAD_MODELS=1 opts back in for a hands-off first run.
+            if os.environ.get("JARVIS_AUTO_DOWNLOAD_MODELS") == "1":
+                logger.info("ONNX embedding bundle not found at %s. JARVIS_AUTO_DOWNLOAD_MODELS=1 "
+                            "— fetching via download_models.sh...", EMBED_ONNX_DIR)
+                try:
+                    import subprocess
+                    script_path = BASE_DIR / "src" / "scripts" / "download_models.sh"
+                    if script_path.exists():
+                        subprocess.run(["bash", str(script_path)], check=True)
+                except Exception as e:
+                    logger.warning("Auto-download of embedding model failed: %s", e)
+            else:
+                logger.warning("No ONNX embedding bundle at %s — run 'bash src/scripts/download_models.sh'. "
+                               "(Set JARVIS_AUTO_DOWNLOAD_MODELS=1 to fetch it automatically at startup.)",
+                               EMBED_ONNX_DIR)
 
         if os.path.isfile(meta_path):
             with open(meta_path) as f:
@@ -170,6 +187,32 @@ def enqueue_embedding(msg_id, content: str, metadata: dict):
         embed_queue.put((msg_id, content, metadata))
 
 
+# Longest we will hold an embedding back waiting for the LLM to finish. A cap rather than an
+# unbounded wait because is_busy() is a counter: if one request ever failed to decrement it, an
+# uncapped wait would stop the vector store being written to again, silently and permanently.
+# Exceeding it degrades to the old behaviour (embed anyway), which is worse for latency but never
+# loses a memory.
+EMBED_DEFER_MAX_S = 180.0
+_EMBED_DEFER_POLL_S = 0.5
+
+
+def _wait_for_llm_idle(max_wait: float = EMBED_DEFER_MAX_S) -> float:
+    """Block while a generation is in flight. Returns how long we waited.
+
+    Embedding a 300M model on two no-AVX2 cores is hundreds of ms of pure CPU, and it was running
+    the instant a message was stored — which is exactly when the model is generating the reply to
+    that message. The two were competing for the same cores at the worst possible moment.
+
+    Deferring costs nothing in recall: anything not yet embedded is by definition recent, and
+    recent turns are already in the verbatim window. RAG only has to cover what has aged out.
+    """
+    waited = 0.0
+    while is_busy() and waited < max_wait:
+        time.sleep(_EMBED_DEFER_POLL_S)
+        waited += _EMBED_DEFER_POLL_S
+    return waited
+
+
 def _embedding_worker():
     while True:
         item = embed_queue.get()
@@ -178,6 +221,10 @@ def _embedding_worker():
                 return
             msg_id, content, metadata = item
             if vectors_available():
+                waited = _wait_for_llm_idle()
+                if waited >= EMBED_DEFER_MAX_S:
+                    logger.warning("Embedding deferred %.0fs and the LLM still reports busy; "
+                                   "embedding anyway so recall is not lost", waited)
                 memory_collection.add(
                     documents=[content], embeddings=_embed_documents([content]),
                     metadatas=[metadata], ids=[str(msg_id)],
@@ -589,6 +636,121 @@ def _mark_messages_processed(msg_ids: List[int]):
         conn.close()
 
 
+# How many times each message has been through a failed extraction. In memory rather than a schema
+# column: the bound only has to stop a poison message looping within one process lifetime, and a
+# restart retrying it a few more times is harmless.
+_extract_attempts: Dict[int, int] = defaultdict(int)
+
+
+def _too_many_attempts(msg_id: int) -> bool:
+    """Count a failed pass and report whether this message should be written off."""
+    _extract_attempts[msg_id] += 1
+    return _extract_attempts[msg_id] >= FACT_EXTRACTION_MAX_ATTEMPTS
+
+
+# Statements ABOUT THE CONVERSATION rather than about the user. The model produced three of these
+# ("The user has not stated any rules about downloading models or binaries") in a batch where it had
+# already, correctly, extracted the opposite — so they are not merely noise, they contradict real
+# facts sitting beside them in the same profile.
+#
+# Deliberately narrow: it matches meta-statements about what went unsaid, NOT negative preferences.
+# "The user refuses to use third-party mirrors" and "The user avoids Codespaces" are real facts and
+# must survive.
+_ABSENCE_FACT = re.compile(
+    r"\b(?:"
+    r"(?:has|have|had|did|was|were|is|are)\s+not\s+(?:yet\s+)?"
+    r"(?:state[ds]?|said|specif(?:y|ied)|mention(?:ed)?|provide[ds]?|share[ds]?|given|told)"
+    r"|no(?:t)?\s+(?:information|details?|specifics?)\s+(?:was|were|is|are)?\s*(?:given|provided|stated)"
+    r"|(?:remains?|is|was)\s+(?:unclear|unspecified|unknown|unstated)"
+    r"|was\s+not\s+stated"
+    r")\b", re.I)
+
+
+def _is_absence(content: str) -> bool:
+    """True for 'the user did not say X' — an absence, which is not a fact about anyone."""
+    return bool(_ABSENCE_FACT.search(content or ""))
+
+
+def _parse_facts(response_text: str) -> tuple:
+    """(facts, complete) from the extractor's reply.
+
+    `complete` is False when the reply was cut short — the model was still writing when it hit the
+    token limit. That case used to raise JSONDecodeError and throw away everything, including the
+    facts it had already finished writing, and the messages were then marked processed so they
+    could never be retried. Two real facts about the operator were lost that way before this was
+    noticed.
+
+    Complete objects are salvaged by scanning for balanced braces (respecting strings and escapes,
+    so a "}" inside a fact's text does not end it early). Anything half-written is dropped.
+    """
+    text = response_text.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[-1]
+        if "```" in text:
+            text = text.rsplit("```", 1)[0]
+        text = text.strip()
+    try:
+        parsed = json.loads(text)
+        return (parsed if isinstance(parsed, list) else []), True
+    except json.JSONDecodeError:
+        pass
+
+    facts, depth, start, in_str, esc = [], 0, None, False, False
+    for i, ch in enumerate(text):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and start is not None:
+                try:
+                    facts.append(json.loads(text[start:i + 1]))
+                except json.JSONDecodeError:
+                    pass
+                start = None
+    return facts, False
+
+
+def _fit_batch(user_id: int, msgs: List[Dict]) -> tuple:
+    """(messages that fit, their joined text) — as many as leave room for a reply.
+
+    The window is the hard constraint: llama.cpp does not error when a prompt plus its requested
+    completion exceed it, it silently drops tokens. So the batch is trimmed here instead, and
+    whatever does not fit stays unmarked for the next pass rather than being sent and lost.
+    """
+    overhead = estimate_message_tokens({"role": "system", "content": FACT_EXTRACTION_PROMPT})
+    room = MAX_CONTEXT_TOKENS - overhead - PROMPT_SAFETY_MARGIN - FACT_EXTRACTION_MIN_TOKENS
+    kept, lines, used = [], [], 0
+    for m in msgs:
+        line = f"User said: {m['content']}"
+        cost = estimate_tokens(line)
+        if kept and used + cost > room:
+            break                    # room for at least one, then stop before overflowing
+        if not kept and cost > room:
+            # A single message too large to reason about at all. Truncate it rather than loop on
+            # it forever; the head of a statement carries the facts far more often than the tail.
+            line = truncate_to_tokens(line, max(64, room))
+            cost = estimate_tokens(line)
+            logger.warning("Memory Core: message %s too long for one extraction pass; truncated",
+                           m.get("id"))
+        kept.append(m); lines.append(line); used += cost
+    if len(kept) < len(msgs):
+        logger.info("Memory Core: extracting %d of %d queued messages for user %d (window limit)",
+                    len(kept), len(msgs), user_id)
+    return kept, "\n".join(lines)
+
+
 def extract_facts_batch(messages: List[Dict]):
     """Process a batch of unprocessed user messages through the LLM for fact extraction."""
     if not messages:
@@ -601,26 +763,55 @@ def extract_facts_batch(messages: List[Dict]):
             continue
         by_user.setdefault(uid, []).append(m)
 
-    for user_id, user_msgs in by_user.items():
-        exchange_text = "\n".join(f"User said: {m['content']}" for m in user_msgs)
+    truncated_users: set = set()
+    failed_users: set = set()
+    for user_id, all_msgs in by_user.items():
+        # Take only as many messages as leave room for a usable reply. A batch is capped by count,
+        # but not by SIZE — and an admin may type 10,000 characters, so six of those would exceed
+        # the window on their own. Asking for output that cannot fit is how the truncation happened
+        # in the first place; anything left over simply stays queued for the next pass.
+        user_msgs, exchange_text = _fit_batch(user_id, all_msgs)
+        if not user_msgs:
+            continue
         try:
             llm_messages = [
                 {"role": "system", "content": FACT_EXTRACTION_PROMPT},
                 {"role": "user", "content": exchange_text},
             ]
-            result = request_llm(llm_messages, temperature=0.1, n_predict=512)
-            response_text = llm_content(result).strip()
-            if response_text.startswith("```"):
-                response_text = response_text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-            facts = json.loads(response_text)
-            if not isinstance(facts, list):
-                facts = []
+            # Derive the output budget from what is actually left in the window rather than
+            # guessing a number. A fixed 512 was the whole cause of the silent fact loss: it was
+            # ample for one message and far too small for a dozen, and nothing in the code could
+            # tell the difference. This asks the same question the chat path asks — how much room
+            # is there after the prompt — so the answer scales with the batch instead of being
+            # right only for the batch size someone had in mind.
+            prompt_tokens = sum(estimate_message_tokens(m) for m in llm_messages)
+            budget = MAX_CONTEXT_TOKENS - prompt_tokens - PROMPT_SAFETY_MARGIN
+            n_predict = min(FACT_EXTRACTION_TOKENS, budget)      # _fit_batch guarantees the floor
+            result = request_llm(llm_messages, temperature=0.1, n_predict=n_predict)
+            facts, complete = _parse_facts(llm_content(result))
+            if not complete:
+                # Salvaged what it finished; the rest of this batch has not been seen, so it must
+                # stay eligible for another pass rather than being silently written off.
+                truncated_users.add(int(user_id))
+                logger.warning("Memory Core: extractor output was truncated for user %d; "
+                               "kept %d complete fact(s) and will retry the batch", user_id, len(facts))
             for fact in facts:
+                # The model is not consistent about shape: sometimes [{"category","content"}],
+                # sometimes a plain array of sentences. Dropping the latter discarded whole
+                # batches of correct facts without a word in the log — the same silent loss as
+                # the truncation, from a different direction. A sentence with no category is
+                # still a fact; file it under "other" rather than throw it away.
+                if isinstance(fact, str):
+                    fact = {"category": "other", "content": fact}
                 if not isinstance(fact, dict):
+                    logger.debug("Memory Core: ignoring unusable fact entry %r", fact)
                     continue
-                category = fact.get("category", "other").lower().strip()
-                content = fact.get("content", "").strip()
+                category = (fact.get("category") or "other").lower().strip()
+                content = (fact.get("content") or "").strip()
                 if not content or len(content) < 5:
+                    continue
+                if _is_absence(content):
+                    logger.debug("Memory Core: dropping absence-shaped fact %r", content)
                     continue
                 if category not in VALID_FACT_CATEGORIES:
                     category = "other"
@@ -628,12 +819,20 @@ def extract_facts_batch(messages: List[Dict]):
             if facts:
                 logger.info("Memory Core: Extracted %d facts from %d messages for user %d",
                             len(facts), len(user_msgs), user_id)
-        except json.JSONDecodeError:
-            logger.warning("Memory Core: LLM returned non-JSON for fact extraction")
         except Exception as e:
             logger.error("Memory Core: Extraction error: %s", e)
+            failed_users.add(int(user_id))
 
-    _mark_messages_processed([m["id"] for m in messages])
+    # Mark only what was actually processed. Marking unconditionally meant one bad reply discarded
+    # those messages permanently — the failure mode that hid this bug for weeks, because the counter
+    # of "unextracted" messages went to zero either way.
+    retry_users = truncated_users | failed_users
+    done = [m["id"] for m in messages
+            if int(m.get("user_id") or 0) not in retry_users or _too_many_attempts(m["id"])]
+    _mark_messages_processed(done)
+    held = len(messages) - len(done)
+    if held:
+        logger.info("Memory Core: holding %d message(s) for a later extraction pass", held)
 
 
 def _memory_worker():
@@ -650,7 +849,7 @@ def _memory_worker():
             idle_duration = time.time() - _last_activity_time
             if idle_duration < IDLE_THRESHOLD_SECONDS:
                 continue
-            unprocessed = get_unprocessed_messages(batch_size=20)
+            unprocessed = get_unprocessed_messages(batch_size=FACT_EXTRACTION_BATCH)
             if not unprocessed:
                 continue
             logger.info("Memory Core: System idle for %.0fs, processing %d unextracted messages",

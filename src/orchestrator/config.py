@@ -77,6 +77,16 @@ RATE_LIMIT_RPM: int = CONFIG["orchestrator"]["rate_limit_requests_per_minute"]
 # Opt-in: require a recognized, authorized person physically present (per the cameras) before any
 # device control runs — even for an otherwise-authorized caller. Off by default.
 REQUIRE_PRESENCE_FOR_CONTROL: bool = bool(CONFIG["orchestrator"].get("require_presence_for_device_control", False))
+# Optional regex for cross-origin callers, e.g. a Vite dev server or a phone browsing a different
+# hostname. Only needed when the PAGE is served from somewhere other than this orchestrator — the
+# bundled SPA calls the API with relative URLs, so the normal deployment is same-origin and uses no
+# CORS at all. A LAN-wide value looks like:
+#   ^https?://(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3})(:\d+)?$
+# Left empty by default: "anyone on the LAN" still includes every site a LAN browser visits, since
+# the browser is what makes the request.
+_env_origin_regex = os.environ.get("ALLOWED_ORIGIN_REGEX")
+ALLOWED_ORIGIN_REGEX: str = (_env_origin_regex or "").strip() or \
+    (CONFIG["orchestrator"].get("allowed_origin_regex") or "").strip()
 _env_origins = os.environ.get("ALLOWED_ORIGINS")
 if _env_origins:
     ALLOWED_ORIGINS: List[str] = [x.strip() for x in _env_origins.split(",") if x.strip()]
@@ -92,6 +102,12 @@ def _resolve(p: str) -> str:
 DB_PATH: str = _resolve(CONFIG["memory"]["db_path"])
 CHROMA_DB_PATH: str = _resolve(CONFIG["memory"].get("chroma_db_path", "memory/chroma_db"))
 MAX_CONTEXT_MESSAGES: int = CONFIG["memory"]["max_context_messages"]
+# How far back verbatim history may reach when building a prompt. Anything older is left to
+# RAG, which retrieves by relevance rather than by recency. A "quick chat" session is never
+# closed, so without this it accumulates forever: one here held turns from a month earlier,
+# which cost 194 s to re-evaluate and — worse — taught the model to imitate replies written
+# before the current system prompt existed. 0 disables the cutoff.
+HISTORY_MAX_AGE_HOURS: float = float(CONFIG["memory"].get("history_max_age_hours", 24))
 SYSTEM_PROMPT: str = CONFIG["system_prompt"]
 
 # --- Generation tuning (optional; edit config/jarvis.json, restart — no rebuild) -----------------
@@ -146,31 +162,60 @@ RAG_DISTANCE_THRESHOLD = 0.6  # cosine distance = 1 - similarity; discard > this
 RAG_MAX_RESULTS = 5
 
 # --- Fact extraction --------------------------------------------------------
+# Room for the extractor to finish its JSON. 512 was not enough for a batch of a dozen
+# messages: the reply was cut mid-object and every fact in it was discarded. Paired with a
+# smaller batch below, so each call stays short on a CPU that generates ~3.7 tok/s.
+FACT_EXTRACTION_TOKENS = 1024        # ceiling; the real figure is derived per call
+FACT_EXTRACTION_MIN_TOKENS = 256     # floor, so a long batch still gets a usable reply
+FACT_EXTRACTION_BATCH = 6
+# Give up on a message after this many failed extraction passes, so one unparseable message
+# cannot hold the queue (and the LLM) hostage every idle cycle forever.
+FACT_EXTRACTION_MAX_ATTEMPTS = 3
 IDLE_THRESHOLD_SECONDS = 120   # extract facts after 2 min of inactivity
 IDLE_CHECK_INTERVAL = 30       # check for idle every 30 seconds
 FACT_DEDUP_SIM = 0.90          # semantic-similarity merge threshold
 FACT_DEDUP_WORD = 0.85         # word-overlap fallback threshold
 
-FACT_EXTRACTION_PROMPT = """Analyze this conversation and extract any personal facts about the user.
-Return a JSON array. Each fact must be a complete, self-contained sentence that would make sense on its own.
+# The subject rule and the wanting/doing rule are not stylistic. Without them the extractor
+# flattened "I'm learning Rust as a separate project from Jarvis" into "The user's Jarvis project
+# uses the Rust programming language" — a fact that is simply false, and which would then be
+# asserted confidently in every future conversation. Wrong memories are worse than no memories.
+FACT_EXTRACTION_PROMPT = """Extract durable personal facts about the user from these messages.
+
+Return ONLY a JSON array of OBJECTS. Every element must have exactly two keys, "category" and
+"content". Never return bare strings.
 
 Categories: personal, family, preferences, location, work, education, interests, technical, other
 
 Rules:
-- Only extract FACTS the user explicitly stated about themselves. Do NOT infer or guess.
-- Each fact must be a full sentence with context (e.g. "The user's name is Alex" not just "Alex").
-- Include details, nicknames, relationships mentioned.
-- If the user corrects previous info, extract the CORRECTED version.
-- Skip greetings, questions, or generic statements.
-- If no personal facts found, return exactly: []
+- THE SUBJECT IS THE USER. Write "The user ...". If they mention a project, tool or machine, the
+  fact is about their RELATIONSHIP to it, not a property of it moved onto them.
+- Keep scope words. "separate from", "not part of", "at work", "for my side project" change the
+  meaning. If a detail belongs to one thing and not another, say which.
+- Distinguish WANTING from DOING. "I want to learn X" is not "The user uses X". Say "wants to",
+  "is learning", "plans to" when that is what was said.
+- Record only what IS. Never record what the user did not say, did not specify, or left unclear.
+  An absence is not a fact.
+- Only what was explicitly stated. Never infer, never generalise, never merge two statements into
+  one claim neither of them made.
+- Skip greetings, questions, commands to the assistant, and anything about the assistant itself.
+- If there are no durable personal facts, return exactly: []
 
-Examples of good extractions:
+Good:
 [{"category": "personal", "content": "The user's name is Alex, also called Al by close friends"},
- {"category": "location", "content": "The user currently lives in Springfield"},
- {"category": "family", "content": "The user has a younger sibling who is studying medicine"},
- {"category": "preferences", "content": "The user's favourite car is the Tesla Model 3"},
  {"category": "work", "content": "The user works as a backend developer"},
- {"category": "technical", "content": "The user prefers Python and FastAPI for building APIs"}]
+ {"category": "technical", "content": "The user runs their home server on an old dual-core laptop"},
+ {"category": "technical", "content": "The user refuses to download binaries from third-party mirrors"},
+ {"category": "interests", "content": "The user wants to learn Rust for a side project, separate from their main work"}]
+
+Bad, and why:
+ "The user likes Rust"                                      <- a bare string; must be an object
+ {"content": "The user's side project uses Rust"}           <- subject must be the user
+ {"content": "The user uses Rust"}                          <- they said they WANT to learn it
+ {"content": "The user's main work uses Rust"}              <- drops "separate from", inverting it
+ {"content": "The user lives at /srv/app on their server"}  <- that is where the PROJECT lives
+ {"content": "The user has not stated their location"}      <- an absence is not a fact
+ {"content": "The user's goal was not specified"}           <- same; record nothing instead
 
 Return ONLY the JSON array, nothing else."""
 

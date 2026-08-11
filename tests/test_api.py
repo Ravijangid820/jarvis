@@ -656,3 +656,128 @@ def test_face_identify_ignores_wrong_width_vectors(client):
     assert got["name"] is None and got["score"] is None
     pid = next(f["id"] for f in client.get("/admin/faces", headers=h).json()["faces"] if f["name"] == "Wide")
     client.delete(f"/admin/faces/{pid}", headers=h)
+
+
+# --- the public-path allowlist must not match by accident ---------------------------------------
+# The allowlist mixed exact membership with endswith()/in substring tests, so any path merely
+# ENDING in "/ca.crt" or a favicon name skipped authentication entirely. GET /history/ca.crt reached
+# its handler unauthenticated and 500'd on the user_id the middleware never set — the crash was the
+# only thing standing in for the auth check.
+
+@pytest.mark.parametrize("path", [
+    "/history/ca.crt",
+    "/history/favicon.svg",
+    "/history/favicon.ico",
+    "/history/favicon.png",
+    "/admin/backups/ca.crt",
+    "/sessions/ca.crt",
+])
+def test_a_route_named_like_a_public_file_still_requires_auth(client, path):
+    r = client.get(path)
+    assert r.status_code == 401, (
+        f"{path} returned {r.status_code}; a 500 means it reached the handler with no auth, "
+        "and a 403 means it reached an in-handler check rather than the gate")
+
+
+@pytest.mark.parametrize("path", [
+    "/history/x/assets/y",       # the "/assets/" in path test
+    "/history/a/static/b",       # the "/static/" in path test
+    "/history/a/ort/b",          # the "/ort/" in path test
+    "/history/a/stt-models/b",
+])
+def test_a_route_containing_an_asset_prefix_still_requires_auth(client, path):
+    """The substring tests were the other half: a path merely CONTAINING /assets/ was public."""
+    assert client.get(path).status_code in (401, 404), \
+        f"{path} must be authenticated (or simply not exist), never silently public"
+
+
+@pytest.mark.parametrize("path", ["/health", "/ca.crt", "/favicon.ico", "/auth/login"])
+def test_genuinely_public_paths_are_still_public(client, path):
+    """The fix must not over-correct: these are unauthenticated by design."""
+    assert client.get(path).status_code != 401, f"{path} should not require a token"
+
+
+def test_auth_failures_carry_the_security_headers(client):
+    """401/403 were returned as bare Responses that bypassed the header helper, so the CSP,
+    nosniff and framing protections were on every success and absent on exactly the responses an
+    attacker provokes."""
+    r = client.get("/sessions")
+    assert r.status_code == 401
+    assert r.headers.get("content-security-policy"), "no CSP on the 401"
+    assert r.headers.get("x-content-type-options") == "nosniff"
+    assert r.headers.get("x-frame-options") == "DENY"
+    assert r.headers.get("content-type", "").startswith("application/json")
+
+
+# --- password rotation ---------------------------------------------------------------------------
+def test_password_can_be_changed_and_the_old_one_stops_working(client):
+    _seed_user("rotator", "old-password-1", "user")
+    tok = _tok(client, "rotator", "old-password-1")
+    h = {"Authorization": "Bearer " + tok}
+    r = client.post("/auth/password", headers=h,
+                    json={"current_password": "old-password-1", "new_password": "new-password-2"})
+    assert r.status_code == 200
+    assert client.post("/auth/login", json={"username": "rotator", "password": "old-password-1"}).status_code == 401
+    assert client.post("/auth/login", json={"username": "rotator", "password": "new-password-2"}).status_code == 200
+
+
+def test_a_stolen_token_alone_cannot_take_over_the_account(client):
+    """The current password is verified rather than the session trusted — otherwise a leaked token
+    would be enough to lock the real owner out."""
+    _seed_user("victim", "victim-password", "user")
+    h = {"Authorization": "Bearer " + _tok(client, "victim", "victim-password")}
+    r = client.post("/auth/password", headers=h,
+                    json={"current_password": "wrong-guess", "new_password": "attacker-set-1"})
+    assert r.status_code == 403
+    assert client.post("/auth/login", json={"username": "victim", "password": "victim-password"}).status_code == 200
+
+
+def test_changing_the_password_revokes_other_sessions_but_not_this_one(client):
+    _seed_user("multi", "multi-password", "user")
+    stale = _tok(client, "multi", "multi-password")     # a second, older session
+    mine = _tok(client, "multi", "multi-password")
+    r = client.post("/auth/password", headers={"Authorization": "Bearer " + mine},
+                    json={"current_password": "multi-password", "new_password": "multi-password-2"})
+    assert r.status_code == 200 and r.json()["other_sessions_revoked"] >= 1
+    # 403, not 401: the middleware distinguishes "no Bearer header" from "a token that is no
+    # longer valid", and the revoked one is the latter.
+    assert client.get("/sessions", headers={"Authorization": "Bearer " + stale}).status_code == 403
+    assert client.get("/sessions", headers={"Authorization": "Bearer " + mine}).status_code == 200
+
+
+def test_a_legacy_hash_upgrades_itself_on_the_next_login(client):
+    """verify_password still accepts the old 100k-iteration form, six times below the floor this
+    code sets for itself. There was no rotation path, so those hashes were stranded forever."""
+    import hashlib
+    salt = "0123456789abcdef"
+    key = hashlib.pbkdf2_hmac("sha256", b"legacy-pass", salt.encode(), 100_000).hex()
+    c = sqlite3.connect(_DB)
+    c.execute("INSERT INTO users (username, password_hash, role, household_id) VALUES (?,?,?,1)",
+              ("legacyuser", f"{salt}:{key}", "user"))
+    c.commit(); c.close()
+
+    assert client.post("/auth/login", json={"username": "legacyuser", "password": "legacy-pass"}).status_code == 200
+    c = sqlite3.connect(_DB)
+    stored = c.execute("SELECT password_hash FROM users WHERE username='legacyuser'").fetchone()[0]
+    c.close()
+    assert stored.startswith("pbkdf2_sha256$"), "the legacy hash should have healed on sign-in"
+    # and the account still works afterwards
+    assert client.post("/auth/login", json={"username": "legacyuser", "password": "legacy-pass"}).status_code == 200
+
+
+# --- CORS must not default to "*" ----------------------------------------------------------------
+# "*" let any site a LAN browser visits read this API's unauthenticated responses. Not forwarding a
+# port is no defence: the request is made BY a browser that is already inside the network.
+
+def test_no_cross_origin_access_by_default(client):
+    r = client.get("/health", headers={"Origin": "https://evil.example"})
+    assert r.status_code == 200, "the request itself still succeeds; the browser is what blocks"
+    assert "access-control-allow-origin" not in {k.lower() for k in r.headers}, \
+        "an unconfigured deployment must not hand its responses to arbitrary sites"
+
+
+def test_same_origin_use_is_unaffected(client):
+    """The bundled SPA calls the API with relative URLs, so it never sends an Origin at all. This
+    is the check that tightening CORS cannot lock the owner out of their own UI."""
+    r = client.get("/health")
+    assert r.status_code == 200 and r.json()["status"] == "ok"

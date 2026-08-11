@@ -19,6 +19,14 @@ PORT="${JARVIS_PORT:-5000}"
 DRY="${DRY_RUN:-0}"
 say() { printf '\033[1;36m▸ %s\033[0m\n' "$1"; }
 
+# Every directory the orchestrator writes at runtime, relative to the repo. SINGLE SOURCE OF
+# TRUTH: it feeds BOTH the ownership pass and ReadWritePaths, and systemd/jarvis-orchestrator
+# .hardened.service lists the same set — tests/test_systemd_units.py fails if they drift apart.
+# Getting this wrong is silent: ProtectSystem=strict makes the missing path read-only, and the
+# endpoint that writes it fails only when someone finally uses it (that is how config/ — holding
+# active_model.json, active_mic.json and mcp_servers.json — went missing until 2026-08-11).
+ORCH_WRITABLE_DIRS=".venv .cache memory logs config backups"
+
 if [ "$DRY" != 1 ] && [ "$(id -u)" -ne 0 ]; then
   echo "must run as root (installs systemd units). Use DRY_RUN=1 to preview without root."; exit 1
 fi
@@ -65,8 +73,9 @@ if [ "$SVC_USER" != root ] && [ "$DRY" != 1 ]; then
   chmod a+r "$GGUF" 2>/dev/null || true
   # ownership: writable data dirs → service user; source + .git stay root (read-only to the service)
   chown -R root:root "$REPO"
-  for d in .venv .cache memory logs config; do
-    [ -e "$REPO/$d" ] && chown -R "$SVC_USER:$SVC_USER" "$REPO/$d"
+  for d in $ORCH_WRITABLE_DIRS; do
+    mkdir -p "$REPO/$d"
+    chown -R "$SVC_USER:$SVC_USER" "$REPO/$d"
   done
 fi
 LLAMA_LIB="$(dirname "$LLAMA_BIN")"
@@ -79,7 +88,8 @@ else
   ORCH_USER="User=$SVC_USER
 Group=$SVC_USER"
   ORCH_PROTECT="ProtectSystem=strict"
-  ORCH_RW="ReadWritePaths=$REPO/memory $REPO/logs $REPO/.cache $REPO/.venv $REPO/backups"
+  ORCH_RW="ReadWritePaths=$(for d in $ORCH_WRITABLE_DIRS; do printf '%s ' "$REPO/$d"; done)"
+  ORCH_RW="${ORCH_RW% }"
   ORCH_HOME="Environment=\"HOME=$REPO\"
 Environment=\"HF_HOME=$REPO/.cache/huggingface\""
   ORCH_PH="ProtectHome=true"

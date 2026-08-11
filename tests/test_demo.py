@@ -226,6 +226,22 @@ def test_demo_visitor_cannot_reach_the_smart_home(client):
     assert client.get("/admin/home-assistant/entities", headers=h).status_code == 403
 
 
+def test_demo_visitor_cannot_configure_or_probe_an_mcp_server(client, monkeypatch):
+    """A demo visitor IS an admin — of a throwaway household. That makes _require_admin the wrong
+    gate for anything process-wide, and MCP config is process-wide: one visitor's entry would show
+    up for everyone, and /mcp/test makes this server fetch a URL the visitor chose (SSRF). Reading
+    the operator's list stays allowed; changing it and probing arbitrary URLs do not.
+    """
+    monkeypatch.setattr(main, "JARVIS_MODE", "demo")
+    _, h = _mint(client)
+    assert client.get("/mcp/servers", headers=h).status_code == 200
+    assert client.post("/mcp/servers", headers=h,
+                       json={"name": "x", "url": "http://169.254.169.254/"}).status_code == 403
+    assert client.post("/mcp/test", headers=h,
+                       json={"url": "http://127.0.0.1:8081/props"}).status_code == 403
+    assert client.delete("/mcp/servers/x", headers=h).status_code == 403
+
+
 def test_demo_visitor_sees_no_real_household_data(client):
     """Household 1 exists (init_db seeds it) — none of it may be visible."""
     _c = sqlite3.connect(_DB)

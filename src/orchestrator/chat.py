@@ -4,21 +4,26 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 
+import ha
 import memory
 from budget import clamp_completion, estimate_message_tokens, fit_history, truncate_to_tokens
-from config import (COMPLETION_RESERVE_DEFAULT, KNOWLEDGE_TOKEN_CAP, MAX_CONTEXT_MESSAGES,
+from config import (COMPLETION_RESERVE_DEFAULT, HISTORY_MAX_AGE_HOURS, KNOWLEDGE_TOKEN_CAP,
+                    MAX_CONTEXT_MESSAGES,
                     MAX_CONTEXT_TOKENS, MIN_COMPLETION_TOKENS, PROMPT_SAFETY_MARGIN,
                     REASONING, SYSTEM_PROMPT)
 from db import get_db
 
 
 # --- Message persistence ----------------------------------------------------
-def store_message(session_id: str, speaker: str, content: str):
+def store_message(session_id: str, speaker: str, content: str, kind: str = "chat"):
+    """Persist one turn. `kind="device"` marks a smart-home command and its templated
+    acknowledgement: still shown in the transcript, but withheld from the model (see
+    get_recent_context) so it cannot learn to imitate an acknowledgement it did not earn."""
     conn = get_db()
     try:
         cursor = conn.execute(
-            "INSERT INTO conversation_history (session_id, speaker, content) VALUES (?, ?, ?)",
-            (session_id, speaker, content),
+            "INSERT INTO conversation_history (session_id, speaker, content, kind) VALUES (?, ?, ?, ?)",
+            (session_id, speaker, content, kind),
         )
         msg_id = cursor.lastrowid
         user_id_row = conn.execute("SELECT user_id FROM chat_sessions WHERE id = ?", (session_id,)).fetchone()
@@ -31,13 +36,31 @@ def store_message(session_id: str, speaker: str, content: str):
         memory.enqueue_embedding(msg_id, content, metadata)
 
 
-def get_recent_context(session_id: str, limit: Optional[int] = None) -> List[Dict[str, str]]:
+def get_recent_context(session_id: str, limit: Optional[int] = None,
+                       for_llm: bool = False) -> List[Dict[str, str]]:
+    """Recent turns, oldest first.
+
+    `for_llm=True` drops device turns. They are template strings ("Okay - the Light is now off."),
+    and a 2B model reading a month of them starts producing them as prose: it emitted that exact
+    sentence twice for utterances that were not commands, with no action behind either. Dropping
+    the pair — command and acknowledgement — keeps the history a clean alternation of real
+    conversation, and the live device block in build_messages carries the truth those turns used
+    to carry. The UI still asks without the flag and sees everything.
+    """
     limit = limit or MAX_CONTEXT_MESSAGES
+    where = "WHERE session_id = ?"
+    params: List[Any] = [session_id]
+    if for_llm:
+        where += " AND kind != 'device'"
+        if HISTORY_MAX_AGE_HOURS > 0:
+            where += " AND timestamp >= datetime('now', ?)"
+            params.append(f"-{HISTORY_MAX_AGE_HOURS} hours")
+    params.append(limit)
     conn = get_db()
     try:
         rows = conn.execute(
-            "SELECT speaker, content FROM conversation_history WHERE session_id = ? ORDER BY id DESC LIMIT ?",
-            (session_id, limit),
+            f"SELECT speaker, content FROM conversation_history {where} ORDER BY id DESC LIMIT ?",
+            params,
         ).fetchall()
         return [{"role": "assistant" if r["speaker"] == "jarvis" else "user", "content": r["content"]}
                 for r in reversed(rows)]
@@ -149,7 +172,8 @@ def build_messages(session_id: str, user_id: int, household_id: int, user_text: 
                    custom_sys_prompt: Optional[str] = None,
                    completion_reserve: int = COMPLETION_RESERVE_DEFAULT,
                    reasoning: Optional[bool] = None,
-                   voice: bool = False) -> List[Dict[str, str]]:
+                   voice: bool = False,
+                   device_event: Optional[str] = None) -> List[Dict[str, str]]:
     """Assemble the prompt within the model's context window.
 
     Layout: [single system message] + [recent history…] + [current turn]. The system message holds
@@ -204,11 +228,43 @@ def build_messages(session_id: str, user_id: int, household_id: int, user_text: 
     present = memory.get_present_people(household_id)
     if present:
         turn_parts.append(f"[Seen by cameras: {', '.join(present)}]")
+
+    # The devices, and what they are doing RIGHT NOW.
+    #
+    # Without this the model had no idea a smart home existed: asked to turn on a light it replied
+    # that it had "no body or access to real-world devices", and asked how things were it invented
+    # "the lights are on, the temperature is set" — both of which the system prompt forbids, and
+    # neither of which it could avoid, because nothing in the prompt said otherwise.
+    #
+    # In the per-turn block rather than the system prefix on purpose: states change, and the system
+    # message is deliberately stable so llama.cpp can reuse its KV cache across turns. Putting
+    # volatile text there would re-evaluate the whole prefix on every message.
+    if ha.configured() and ha.owns(household_id):
+        devices = ha.snapshot()
+        if devices:
+            lines = "\n".join(f"  {d['name']} — {d['state']}" for d in devices)
+            turn_parts.append(
+                "--- DEVICES IN THIS HOME (live, right now) ---\n"
+                f"{lines}\n"
+                "These are the only devices there are. Refer to them naturally, by name — never "
+                "mention this list, and never say a device is in a state other than the one given "
+                "here. The system does the switching and confirms it; you never claim to have "
+                "done it yourself.\n"
+                "---")
     if memories:
         turn_parts.append(
             "--- RECALLED MEMORIES ---\n"
             f"{memories}\n"
             "---")
+    # A smart-home action the system ALREADY carried out for this very message. Stated as
+    # completed fact so the model answers the rest of the sentence ("I'm freezing" → sympathy)
+    # without re-announcing the switch, and without having to guess whether it worked.
+    if device_event:
+        turn_parts.append(
+            f"[Already done, by the system, for this message: {device_event} "
+            "Acknowledge it briefly if it is worth mentioning, then answer the rest of what they "
+            "said. Do not repeat it as if you were about to do it.]")
+
     turn_content = ("\n\n".join(turn_parts) + "\n\n" + user_text) if turn_parts else user_text
 
     front: List[Dict[str, str]] = [{"role": "system", "content": "\n\n".join(system_parts)}]
@@ -218,7 +274,7 @@ def build_messages(session_id: str, user_id: int, household_id: int, user_text: 
     prompt_budget = max(prompt_budget, MAX_CONTEXT_TOKENS // 2)
     fixed_tokens = sum(estimate_message_tokens(m) for m in front) + estimate_message_tokens(current_turn)
 
-    history = get_recent_context(session_id)  # chronological (oldest -> newest)
+    history = get_recent_context(session_id, for_llm=True)  # chronological (oldest -> newest)
     included = fit_history(history, prompt_budget - fixed_tokens)
     return front + included + [current_turn]
 

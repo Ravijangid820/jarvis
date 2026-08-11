@@ -43,7 +43,7 @@ fi
 log "embedding: $EMBED_MODEL — $EMB"
 
 # 3) Database schema (init is idempotent).
-if uv run python -c "import sys; sys.path.insert(0,'src/orchestrator'); import db; db.init_db()" >/dev/null 2>&1; then
+if uv run --no-sync python -c "import sys; sys.path.insert(0,'src/orchestrator'); import db; db.init_db()" >/dev/null 2>&1; then
   DB="ready"
 else
   DB="INIT FAILED — check volume permissions / config paths"
@@ -55,7 +55,7 @@ ADMIN_USER="${ADMIN_USER:-admin}"
 ADMIN_PASS="${ADMIN_PASS:-admin}"
 WEAK_PASS=""
 [ "$ADMIN_PASS" = "admin" ] && WEAK_PASS="yes"
-if uv run python src/scripts/manage.py create-admin "$ADMIN_USER" "$ADMIN_PASS" >/dev/null 2>&1; then
+if uv run --no-sync python src/scripts/manage.py create-admin "$ADMIN_USER" "$ADMIN_PASS" >/dev/null 2>&1; then
   ADMIN="$ADMIN_USER (created)"
 else
   ADMIN="$ADMIN_USER (already exists — unchanged)"
@@ -96,4 +96,7 @@ log "  LLM backend  : ${JARVIS_FAST_BRAIN_URL:-http://llama:8081 (from config/ja
 log "  Mint API key : docker compose exec orchestrator uv run python src/scripts/manage.py mint-key <user>"
 rule
 echo
-exec uv run uvicorn main:app --app-dir src/orchestrator --host 0.0.0.0 --port 5000 "${SSL_ARGS[@]}"
+# --no-sync mirrors the systemd unit: never attempt a dependency sync at start-up.
+# The image is built with `uv sync --frozen`, so there is nothing to resolve, and as a
+# non-root user a write into .venv would be a failure rather than a no-op.
+exec uv run --no-sync uvicorn main:app --app-dir src/orchestrator --host 0.0.0.0 --port 5000 "${SSL_ARGS[@]}"

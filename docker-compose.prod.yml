@@ -12,6 +12,13 @@
 services:
   # --- 1. LLM: Dedicated Pre-Baked Inference Engine Container ---
   llama:
+    # Blocks privilege escalation outright: a setuid binary inside the image cannot gain
+    # anything, and the container starts with no capabilities at all. Neither the
+    # orchestrator, llama-server nor unprivileged nginx needs any.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     image: ${LLAMA_IMAGE:-ghcr.io/ravijangid820/jarvis-llama:latest}
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8081/health"]
@@ -23,6 +30,13 @@ services:
 
   # --- 2. Orchestrator: Pure Python API + RAG + Auth + TTS ---
   orchestrator:
+    # Blocks privilege escalation outright: a setuid binary inside the image cannot gain
+    # anything, and the container starts with no capabilities at all. Neither the
+    # orchestrator, llama-server nor unprivileged nginx needs any.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     image: ${ORCH_IMAGE:-ghcr.io/ravijangid820/jarvis-orchestrator:latest}
     depends_on:
       llama:
@@ -65,6 +79,13 @@ services:
   #
   # Enable with:  docker compose --env-file .env.prod -f docker-compose.prod.yml --profile web up -d
   frontend:
+    # Blocks privilege escalation outright: a setuid binary inside the image cannot gain
+    # anything, and the container starts with no capabilities at all. Neither the
+    # orchestrator, llama-server nor unprivileged nginx needs any.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     profiles: ["web"]
     image: ${FRONTEND_IMAGE:-ghcr.io/ravijangid820/jarvis-frontend:latest}
     environment:
@@ -72,7 +93,9 @@ services:
       # orchestrator serves HTTPS (tls/ mounted), point this at https://orchestrator:5000.
       - JARVIS_API_UPSTREAM=${JARVIS_API_UPSTREAM:-http://orchestrator:5000}
     ports:
-      - "${FRONTEND_PORT:-80}:80"
+      # Container-side 8080 because the image runs unprivileged and cannot bind a port below
+      # 1024. The PUBLISHED port is unchanged, so the URL you use does not move.
+      - "${FRONTEND_PORT:-80}:8080"
     depends_on:
       # nginx resolves the proxy_pass host at startup, so it must not race the orchestrator.
       orchestrator:

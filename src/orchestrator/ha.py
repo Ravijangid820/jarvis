@@ -14,10 +14,12 @@ errors return False/None and the caller words a friendly reply.
 """
 import json
 import re
+import time
 import urllib.error
 import urllib.request
 from typing import Any, Dict, List, Optional
 
+import safehttp
 from config import HA_ALLOWED_ENTITIES, HA_TOKEN, HA_URL, logger
 
 _TIMEOUT = 5  # seconds — a LAN call; never let a dead HA hang a chat turn
@@ -32,20 +34,88 @@ CONTROLLABLE_DOMAINS = ("light", "switch", "input_boolean", "fan", "cover", "sce
 # (loaded from the DB at startup, updated by the admin UI) without a restart.
 
 
+# Which household this process's Home Assistant belongs to. Lives here rather than in main so that
+# prompt assembly (chat.py) can ask "may this household see the devices?" without importing main —
+# which it cannot, since main imports it. One source of truth for the same boundary main enforces
+# on the HTTP surface.
+HA_HOUSEHOLD_ID: Optional[int] = None
+
+
 def configure(url: Optional[str] = None, token: Optional[str] = None,
-              allowed: Optional[List[str]] = None) -> None:
+              allowed: Optional[List[str]] = None,
+              household_id: Optional[int] = None) -> None:
     """Update the live HA settings. Only non-None args are applied."""
-    global HA_URL, HA_TOKEN, HA_ALLOWED_ENTITIES
+    global HA_URL, HA_TOKEN, HA_ALLOWED_ENTITIES, HA_HOUSEHOLD_ID
     if url is not None:
         HA_URL = url.rstrip("/")
     if token is not None:
         HA_TOKEN = token
     if allowed is not None:
         HA_ALLOWED_ENTITIES = [e.strip() for e in allowed if e and e.strip()]
+    if household_id is not None:
+        HA_HOUSEHOLD_ID = household_id
+    _SNAPSHOT["at"] = 0.0          # settings changed → the cached view is stale
+
+
+def owns(household_id: Optional[int]) -> bool:
+    """True if this household is the one the smart home belongs to. A demo household never is."""
+    return HA_HOUSEHOLD_ID is not None and household_id == HA_HOUSEHOLD_ID
 
 
 def configured() -> bool:
     return bool(HA_URL and HA_TOKEN)
+
+
+# One /api/states call answers for every device, so a turn that asks twice should not pay twice.
+# The TTL is short because the point of the block is to be TRUE: a stale "on" that the user can see
+# is off would be worse than no block at all, since it teaches them the assistant doesn't know.
+_SNAPSHOT: Dict[str, Any] = {"at": 0.0, "rows": []}
+_SNAPSHOT_TTL = 4.0
+
+
+def invalidate_snapshot() -> None:
+    """Force the next snapshot() to re-read from HA.
+
+    Called the moment an action succeeds. Without it the prompt could carry the state from up to a
+    few seconds BEFORE the switch that this very message caused — and a device block saying "Fan —
+    on" next to a note saying the fan was just turned off is a contradiction the model resolves by
+    inventing a reason for it (observed: "the temperature is too low, and the motor has been shut
+    down", describing a sensor that does not exist).
+    """
+    _SNAPSHOT["at"] = 0.0
+
+
+def snapshot(ttl: float = _SNAPSHOT_TTL) -> List[Dict[str, str]]:
+    """Allowlisted devices and their CURRENT state, for grounding the model.
+
+    Only the allowlist: the model should be told about exactly the devices it is permitted to
+    reason about, so the prompt can't invite it to discuss something it would then be refused.
+    Returns [] when unconfigured or unreachable — the caller then says nothing rather than
+    asserting an empty house.
+    """
+    if not configured() or not HA_ALLOWED_ENTITIES:
+        return []
+    now = time.monotonic()
+    if now - _SNAPSHOT["at"] < ttl:
+        return _SNAPSHOT["rows"]
+    states = _request("GET", "/api/states")
+    if not isinstance(states, list):
+        return _SNAPSHOT["rows"] if _SNAPSHOT["rows"] else []
+    allowed = set(HA_ALLOWED_ENTITIES)
+    rows = []
+    for s in states:
+        eid = (s or {}).get("entity_id", "")
+        if eid not in allowed:
+            continue
+        rows.append({
+            "entity_id": eid,
+            "name": (s.get("attributes") or {}).get("friendly_name") or eid.partition(".")[2].replace("_", " "),
+            "state": s.get("state") or "unknown",
+            "domain": eid.partition(".")[0],
+        })
+    rows.sort(key=lambda r: r["name"].lower())
+    _SNAPSHOT.update(at=now, rows=rows)
+    return rows
 
 
 def _request(method: str, path: str, payload: Optional[dict] = None) -> Optional[Any]:
@@ -56,7 +126,11 @@ def _request(method: str, path: str, payload: Optional[dict] = None) -> Optional
         method=method,
     )
     try:
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as r:
+        # safehttp rather than urllib.request: HA_URL is nearly always a LAN address (which stays
+        # allowed — see safehttp.py), but this request carries a long-lived Home Assistant token,
+        # and urllib forwards Authorization across redirects to any host. That header is the one
+        # thing here worth stealing, so the hop is capped and the credential dropped off-host.
+        with safehttp.urlopen(req, timeout=_TIMEOUT) as r:
             return json.loads(r.read().decode() or "null")
     except Exception as e:
         logger.warning("Home Assistant %s %s failed: %s", method, path, e)
@@ -95,7 +169,7 @@ def probe_entity(entity_id: str) -> tuple:
     req = urllib.request.Request(f"{HA_URL}/api/states/{entity_id}",
                                  headers={"Authorization": f"Bearer {HA_TOKEN}"})
     try:
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as r:
+        with safehttp.urlopen(req, timeout=_TIMEOUT) as r:
             return ENTITY_FOUND, json.loads(r.read().decode() or "null")
     except urllib.error.HTTPError as e:
         if e.code == 404:
@@ -114,9 +188,11 @@ def test_connection(url: Optional[str], token: Optional[str]) -> tuple:
     token = token or HA_TOKEN
     if not url or not token:
         return False, "URL and token are both required."
+    # The one HA call whose URL comes straight from a form field rather than from config, so the
+    # guard matters most here — and it is sent with a bearer token attached.
     req = urllib.request.Request(f"{url}/api/", headers={"Authorization": f"Bearer {token}"})
     try:
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as r:
+        with safehttp.urlopen(req, timeout=_TIMEOUT) as r:
             json.loads(r.read().decode() or "null")
         return True, "Connected to Home Assistant."
     except urllib.error.HTTPError as e:

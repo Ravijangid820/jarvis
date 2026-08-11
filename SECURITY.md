@@ -22,15 +22,28 @@ Active development happens on `main`; fixes land there. There are no separate ma
 
 Jarvis is designed to run **self-hosted and offline** — no cloud APIs, no telemetry. The posture:
 
-- **No process runs as root** in the recommended install: both the orchestrator and the LLM server
-  run as a dedicated unprivileged user, sandboxed with systemd (`ProtectSystem=strict`, minimal
-  `ReadWritePaths`, `ProtectHome`, `NoNewPrivileges`). A simpler root install is also offered.
+- **No process runs as root**, on either install path. Under systemd the orchestrator and the LLM
+  server run as a dedicated unprivileged user sandboxed with `ProtectSystem=strict`, minimal
+  `ReadWritePaths`, `ProtectHome` and `NoNewPrivileges`; a simpler root install is also offered.
+  Every container image drops to a non-root user (uid `10001`, or `101` for nginx), and every
+  compose service runs with `cap_drop: [ALL]` and `no-new-privileges:true`.
+  **Bind mounts need that uid.** A host directory mounted over `/app/memory`, `/app/config` or
+  `/app/logs` must be writable by uid 10001 — `sudo chown -R 10001:10001 ./memory ./config ./logs`
+  — otherwise the container starts and fails on its first write. Named volumes (the default) are
+  chowned by Docker and need nothing.
 - **Authentication** is web-login session tokens **or** per-user API keys — both SHA-256 hashed at
   rest; there is no static master secret. Passwords use PBKDF2 (600k iterations).
 - **Authorization is enforced in code, never by the LLM.** Device actions (e.g. volume) check the
   caller's permissions server-side; device-scoped API keys are bound to a single device.
 - **Input is bounded and validated**; all SQL is parameterized; a strict Content-Security-Policy and
   standard security headers are sent; the LLM server binds to `127.0.0.1`.
+- **Outbound fetches the server was *told* to make** (MCP endpoints, Home Assistant) go through
+  `safehttp.py`: redirect chains are capped and every hop re-validated, and `Authorization` is
+  dropped when a redirect changes host — otherwise urllib hands the Home Assistant token to
+  whatever a hostile endpoint redirects to. Link-local (cloud-metadata) addresses are refused
+  outright. LAN and loopback targets stay **allowed on purpose** — Home Assistant is on the LAN
+  and a local MCP server is a normal deployment; set `JARVIS_HTTP_ALLOW_LOCAL=0` to refuse them
+  on a deployment that really is exposed.
 - **Secrets are never committed** (`config/jarvis.json`, `*.key` are gitignored) and never logged.
 
 This is a **single-operator, trusted-LAN** threat model: the API is reachable over LAN + a private

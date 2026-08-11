@@ -102,6 +102,33 @@ permission errors.
 > device *name* too and re-resolves it at startup; if the named mic isn't attached, the listener
 > falls back to the system default and logs that, rather than opening whatever inherited the number.
 
+## Wake phrases (browser)
+
+The live voice page answers to more than one phrase. Two detectors run side by side while armed:
+
+| Detector | Phrases | Speed | Cost |
+|---|---|---|---|
+| **openWakeWord** (trained model) | `hey jarvis` only | instant — no pause, no transcription | ~3 tiny ONNX models per 80 ms |
+| **Phrase list** (transcript match) | anything you type | after a ~0.4 s pause | one short Whisper run per brief utterance |
+
+Defaults: `hey jarvis`, `ok jarvis`, `okay jarvis`, `jarvis`, `wake up jarvis`, `jarvis wake up`,
+`jarvis are you there`, `you there jarvis`. Edit them in **⚙ → Wake phrases** on the voice page.
+
+Say the command in the same breath and it is answered directly — *"Jarvis, what's the weather"*
+wakes it and asks in one go, rather than making you wait for an acknowledgement first.
+
+**Why the list can't just be fed to the trained model.** openWakeWord's v0.5.1 release contains
+exactly six pre-trained models — `alexa`, `hey_jarvis`, `hey_mycroft`, `hey_rhasspy`, `timer`,
+`weather`. Each is a classifier for one phrase. Adding `jarvis are you there` as an *instant* phrase
+would mean training a new model (synthetic TTS data, augmentation, roughly an hour on a GPU); the
+runtime cost would be negligible, since the mel and embedding stages are shared and only the small
+final head is per-phrase. The transcript path gets you the same phrases today without any of that.
+
+**What this means for the room.** While armed, short utterances are transcribed *in the tab* so they
+can be matched. Audio never leaves the browser, nothing is stored, and anything that does not name
+Jarvis is discarded — but it is more work than a pure keyword spotter, and anything longer than
+~3.5 s is dropped without being transcribed at all.
+
 ## Voice volume control
 
 Spoken volume commands work out of the box once the **Windows volume agent** is running (see

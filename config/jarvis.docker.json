@@ -13,12 +13,14 @@
         "max_input_length": 500,
         "rate_limit_requests_per_minute": 120,
         "require_presence_for_device_control": false,
-        "allowed_origins": []
+        "allowed_origins": [],
+    "allowed_origin_regex": ""
     },
     "memory": {
         "db_path": "memory/jarvis.db",
         "chroma_db_path": "memory/chroma_db",
-        "max_context_messages": 100
+        "max_context_messages": 100,
+    "history_max_age_hours": 24
     },
     "system_prompt": "You are Jarvis, an advanced and helpful AI assistant.",
     "home_assistant": {

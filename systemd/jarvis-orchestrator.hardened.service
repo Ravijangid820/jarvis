@@ -38,10 +38,18 @@ NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=true
 # strict: the whole FS is read-only except ReadWritePaths. Only the paths the service actually
-# writes are listed — source + .git stay read-only (an RCE can't rewrite its own code/history).
-# config/ is readable (owned by jarvis) but deliberately NOT writable.
+# writes are listed — src/ + .git stay read-only (an RCE can't rewrite its own code/history).
+#
+# KEEP IN SYNC with ORCH_WRITABLE_DIRS in src/scripts/install_services.sh, which generates the
+# unit an actual install runs; tests/test_systemd_units.py fails if the two sets diverge. A path
+# missing here does not fail at boot — it fails months later, the first time someone uses the one
+# endpoint that writes it, with a bare "Read-only file system" in the logs.
+#
+# config/ is writable because the app stores runtime selections there (active_model.json,
+# active_mic.json, mcp_servers.json). Secrets in config/jarvis.json are protected by UMask=0077
+# and file ownership, not by the mount being read-only.
 ProtectSystem=strict
-ReadWritePaths=/srv/jarvis/memory /srv/jarvis/logs /srv/jarvis/.cache /srv/jarvis/.venv
+ReadWritePaths=/srv/jarvis/.venv /srv/jarvis/.cache /srv/jarvis/memory /srv/jarvis/logs /srv/jarvis/config /srv/jarvis/backups
 ProtectHome=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
