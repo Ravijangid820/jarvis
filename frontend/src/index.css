@@ -2201,3 +2201,8 @@ button.clickable-model:hover {
   .face-controls { flex-direction: column; }
   .face-controls .hud-input, .face-controls .hud-btn, .face-save { width: 100%; }
 }
+
+/* Wake-phrase editor: a textarea rather than a single line, because the list grows and a phrase
+   scrolling out of sight is a phrase the user forgets they set. */
+.vs-phrases { flex-direction: column; align-items: stretch; min-width: min(320px, 100%); }
+.vs-phrases textarea { width: 100%; resize: vertical; font-size: 0.72rem; line-height: 1.5; }
