@@ -42,6 +42,10 @@ if [ ! -f config/jarvis.json ]; then
 else
   ok "config/jarvis.json already exists (left as-is)"
 fi
+# Owner-only, always — not just on creation. This file is the documented home of
+# home_assistant.token, a long-lived credential, and it was shipping 0644 next to a
+# voice_listener.key that already had this right. Matches what init_db() does for the database.
+chmod 600 config/jarvis.json 2>/dev/null || warn "could not chmod 600 config/jarvis.json"
 
 step "Frontend build"
 if command -v npm >/dev/null; then

@@ -377,3 +377,26 @@ def test_an_absence_never_reaches_storage(monkeypatch):
                          '[{"category":"work","content":"The user is an engineer."},'
                          ' {"category":"other","content":"The user has not stated their location."}]')
     assert [c for _, c in stored] == ["The user is an engineer."]
+
+
+# --- the identify score is a template-reconstruction oracle -------------------------------------
+def test_non_admins_get_a_blunted_similarity_score(client, monkeypatch):
+    """A precise score lets an attacker hill-climb: submit a vector, nudge it toward a higher
+    number, repeat, and reconstruct a face template without ever seeing one. Faces can gate device
+    control, so the gradient is what matters — one decimal still says "close" vs "nowhere near"."""
+    _fake_home(monkeypatch, ROWS)
+    admin = {"Authorization": "Bearer " + _tok(client, "tony", "pw-admin")}
+    user = {"Authorization": "Bearer " + _tok(client, "pepper", "pw-user")}
+    vec = [1.0] + [0.0] * 15
+    assert client.post("/faces/enroll", headers=admin,
+                       json={"name": "Oracle", "embedding": vec}).status_code == 200
+    probe = [0.9, 0.4359] + [0.0] * 14        # deliberately an awkward cosine
+
+    coarse = client.post("/faces/identify", headers=user, json={"embedding": probe}).json()["score"]
+    precise = client.post("/faces/identify", headers=admin, json={"embedding": probe}).json()["score"]
+    assert coarse == round(coarse, 1), f"non-admin score {coarse} carries too much gradient"
+    assert precise == round(precise, 3), "admins keep the figure that makes a failure diagnosable"
+
+    pid = next(f["id"] for f in client.get("/admin/faces", headers=admin).json()["faces"]
+               if f["name"] == "Oracle")
+    client.delete(f"/admin/faces/{pid}", headers=admin)

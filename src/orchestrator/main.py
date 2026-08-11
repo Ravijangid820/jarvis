@@ -267,7 +267,8 @@ _CSP = (
 )
 
 
-def _apply_security_headers(response: Response, cache: str = "no-store", csp: bool = True) -> Response:
+def _apply_security_headers(response: Response, cache: str = "no-store", csp: bool = True,
+                            request: Optional[Request] = None) -> Response:
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     # csp=False for immutable, content-hashed assets. A dedicated Web Worker enforces the CSP
@@ -287,26 +288,46 @@ def _apply_security_headers(response: Response, cache: str = "no-store", csp: bo
     response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
     response.headers["Cross-Origin-Embedder-Policy"] = "require-corp"
     response.headers["Cache-Control"] = cache
+    # HSTS only where it is honest. Over plain HTTP the header is ignored anyway, and asserting a
+    # year of HTTPS-only for a deployment that terminates TLS elsewhere would be a promise made on
+    # someone else's behalf. Set here rather than at each return so no exit can forget it.
+    if request is not None and request.url.scheme == "https":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000"
     return response
+
+
+
+# Paths reachable WITHOUT a token. Split into exact documents and prefix-anchored trees, because
+# the previous form mixed `path in [...]` with `endswith()` and `in` substring tests — and those
+# two matched far more than the routes they were written for. Any request whose path merely ENDED
+# in "/ca.crt" or a favicon name skipped authentication entirely, so `GET /history/ca.crt` reached
+# its handler unauthenticated (it 500'd on the user_id the middleware never set, which is the only
+# reason nothing leaked). A route added later that reads the database before touching
+# request.state would have been silently public to anyone who named their resource "ca.crt".
+#
+# The rule now: exact membership for documents, startswith for trees. Nothing is public by accident,
+# and adding a route cannot quietly opt it out of auth.
+PUBLIC_PATHS = frozenset({
+    "/health", "/", "/admin", "/voice", "/auth/login",
+    # /demo/session is unauthenticated by design — it is how a visitor GETS a credential, exactly
+    # like /auth/login. It creates its own isolated household and can reach no existing data; its
+    # own per-IP limit stands in for the auth check.
+    "/demo/session",
+    "/favicon.svg", "/favicon.png", "/favicon.ico", "/ca.crt",
+})
+# Static trees. Every mount is absolute at the root (see app.mount below) and there is no root_path
+# or base-path deployment, so anchoring these at "/" loses nothing the suffix tests provided.
+PUBLIC_PREFIXES = ("/assets/", "/static/", "/stt-models/", "/face-models/", "/wake-models/", "/ort/")
 
 
 @app.middleware("http")
 async def security_middleware(request: Request, call_next):
     path = request.url.path
-    if (request.method == "OPTIONS" 
-            # /demo/session is unauthenticated by design — it is how a visitor GETS a credential,
-            # exactly like /auth/login. It creates its own isolated household and can reach no
-            # existing data; its own per-IP limit stands in for the auth check.
-            or path in ["/health", "/", "/admin", "/voice", "/auth/login", "/demo/session",
-                        "/favicon.svg", "/favicon.png", "/favicon.ico", "/ca.crt"]
-            or path.endswith("/favicon.svg") or path.endswith("/favicon.png") or path.endswith("/favicon.ico") or path.endswith("/ca.crt")
-            or "/static/" in path or "/assets/" in path or "/stt-models/" in path
-            or "/face-models/" in path or "/wake-models/" in path
-            or "/ort/" in path):
+    if request.method == "OPTIONS" or path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES):
         resp = await call_next(request)
         # Vite emits content-hashed bundles under /assets — safe to cache forever.
-        if "/assets/" in path:
-            return _apply_security_headers(resp, "public, max-age=31536000, immutable", csp=False)
+        if path.startswith("/assets/"):
+            return _apply_security_headers(resp, "public, max-age=31536000, immutable", csp=False, request=request)
         # The STT bundle is unauthenticated on purpose: it is a public, SHA-256-pinned upstream
         # model — no secret — and the Web Worker that fetches it cannot attach a Bearer token.
         # Immutable because the pinned files only change with a version bump.
@@ -316,17 +337,22 @@ async def security_middleware(request: Request, call_next):
         # url browsers had been told never to revalidate — and they would keep the old weights
         # for a year. It gets a revalidating policy instead; StaticFiles serves ETags, so the
         # normal case is a cheap 304 rather than a re-download.
-        if "/ort/" in path:
-            return _apply_security_headers(resp, "public, max-age=31536000, immutable", csp=False)
+        if path.startswith("/ort/"):
+            return _apply_security_headers(resp, "public, max-age=31536000, immutable", csp=False, request=request)
         # Same reasoning as /stt-models: fixed filenames, so `immutable` would be a lie if the
         # pinned weights were ever re-pinned. Revalidate; StaticFiles' ETag makes that a cheap 304.
-        if "/stt-models/" in path or "/face-models/" in path or "/wake-models/" in path:
-            return _apply_security_headers(resp, "public, no-cache", csp=False)
-        return _apply_security_headers(resp)
+        if path.startswith(("/stt-models/", "/face-models/", "/wake-models/")):
+            return _apply_security_headers(resp, "public, no-cache", csp=False, request=request)
+        return _apply_security_headers(resp, request=request)
 
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
-        return Response(content=json.dumps({"error": "Auth required"}), status_code=401)
+        # Through the header helper, not around it: these are the responses an attacker
+        # provokes, and they were the only ones shipping no CSP, no nosniff and no framing
+        # protection. media_type so the JSON body is not sniffable as anything else.
+        return _apply_security_headers(Response(
+            content=json.dumps({"error": "Auth required"}), status_code=401,
+            media_type="application/json"), request=request)
     token = auth_header[7:]
 
     conn = get_db()
@@ -377,7 +403,9 @@ async def security_middleware(request: Request, call_next):
         conn.close()
 
     if not is_authenticated:
-        return Response(content=json.dumps({"error": "Invalid or expired token"}), status_code=403)
+        return _apply_security_headers(Response(
+            content=json.dumps({"error": "Invalid or expired token"}), status_code=403,
+            media_type="application/json"), request=request)
 
     # Rate-limit ALL authenticated callers (admins included), keyed on user id. Exempt the gesture
     # report — it posts at video rate but is gated by an active, separately-authorized mode.
@@ -387,7 +415,7 @@ async def security_middleware(request: Request, call_next):
                                 "detail": "Rate limit exceeded — slow down a moment and retry."}),
             status_code=429, media_type="application/json", headers={"Retry-After": "5"})
 
-    return _apply_security_headers(await call_next(request))
+    return _apply_security_headers(await call_next(request), request=request)
 
 
 def _household(request: Request) -> int:
@@ -578,6 +606,15 @@ def login(req: LoginRequest, request: Request):
         row = conn.execute("SELECT id, password_hash, role FROM users WHERE username = ?", (req.username,)).fetchone()
         if not row or not verify_password(req.password, row["password_hash"]):
             raise HTTPException(status_code=401, detail="Invalid username or password")
+        # Self-heal a legacy hash. verify_password still accepts the old "<salt>:<hex>" form at
+        # 100k iterations — six times below the floor this code sets for itself — and the comment
+        # promising those are "re-hashed on next password change" was empty, because until now
+        # there was no way to change a password at all. The plaintext is in hand exactly here, so
+        # the upgrade costs nothing and needs no action from the account holder.
+        if not row["password_hash"].startswith("pbkdf2_sha256$"):
+            conn.execute("UPDATE users SET password_hash = ? WHERE id = ?",
+                         (hash_password(req.password), row["id"]))
+            logger.info("Upgraded legacy password hash for user %d on login", row["id"])
         token = secrets.token_hex(32)
         expires = (datetime.now(timezone.utc) + timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
         # Store only the hash; the plaintext token is returned to the client once.
@@ -796,6 +833,50 @@ def logout(request: Request):
         finally:
             conn.close()
     return {"status": "ok"}
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str = Field(..., min_length=1, max_length=200)
+    new_password: str = Field(..., min_length=8, max_length=200)
+
+
+@app.post("/auth/password")
+def change_password(req: PasswordChangeRequest, request: Request):
+    """Change the caller's own password.
+
+    Until this existed, rotation required shell access on the box (manage.py reset-password), while
+    db.py and the README both told users to "change password via /admin UI" — a UI that was never
+    built. That gap also stranded every legacy 100k-iteration hash, since the upgrade path was
+    documented as happening "on next password change".
+
+    Verifies the CURRENT password rather than trusting the session: a stolen token should not be
+    enough to take ownership of an account. On success every other session is revoked, so if the
+    reason for changing it was a leak, the leak is closed by the same action.
+    """
+    if req.current_password == req.new_password:
+        raise HTTPException(status_code=400, detail="The new password must be different")
+    conn = get_db()
+    try:
+        row = conn.execute("SELECT password_hash FROM users WHERE id = ?",
+                           (request.state.user_id,)).fetchone()
+        if not row or not verify_password(req.current_password, row["password_hash"]):
+            # Deliberately the same shape of failure as a bad login, and rate-limited by the
+            # per-user limiter the middleware already applies.
+            raise HTTPException(status_code=403, detail="Current password is incorrect")
+        conn.execute("UPDATE users SET password_hash = ? WHERE id = ?",
+                     (hash_password(req.new_password), request.state.user_id))
+        # Keep THIS session alive and drop the rest: the caller stays signed in where they are,
+        # and anyone holding an older token for this account does not.
+        auth_header = request.headers.get("Authorization", "")
+        current = hash_token(auth_header[7:]) if auth_header.startswith("Bearer ") else ""
+        cur = conn.execute("DELETE FROM auth_sessions WHERE user_id = ? AND token != ?",
+                           (request.state.user_id, current))
+        conn.commit()
+        revoked = cur.rowcount
+    finally:
+        conn.close()
+    _audit(request, "auth.password_change", f"other sessions revoked: {revoked}")
+    return {"status": "ok", "other_sessions_revoked": revoked}
 
 
 @app.post("/auth/logout-all")
@@ -1531,9 +1612,19 @@ def identify_face(req: FaceIdentifyRequest, request: Request):
             best, best_sim = r["name"], sim
     if best is None:
         return {"name": None, "score": None}
+    # A precise similarity turns this into a hill-climbing oracle: submit a vector, nudge it toward
+    # a higher score, repeat, and a face template can be reconstructed without ever seeing one. The
+    # 120 rpm limit makes that slow rather than impossible, and faces can gate device control when
+    # REQUIRE_PRESENCE_FOR_CONTROL is on. Admins keep the exact figure because it is the number that
+    # makes a failed match diagnosable ("0.31 — try better lighting"); everyone else gets one
+    # decimal, which still distinguishes "nearly matched" from "nowhere close" but carries far too
+    # little gradient to climb.
+    precise = bool(getattr(request.state, "is_admin", False))
+    def _score(v):
+        return round(v, 3) if precise else round(v, 1)
     if best_sim >= FACE_RECOGNIZE_THRESHOLD:
-        return {"name": best, "score": round(best_sim, 3)}
-    return {"name": "unknown", "score": round(best_sim, 3)}
+        return {"name": best, "score": _score(best_sim)}
+    return {"name": "unknown", "score": _score(best_sim)}
 
 
 _AUDIT_CAP = 5000   # keep the most recent N audit rows
