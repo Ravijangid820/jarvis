@@ -19,6 +19,7 @@ import urllib.error
 import urllib.request
 from typing import Any, Dict, List, Optional
 
+import safehttp
 from config import HA_ALLOWED_ENTITIES, HA_TOKEN, HA_URL, logger
 
 _TIMEOUT = 5  # seconds — a LAN call; never let a dead HA hang a chat turn
@@ -125,7 +126,11 @@ def _request(method: str, path: str, payload: Optional[dict] = None) -> Optional
         method=method,
     )
     try:
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as r:
+        # safehttp rather than urllib.request: HA_URL is nearly always a LAN address (which stays
+        # allowed — see safehttp.py), but this request carries a long-lived Home Assistant token,
+        # and urllib forwards Authorization across redirects to any host. That header is the one
+        # thing here worth stealing, so the hop is capped and the credential dropped off-host.
+        with safehttp.urlopen(req, timeout=_TIMEOUT) as r:
             return json.loads(r.read().decode() or "null")
     except Exception as e:
         logger.warning("Home Assistant %s %s failed: %s", method, path, e)
@@ -164,7 +169,7 @@ def probe_entity(entity_id: str) -> tuple:
     req = urllib.request.Request(f"{HA_URL}/api/states/{entity_id}",
                                  headers={"Authorization": f"Bearer {HA_TOKEN}"})
     try:
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as r:
+        with safehttp.urlopen(req, timeout=_TIMEOUT) as r:
             return ENTITY_FOUND, json.loads(r.read().decode() or "null")
     except urllib.error.HTTPError as e:
         if e.code == 404:
@@ -183,9 +188,11 @@ def test_connection(url: Optional[str], token: Optional[str]) -> tuple:
     token = token or HA_TOKEN
     if not url or not token:
         return False, "URL and token are both required."
+    # The one HA call whose URL comes straight from a form field rather than from config, so the
+    # guard matters most here — and it is sent with a bearer token attached.
     req = urllib.request.Request(f"{url}/api/", headers={"Authorization": f"Bearer {token}"})
     try:
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as r:
+        with safehttp.urlopen(req, timeout=_TIMEOUT) as r:
             json.loads(r.read().decode() or "null")
         return True, "Connected to Home Assistant."
     except urllib.error.HTTPError as e:

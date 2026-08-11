@@ -7,9 +7,9 @@ import json
 import logging
 import os
 import urllib.request
-from urllib.parse import urlsplit
 from typing import Any, Dict, List, Tuple
 
+import safehttp
 from config import APP_VERSION, BASE_DIR
 
 logger = logging.getLogger("jarvis")
@@ -56,9 +56,9 @@ def add_server(name: str, url: str, server_type: str = "http", description: str 
     url = (url or "").strip()
     if not name:
         raise ValueError("Server name is required.")
-    parsed = urlsplit(url)
-    if parsed.scheme not in ("http", "https") or not parsed.netloc or parsed.username or parsed.password:
-        raise ValueError("Use a complete HTTP(S) MCP endpoint URL without embedded credentials.")
+    # Checked at SAVE time as well as at fetch time, so a bad endpoint is rejected in the admin
+    # form rather than accepted and then failing every time a tool is discovered.
+    url = safehttp.guard_url(url)
 
     servers = get_servers()
     entry = {
@@ -139,7 +139,9 @@ def _rpc(url: str, payload: Dict[str, Any], session_id: str | None = None) -> Tu
     if session_id:
         headers["Mcp-Session-Id"] = session_id
     req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
-    with urllib.request.urlopen(req, timeout=8.0) as response:
+    # safehttp, not urllib: caps the redirect chain, re-checks each hop, and drops the session id
+    # if the endpoint bounces us to a different host. See safehttp.py for what it does NOT defend.
+    with safehttp.urlopen(req, timeout=8.0) as response:
         raw = response.read(_MAX_RESPONSE_BYTES + 1)     # don't trust the server's advertised size
         if len(raw) > _MAX_RESPONSE_BYTES:
             raise ValueError("MCP endpoint returned an oversized response.")
@@ -153,9 +155,7 @@ def discover_tools(url: str) -> List[Dict[str, Any]]:
     Discovery is intentionally request-scoped. It avoids long-lived server sessions and
     any cross-user state until a tool-execution policy is in place.
     """
-    parsed = urlsplit((url or "").strip())
-    if parsed.scheme not in ("http", "https") or not parsed.netloc:
-        raise ValueError("Only complete HTTP(S) Streamable MCP endpoint URLs are supported.")
+    url = safehttp.guard_url(url)
     initialized, session_id = _rpc(url, {
         "jsonrpc": "2.0", "id": 1, "method": "initialize",
         "params": {"protocolVersion": _PROTOCOL_VERSION, "capabilities": {}, "clientInfo": _CLIENT_INFO},

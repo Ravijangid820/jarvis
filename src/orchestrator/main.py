@@ -1113,6 +1113,14 @@ def admin_services(request: Request) -> Dict[str, Any]:
 
 
 # ----------------- MCP Server Management -----------------
+# The MCP server list is process-wide, not per-household, and configuring one makes this server
+# fetch a URL a caller chose. In demo mode every visitor is an admin OF THEIR OWN HOUSEHOLD, so
+# _require_admin does not mean "trusted operator" there — it means "anyone who clicked Try it".
+# Until MCP config is household-scoped, demo households stay out of it entirely; that, rather
+# than an address blocklist, is what keeps untrusted callers away from this fetch (safehttp.py).
+_MCP_DEMO_DETAIL = "MCP servers are configured by the operator; they are read-only in public Demo Mode."
+
+
 @app.get("/mcp/servers")
 def get_mcp_servers(request: Request):
     """Return configured MCP tool servers."""
@@ -1124,6 +1132,7 @@ def get_mcp_servers(request: Request):
 def add_mcp_server(req: MCPServerRequest, request: Request):
     """Add or update an MCP server."""
     _require_admin(request)
+    _require_not_demo(_MCP_DEMO_DETAIL)
     try:
         server = mcp.add_server(req.name, req.url, req.type, req.description)
         return {"status": "ok", "server": server}
@@ -1137,6 +1146,7 @@ def add_mcp_server(req: MCPServerRequest, request: Request):
 def delete_mcp_server(name: str, request: Request):
     """Delete an MCP server by name."""
     _require_admin(request)
+    _require_not_demo(_MCP_DEMO_DETAIL)
     if mcp.delete_server(name):
         return {"status": "ok"}
     raise HTTPException(status_code=404, detail="Server not found")
@@ -1146,6 +1156,7 @@ def delete_mcp_server(name: str, request: Request):
 def test_mcp_server(req: MCPServerTestRequest, request: Request):
     """Test connection to an MCP server URL."""
     _require_admin(request)
+    _require_not_demo(_MCP_DEMO_DETAIL)
     ok, detail = mcp.test_server(req.url)
     return {"ok": ok, "detail": detail}
 

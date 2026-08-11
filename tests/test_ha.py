@@ -1,7 +1,9 @@
 """Home Assistant integration — the security-relevant pure logic.
 
 No network, no TestClient: resolve_entity is pure (allowlist injected), and the client
-functions are exercised with a monkeypatched urlopen. The gates themselves
+functions are exercised with a monkeypatched urlopen — safehttp.urlopen, which is what ha.py
+calls; patching urllib's would no longer intercept anything, and the tests would quietly
+start making real requests instead of failing. The gates themselves
 (_can_control_devices etc.) are covered by the existing API tests.
 """
 import json
@@ -101,7 +103,7 @@ def test_turn_posts_generic_homeassistant_service(monkeypatch):
         return _FakeResp({})
     monkeypatch.setattr(ha, "HA_URL", "http://ha.test:8123")
     monkeypatch.setattr(ha, "HA_TOKEN", "tok123")
-    monkeypatch.setattr(ha.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(ha.safehttp, "urlopen", fake_urlopen)
     assert ha.turn("light.kitchen", "on") is True
     assert seen["url"] == "http://ha.test:8123/api/services/homeassistant/turn_on"
     assert seen["payload"] == {"entity_id": "light.kitchen"}
@@ -119,7 +121,7 @@ def test_network_failure_is_failsoft(monkeypatch):
         raise OSError("connection refused")
     monkeypatch.setattr(ha, "HA_URL", "http://ha.test:8123")
     monkeypatch.setattr(ha, "HA_TOKEN", "tok123")
-    monkeypatch.setattr(ha.urllib.request, "urlopen", boom)
+    monkeypatch.setattr(ha.safehttp, "urlopen", boom)
     assert ha.turn("light.kitchen", "on") is False
     assert ha.get_state("light.kitchen") is None
     assert ha.ping() is False
@@ -279,7 +281,7 @@ def test_run_maps_domain_to_service_with_hardcoded_payload(monkeypatch):
         return _FakeResp({})
     monkeypatch.setattr(ha, "HA_URL", "http://ha.test:8123")
     monkeypatch.setattr(ha, "HA_TOKEN", "tok")
-    monkeypatch.setattr(ha.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(ha.safehttp, "urlopen", fake_urlopen)
     assert ha.run("automation.movie_night") is True
     assert calls[-1] == ("http://ha.test:8123/api/services/automation/trigger",
                          {"entity_id": "automation.movie_night", "skip_condition": False})
@@ -372,7 +374,7 @@ def test_ha_stop_service_sequence(monkeypatch):
         return _FakeResp({})
     monkeypatch.setattr(ha, "HA_URL", "http://ha.test:8123")
     monkeypatch.setattr(ha, "HA_TOKEN", "tok")
-    monkeypatch.setattr(ha.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(ha.safehttp, "urlopen", fake_urlopen)
     assert ha.stop("automation.morning") is True
     assert calls[-2] == ("http://ha.test:8123/api/services/automation/turn_off",
                          {"entity_id": "automation.morning", "stop_actions": True})
@@ -560,13 +562,13 @@ def test_probe_entity_maps_404_to_missing_and_other_errors_to_unreachable(monkey
 
     monkeypatch.setattr(ha, "HA_URL", "http://ha.test:8123")
     monkeypatch.setattr(ha, "HA_TOKEN", "tok")
-    monkeypatch.setattr(ha.urllib.request, "urlopen",
+    monkeypatch.setattr(ha.safehttp, "urlopen",
                         _raise(urllib.error.HTTPError("u", 404, "Not Found", None, None)))
     assert ha.probe_entity("switch.gone")[0] == ha.ENTITY_MISSING
-    monkeypatch.setattr(ha.urllib.request, "urlopen",
+    monkeypatch.setattr(ha.safehttp, "urlopen",
                         _raise(urllib.error.HTTPError("u", 500, "Boom", None, None)))
     assert ha.probe_entity("switch.gone")[0] == ha.HA_UNREACHABLE
-    monkeypatch.setattr(ha.urllib.request, "urlopen", _raise(OSError("no route to host")))
+    monkeypatch.setattr(ha.safehttp, "urlopen", _raise(OSError("no route to host")))
     assert ha.probe_entity("switch.gone")[0] == ha.HA_UNREACHABLE
 
 

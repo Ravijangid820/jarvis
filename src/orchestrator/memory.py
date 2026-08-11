@@ -52,15 +52,27 @@ def init_embeddings():
     onnx_model = None
     try:
         meta_path = os.path.join(EMBED_ONNX_DIR, "meta.json")
-        if not os.path.isfile(meta_path) and os.environ.get("JARVIS_AUTO_DOWNLOAD_MODELS", "1") != "0":
-            logger.info("ONNX embedding bundle not found at %s. Auto-downloading via download_models.sh...", EMBED_ONNX_DIR)
-            try:
-                import subprocess
-                script_path = BASE_DIR / "src" / "scripts" / "download_models.sh"
-                if script_path.exists():
-                    subprocess.run(["bash", str(script_path)], check=True)
-            except Exception as e:
-                logger.warning("Auto-download of embedding model failed: %s", e)
+        if not os.path.isfile(meta_path):
+            # Fetching models is SETUP work, not something a request-serving process should do:
+            # it means network egress, a multi-hundred-MB write and an arbitrary-length stall
+            # inside the app's own startup — and under the hardened unit it cannot succeed anyway
+            # (ProtectSystem=strict). setup.sh and download_models.sh are where this belongs, and
+            # the images bake the bundle at /opt/jarvis/embed_onnx, so nothing needs it by default.
+            # JARVIS_AUTO_DOWNLOAD_MODELS=1 opts back in for a hands-off first run.
+            if os.environ.get("JARVIS_AUTO_DOWNLOAD_MODELS") == "1":
+                logger.info("ONNX embedding bundle not found at %s. JARVIS_AUTO_DOWNLOAD_MODELS=1 "
+                            "— fetching via download_models.sh...", EMBED_ONNX_DIR)
+                try:
+                    import subprocess
+                    script_path = BASE_DIR / "src" / "scripts" / "download_models.sh"
+                    if script_path.exists():
+                        subprocess.run(["bash", str(script_path)], check=True)
+                except Exception as e:
+                    logger.warning("Auto-download of embedding model failed: %s", e)
+            else:
+                logger.warning("No ONNX embedding bundle at %s — run 'bash src/scripts/download_models.sh'. "
+                               "(Set JARVIS_AUTO_DOWNLOAD_MODELS=1 to fetch it automatically at startup.)",
+                               EMBED_ONNX_DIR)
 
         if os.path.isfile(meta_path):
             with open(meta_path) as f:
