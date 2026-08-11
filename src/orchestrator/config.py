@@ -166,26 +166,46 @@ IDLE_CHECK_INTERVAL = 30       # check for idle every 30 seconds
 FACT_DEDUP_SIM = 0.90          # semantic-similarity merge threshold
 FACT_DEDUP_WORD = 0.85         # word-overlap fallback threshold
 
-FACT_EXTRACTION_PROMPT = """Analyze this conversation and extract any personal facts about the user.
-Return a JSON array. Each fact must be a complete, self-contained sentence that would make sense on its own.
+# The subject rule and the wanting/doing rule are not stylistic. Without them the extractor
+# flattened "I'm learning Rust as a separate project from Jarvis" into "The user's Jarvis project
+# uses the Rust programming language" — a fact that is simply false, and which would then be
+# asserted confidently in every future conversation. Wrong memories are worse than no memories.
+FACT_EXTRACTION_PROMPT = """Extract durable personal facts about the user from these messages.
+
+Return ONLY a JSON array of OBJECTS. Every element must have exactly two keys, "category" and
+"content". Never return bare strings.
 
 Categories: personal, family, preferences, location, work, education, interests, technical, other
 
 Rules:
-- Only extract FACTS the user explicitly stated about themselves. Do NOT infer or guess.
-- Each fact must be a full sentence with context (e.g. "The user's name is Alex" not just "Alex").
-- Include details, nicknames, relationships mentioned.
-- If the user corrects previous info, extract the CORRECTED version.
-- Skip greetings, questions, or generic statements.
-- If no personal facts found, return exactly: []
+- THE SUBJECT IS THE USER. Write "The user ...". If they mention a project, tool or machine, the
+  fact is about their RELATIONSHIP to it, not a property of it moved onto them.
+- Keep scope words. "separate from", "not part of", "at work", "for my side project" change the
+  meaning. If a detail belongs to one thing and not another, say which.
+- Distinguish WANTING from DOING. "I want to learn X" is not "The user uses X". Say "wants to",
+  "is learning", "plans to" when that is what was said.
+- Record only what IS. Never record what the user did not say, did not specify, or left unclear.
+  An absence is not a fact.
+- Only what was explicitly stated. Never infer, never generalise, never merge two statements into
+  one claim neither of them made.
+- Skip greetings, questions, commands to the assistant, and anything about the assistant itself.
+- If there are no durable personal facts, return exactly: []
 
-Examples of good extractions:
+Good:
 [{"category": "personal", "content": "The user's name is Alex, also called Al by close friends"},
- {"category": "location", "content": "The user currently lives in Springfield"},
- {"category": "family", "content": "The user has a younger sibling who is studying medicine"},
- {"category": "preferences", "content": "The user's favourite car is the Tesla Model 3"},
  {"category": "work", "content": "The user works as a backend developer"},
- {"category": "technical", "content": "The user prefers Python and FastAPI for building APIs"}]
+ {"category": "technical", "content": "The user runs their home server on an old dual-core laptop"},
+ {"category": "technical", "content": "The user refuses to download binaries from third-party mirrors"},
+ {"category": "interests", "content": "The user wants to learn Rust for a side project, separate from their main work"}]
+
+Bad, and why:
+ "The user likes Rust"                                      <- a bare string; must be an object
+ {"content": "The user's side project uses Rust"}           <- subject must be the user
+ {"content": "The user uses Rust"}                          <- they said they WANT to learn it
+ {"content": "The user's main work uses Rust"}              <- drops "separate from", inverting it
+ {"content": "The user lives at /srv/app on their server"}  <- that is where the PROJECT lives
+ {"content": "The user has not stated their location"}      <- an absence is not a fact
+ {"content": "The user's goal was not specified"}           <- same; record nothing instead
 
 Return ONLY the JSON array, nothing else."""
 

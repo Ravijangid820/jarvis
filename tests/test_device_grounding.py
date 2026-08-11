@@ -303,3 +303,77 @@ def test_a_single_unprocessably_long_message_is_truncated_not_skipped_forever():
     kept, prompt, n_predict = _plan(1, 60000)
     assert len(kept) == 1, "one huge message must still make progress, or it blocks the queue"
     assert prompt + n_predict <= MAX_CONTEXT_TOKENS
+
+
+# --- fact shape tolerance ----------------------------------------------------------------------
+def _store_from(monkeypatch, reply_text):
+    """Run extract_facts_batch against a canned LLM reply; return what it tried to store."""
+    stored = []
+    monkeypatch.setattr(memory, "request_llm", lambda *a, **k: {"choices": [{"message": {"content": reply_text}}]})
+    monkeypatch.setattr(memory, "llm_content", lambda r: r["choices"][0]["message"]["content"])
+    monkeypatch.setattr(memory, "store_fact", lambda uid, cat, content, source="auto": stored.append((cat, content)))
+    monkeypatch.setattr(memory, "_mark_messages_processed", lambda ids: None)
+    memory.extract_facts_batch([{"id": 1, "user_id": 7, "content": "I like Rust."}])
+    return stored
+
+
+def test_a_bare_array_of_sentences_is_kept_not_discarded(monkeypatch):
+    """Observed live: the model answers with plain strings about as often as with objects, and the
+    dict-only filter threw five correct facts away without logging a thing."""
+    stored = _store_from(monkeypatch, '["The user likes Rust.", "The user wants to learn inference."]')
+    assert [c for _, c in stored] == ["The user likes Rust.", "The user wants to learn inference."]
+    assert all(cat == "other" for cat, _ in stored), "uncategorised facts land in 'other'"
+
+
+def test_objects_still_carry_their_category(monkeypatch):
+    stored = _store_from(monkeypatch, '[{"category":"work","content":"The user is an engineer."}]')
+    assert stored == [("work", "The user is an engineer.")]
+
+
+def test_a_mixed_reply_keeps_both_shapes(monkeypatch):
+    stored = _store_from(monkeypatch,
+                         '[{"category":"work","content":"The user is an engineer."}, "The user likes Rust."]')
+    assert len(stored) == 2 and ("other", "The user likes Rust.") in stored
+
+
+def test_entries_that_are_neither_are_skipped_without_crashing(monkeypatch):
+    stored = _store_from(monkeypatch, '[123, null, {"content":"The user likes Rust."}, "ok"]')
+    kept = [c for _, c in stored]
+    assert "The user likes Rust." in kept
+    assert not any(c in ("123", "None") for c in kept)
+
+
+# --- absences are not facts --------------------------------------------------------------------
+# The model produced three of these in a batch where it had already extracted the opposite, so they
+# contradicted real facts sitting beside them in the same profile block.
+
+@pytest.mark.parametrize("content", [
+    "The user has not stated any rules about downloading models or binaries.",
+    "The user has not specified which smart-home devices they have.",
+    "The user wants to learn a programming language, but the specific language was not stated.",
+    "The goal remains unclear.",
+    "No information was provided about their location.",
+])
+def test_absence_shaped_facts_are_dropped(content):
+    assert memory._is_absence(content) is True
+
+
+@pytest.mark.parametrize("content", [
+    "The user refuses to download models from third-party mirrors.",
+    "The user avoids using Codespaces because it is billed hourly.",
+    "The user does not use pip; they use uv.",
+    "The user has no GPU in their home server.",
+    "The user's home server has AVX but lacks AVX2 support.",
+    "The user is not planning to rewrite Jarvis in Rust.",
+])
+def test_negative_preferences_are_real_facts_and_survive(content):
+    """The filter must catch 'they did not SAY x', never 'they do not DO x' — half of what this
+    user has told the assistant is a refusal, and those are among the most useful facts there are."""
+    assert memory._is_absence(content) is False
+
+
+def test_an_absence_never_reaches_storage(monkeypatch):
+    stored = _store_from(monkeypatch,
+                         '[{"category":"work","content":"The user is an engineer."},'
+                         ' {"category":"other","content":"The user has not stated their location."}]')
+    assert [c for _, c in stored] == ["The user is an engineer."]

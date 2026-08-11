@@ -6,6 +6,7 @@ Depends on config, db, and llm — never on chat/main (keeps the import graph ac
 import json
 import os
 import queue
+import re
 import threading
 import time
 from collections import defaultdict
@@ -635,6 +636,29 @@ def _too_many_attempts(msg_id: int) -> bool:
     return _extract_attempts[msg_id] >= FACT_EXTRACTION_MAX_ATTEMPTS
 
 
+# Statements ABOUT THE CONVERSATION rather than about the user. The model produced three of these
+# ("The user has not stated any rules about downloading models or binaries") in a batch where it had
+# already, correctly, extracted the opposite — so they are not merely noise, they contradict real
+# facts sitting beside them in the same profile.
+#
+# Deliberately narrow: it matches meta-statements about what went unsaid, NOT negative preferences.
+# "The user refuses to use third-party mirrors" and "The user avoids Codespaces" are real facts and
+# must survive.
+_ABSENCE_FACT = re.compile(
+    r"\b(?:"
+    r"(?:has|have|had|did|was|were|is|are)\s+not\s+(?:yet\s+)?"
+    r"(?:state[ds]?|said|specif(?:y|ied)|mention(?:ed)?|provide[ds]?|share[ds]?|given|told)"
+    r"|no(?:t)?\s+(?:information|details?|specifics?)\s+(?:was|were|is|are)?\s*(?:given|provided|stated)"
+    r"|(?:remains?|is|was)\s+(?:unclear|unspecified|unknown|unstated)"
+    r"|was\s+not\s+stated"
+    r")\b", re.I)
+
+
+def _is_absence(content: str) -> bool:
+    """True for 'the user did not say X' — an absence, which is not a fact about anyone."""
+    return bool(_ABSENCE_FACT.search(content or ""))
+
+
 def _parse_facts(response_text: str) -> tuple:
     """(facts, complete) from the extractor's reply.
 
@@ -760,11 +784,22 @@ def extract_facts_batch(messages: List[Dict]):
                 logger.warning("Memory Core: extractor output was truncated for user %d; "
                                "kept %d complete fact(s) and will retry the batch", user_id, len(facts))
             for fact in facts:
+                # The model is not consistent about shape: sometimes [{"category","content"}],
+                # sometimes a plain array of sentences. Dropping the latter discarded whole
+                # batches of correct facts without a word in the log — the same silent loss as
+                # the truncation, from a different direction. A sentence with no category is
+                # still a fact; file it under "other" rather than throw it away.
+                if isinstance(fact, str):
+                    fact = {"category": "other", "content": fact}
                 if not isinstance(fact, dict):
+                    logger.debug("Memory Core: ignoring unusable fact entry %r", fact)
                     continue
-                category = fact.get("category", "other").lower().strip()
-                content = fact.get("content", "").strip()
+                category = (fact.get("category") or "other").lower().strip()
+                content = (fact.get("content") or "").strip()
                 if not content or len(content) < 5:
+                    continue
+                if _is_absence(content):
+                    logger.debug("Memory Core: dropping absence-shaped fact %r", content)
                     continue
                 if category not in VALID_FACT_CATEGORIES:
                     category = "other"
