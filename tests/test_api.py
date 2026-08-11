@@ -763,3 +763,21 @@ def test_a_legacy_hash_upgrades_itself_on_the_next_login(client):
     assert stored.startswith("pbkdf2_sha256$"), "the legacy hash should have healed on sign-in"
     # and the account still works afterwards
     assert client.post("/auth/login", json={"username": "legacyuser", "password": "legacy-pass"}).status_code == 200
+
+
+# --- CORS must not default to "*" ----------------------------------------------------------------
+# "*" let any site a LAN browser visits read this API's unauthenticated responses. Not forwarding a
+# port is no defence: the request is made BY a browser that is already inside the network.
+
+def test_no_cross_origin_access_by_default(client):
+    r = client.get("/health", headers={"Origin": "https://evil.example"})
+    assert r.status_code == 200, "the request itself still succeeds; the browser is what blocks"
+    assert "access-control-allow-origin" not in {k.lower() for k in r.headers}, \
+        "an unconfigured deployment must not hand its responses to arbitrary sites"
+
+
+def test_same_origin_use_is_unaffected(client):
+    """The bundled SPA calls the API with relative URLs, so it never sends an Origin at all. This
+    is the check that tightening CORS cannot lock the owner out of their own UI."""
+    r = client.get("/health")
+    assert r.status_code == 200 and r.json()["status"] == "ok"

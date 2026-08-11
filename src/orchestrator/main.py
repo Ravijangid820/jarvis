@@ -42,7 +42,7 @@ import chat
 import memory
 from auth import hash_password, hash_token, verify_password
 from intents import HOME_CONTROL_VERB, is_gesture_volume, parse_home_command, parse_reminder, parse_volume, says_more_than_command
-from config import (ADMIN_MAX_INPUT, ALLOWED_ORIGINS, APP_VERSION, BASE_DIR, CHROMA_DB_PATH,
+from config import (ADMIN_MAX_INPUT, ALLOWED_ORIGIN_REGEX, ALLOWED_ORIGINS, APP_VERSION, BASE_DIR, CHROMA_DB_PATH,
                     COMPLETION_RESERVE_DEFAULT, CONFIG, DEMO_MINT_PER_IP_HOURLY,
                     DEMO_PASSWORD, DEMO_PUBLIC_SIGNUP, DEMO_TTL_MINUTES,
                     DEMO_USER_ID_BASE, DEMO_USERNAME,
@@ -140,12 +140,23 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Jarvis Orchestrator", docs_url=None, redoc_url=None, lifespan=lifespan)
 
-# CORS: allow cross-origin requests from configured ALLOWED_ORIGINS (or "*" if empty)
-cors_origins = ALLOWED_ORIGINS if ALLOWED_ORIGINS else ["*"]
+# CORS. Empty means NO cross-origin caller is allowed — it used to mean "*", which is backwards:
+# the least-configured deployment got the most permissive policy. "LAN only" is no defence here
+# either, because the request is made by a BROWSER already inside the LAN; a page on any site the
+# owner visits can reach 192.168.x.y and, under "*", read the reply. Port forwarding never enters
+# into it.
+#
+# Nothing is lost by defaulting to none: the bundled SPA is served by this same process and calls
+# the API with relative URLs, so it is same-origin and never consults CORS. Set allowed_origins
+# (exact origins — the spec has no CIDR form) or allowed_origin_regex only for a genuinely
+# separate front end, such as a Vite dev server.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cors_origins,
-    allow_credentials=True if cors_origins != ["*"] else False,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_origin_regex=ALLOWED_ORIGIN_REGEX or None,
+    # Safe to enable now that neither field can be "*": credentials plus a wildcard is the
+    # combination browsers refuse outright, and the reason this was previously switched off.
+    allow_credentials=bool(ALLOWED_ORIGINS or ALLOWED_ORIGIN_REGEX),
     allow_methods=["*"],
     allow_headers=["*"],
 )

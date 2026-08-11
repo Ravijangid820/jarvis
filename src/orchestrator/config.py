@@ -77,6 +77,16 @@ RATE_LIMIT_RPM: int = CONFIG["orchestrator"]["rate_limit_requests_per_minute"]
 # Opt-in: require a recognized, authorized person physically present (per the cameras) before any
 # device control runs — even for an otherwise-authorized caller. Off by default.
 REQUIRE_PRESENCE_FOR_CONTROL: bool = bool(CONFIG["orchestrator"].get("require_presence_for_device_control", False))
+# Optional regex for cross-origin callers, e.g. a Vite dev server or a phone browsing a different
+# hostname. Only needed when the PAGE is served from somewhere other than this orchestrator — the
+# bundled SPA calls the API with relative URLs, so the normal deployment is same-origin and uses no
+# CORS at all. A LAN-wide value looks like:
+#   ^https?://(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3})(:\d+)?$
+# Left empty by default: "anyone on the LAN" still includes every site a LAN browser visits, since
+# the browser is what makes the request.
+_env_origin_regex = os.environ.get("ALLOWED_ORIGIN_REGEX")
+ALLOWED_ORIGIN_REGEX: str = (_env_origin_regex or "").strip() or \
+    (CONFIG["orchestrator"].get("allowed_origin_regex") or "").strip()
 _env_origins = os.environ.get("ALLOWED_ORIGINS")
 if _env_origins:
     ALLOWED_ORIGINS: List[str] = [x.strip() for x in _env_origins.split(",") if x.strip()]
