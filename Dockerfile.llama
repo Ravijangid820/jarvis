@@ -31,6 +31,11 @@ RUN set -eu; mkdir -p /out; \
 # --- Stage 2: Pre-baked llama-server runtime image ---
 FROM ${LLAMA_IMAGE}
 COPY --from=model /out/ /models/
+# Drop root. A bare numeric uid rather than useradd: the base is an upstream image whose contents
+# we do not control, and it may lack a shell or the passwd tooling — a numeric USER needs neither,
+# and the kernel does not care whether the id appears in /etc/passwd. Nothing here writes: the
+# weights are baked read-only and llama-server only reads them, so no chown is required.
+USER 10001:10001
 EXPOSE 8081
 ENTRYPOINT ["/app/llama-server"]
 CMD ["-m", "/models/Qwen3.5-2B-Q4_K_M.gguf", "-c", "4096", "-t", "4", "--host", "0.0.0.0", "--port", "8081", "--parallel", "1"]

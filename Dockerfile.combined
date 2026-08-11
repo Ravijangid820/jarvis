@@ -117,6 +117,22 @@ RUN sed -i 's/\r$//' src/scripts/*.sh; \
     test -x piper/piper && test -f piper/voices/en_GB-alan-medium.onnx
 COPY docker/ ./docker/
 RUN sed -i 's/\r$//' docker/*.sh && chmod +x docker/*.sh
+
+# --- Drop root --------------------------------------------------------------------------------
+# Same reasoning and the same uid as Dockerfile.orchestrator, so a bind mount prepared for one
+# image works for the other. This image also runs llama-server, but only on 127.0.0.1:8081 —
+# above 1024, so no capability is needed to bind it. The base is the upstream llama.cpp image,
+# hence the explicit useradd rather than assuming an account exists.
+# .venv is writable because `uv run` touches it; see the orchestrator image for why.
+RUN groupadd --gid 10001 jarvis 2>/dev/null || true; \
+    useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin jarvis 2>/dev/null || true; \
+    mkdir -p /app/memory /app/logs /app/.cache; \
+    chown -R 10001:10001 /app/memory /app/logs /app/config /app/.cache /app/.venv
+ENV XDG_CACHE_HOME=/app/.cache \
+    UV_CACHE_DIR=/app/.cache/uv \
+    HF_HOME=/app/.cache/hf
+USER 10001:10001
+
 EXPOSE 5000
 # Default = BOTH services (the whole point of this image).
 ENTRYPOINT ["/app/docker/all-in-one.sh"]

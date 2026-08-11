@@ -88,6 +88,35 @@ RUN sed -i 's/\r$//' src/scripts/*.sh; \
     test -x piper/piper && test -f piper/voices/en_GB-alan-medium.onnx
 COPY docker/ ./docker/
 RUN sed -i 's/\r$//' docker/*.sh && chmod +x docker/*.sh
+
+# --- Drop root --------------------------------------------------------------------------------
+# SECURITY.md promises "no process runs as root", which was true of the systemd install and false
+# of every Docker path — and compose is the quickest-start route in the README. A code-execution
+# bug in the orchestrator was therefore root inside the container against a writable image.
+#
+# A FIXED uid/gid, not a system-assigned one: /app/memory and /app/config are routinely
+# bind-mounted from the host, and a uid that changes between builds would silently lose write
+# access to the database on the next pull. 10001 is outside the range Debian assigns to system
+# users, so it cannot collide with a package's account. Document it — a host directory must be
+# writable by this uid (`sudo chown -R 10001:10001 ./memory ./config ./logs`).
+RUN groupadd --gid 10001 jarvis \
+    && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin jarvis \
+    # Exactly the paths the entrypoint writes to: config (it restores templates and seeds
+    # jarvis.json), memory (the database), logs. Everything else stays root-owned and read-only
+    # to the app, which is the point.
+    && mkdir -p /app/memory /app/logs /app/.cache \
+    && chown -R 10001:10001 /app/memory /app/logs /app/config /app/.cache \
+    # .venv too: `uv run` touches it even with a frozen lock, which is why the project's own
+    # hardened systemd unit lists it under ReadWritePaths. Without this the container would not
+    # start at all — and it would fail at exec time, not build time, so a green build would prove
+    # nothing.
+    && chown -R 10001:10001 /app/.venv
+# Keep caches inside the writable tree rather than in a HOME the user does not own.
+ENV XDG_CACHE_HOME=/app/.cache \
+    UV_CACHE_DIR=/app/.cache/uv \
+    HF_HOME=/app/.cache/hf
+USER 10001:10001
+
 EXPOSE 5000
 # The compose stacks gate the orchestrator on llama's health; this gates anything in front of it.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=5 \

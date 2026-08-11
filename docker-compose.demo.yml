@@ -16,6 +16,13 @@
 
 services:
   llama:
+    # Blocks privilege escalation outright: a setuid binary inside the image cannot gain
+    # anything, and the container starts with no capabilities at all. Neither the
+    # orchestrator, llama-server nor unprivileged nginx needs any.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     image: ${LLAMA_IMAGE:-ghcr.io/ravijangid820/jarvis-llama:latest}
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8081/health"]
@@ -26,6 +33,13 @@ services:
     restart: unless-stopped
 
   orchestrator:
+    # Blocks privilege escalation outright: a setuid binary inside the image cannot gain
+    # anything, and the container starts with no capabilities at all. Neither the
+    # orchestrator, llama-server nor unprivileged nginx needs any.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     image: ${ORCH_IMAGE:-ghcr.io/ravijangid820/jarvis-orchestrator:latest}
     depends_on:
       llama:

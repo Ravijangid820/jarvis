@@ -58,7 +58,23 @@ COPY --from=browser-models /out/stt  /usr/share/nginx/html/stt-models
 COPY docker/nginx.conf.template /etc/nginx/templates/default.conf.template
 ENV NGINX_ENVSUBST_FILTER="^JARVIS_" \
     JARVIS_API_UPSTREAM="http://orchestrator:5000"
-EXPOSE 80
+
+# --- Drop root --------------------------------------------------------------------------------
+# nginx normally starts as root to bind :80 and drops to the `nginx` user only for its workers, so
+# the master process — the one parsing config and handling the listening socket — stayed root.
+# Running the whole thing unprivileged needs three things:
+#   1. a port above 1024 (the template now listens on 8080);
+#   2. write access to the paths nginx and the base image's start-up hooks use: the cache dirs, the
+#      pid file, and /etc/nginx/conf.d, which is where the envsubst hook RENDERS our template. Miss
+#      that last one and the container starts, fails to write the config, and serves nothing;
+#   3. a pid path the user owns — /var/run is root-owned in the base image.
+# uid 101 is the `nginx` account the base image already ships, so file ownership stays meaningful.
+RUN mkdir -p /var/cache/nginx /var/run/nginx /etc/nginx/conf.d \
+    && chown -R 101:101 /var/cache/nginx /var/run/nginx /etc/nginx/conf.d /usr/share/nginx/html \
+    && sed -i 's#^pid .*#pid /var/run/nginx/nginx.pid;#' /etc/nginx/nginx.conf
+USER 101:101
+
+EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget -qO- http://localhost/ >/dev/null 2>&1 || exit 1
+  CMD wget -qO- http://localhost:8080/ >/dev/null 2>&1 || exit 1
 CMD ["nginx", "-g", "daemon off;"]

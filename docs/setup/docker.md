@@ -71,6 +71,29 @@ e.g. `ADMIN_PASS=secret docker compose up -d`.
 Both models are baked into the image, so a built image runs with **zero config and no runtime token** —
 including memory, offline.
 
+## Containers run as a non-root user
+
+Every image drops root: the orchestrator and llama run as uid **10001**, nginx as uid **101**, and
+every compose service adds `cap_drop: [ALL]` and `no-new-privileges:true`. A code-execution bug in
+the orchestrator therefore lands as an unprivileged account with no capabilities, rather than as
+root against a writable image.
+
+**If you bind-mount host directories, they must be writable by that uid.** Named volumes — the
+default in every compose file here — are chowned by Docker and need nothing. But if you swap one
+for a host path:
+
+```bash
+sudo chown -R 10001:10001 ./memory ./config ./logs
+```
+
+Without it the container starts and then fails on its first write (the database, or the config it
+seeds on first run). The uid is fixed rather than assigned at build time precisely so this only has
+to be done once and survives every upgrade.
+
+The frontend image listens on **8080** inside the container, since a process without
+`CAP_NET_BIND_SERVICE` cannot bind port 80. The published port is unchanged — compose maps
+`${FRONTEND_PORT:-80}` to it — so the URL you use does not move.
+
 ## What you see at startup
 Logs go to `docker compose logs -f` (or stream live if you run `up` without `-d`):
 - The **`llama`** container prints llama.cpp's own output — the model metadata it loaded and
