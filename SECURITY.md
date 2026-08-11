@@ -37,6 +37,13 @@ Jarvis is designed to run **self-hosted and offline** — no cloud APIs, no tele
   caller's permissions server-side; device-scoped API keys are bound to a single device.
 - **Input is bounded and validated**; all SQL is parameterized; a strict Content-Security-Policy and
   standard security headers are sent; the LLM server binds to `127.0.0.1`.
+- **Outbound fetches the server was *told* to make** (MCP endpoints, Home Assistant) go through
+  `safehttp.py`: redirect chains are capped and every hop re-validated, and `Authorization` is
+  dropped when a redirect changes host — otherwise urllib hands the Home Assistant token to
+  whatever a hostile endpoint redirects to. Link-local (cloud-metadata) addresses are refused
+  outright. LAN and loopback targets stay **allowed on purpose** — Home Assistant is on the LAN
+  and a local MCP server is a normal deployment; set `JARVIS_HTTP_ALLOW_LOCAL=0` to refuse them
+  on a deployment that really is exposed.
 - **Secrets are never committed** (`config/jarvis.json`, `*.key` are gitignored) and never logged.
 
 This is a **single-operator, trusted-LAN** threat model: the API is reachable over LAN + a private

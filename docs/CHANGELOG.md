@@ -4,7 +4,9 @@ All notable changes to this project are documented in this file.
 
 ---
 
-## Unreleased — the assistant is told what house it lives in
+## Unreleased — grounding, wake phrases, and a twelve-finding security pass
+
+### the assistant is told what house it lives in
 
 A real transcript showed it denying it could control anything ("I don't have a body or access to
 real-world devices"), inventing status it had no source for ("the lights are on, the temperature is
@@ -37,8 +39,83 @@ off the fan") goes to the model with the completed action stated as fact, so it 
 rather than the command. The split is a pure function (`says_more_than_command`) pinned by tests on
 real transcript lines.
 
-Not a bug, though it looked like one: `user_knowledge` was empty because that conversation contained
-no personal facts. Run against a fact-bearing message the extractor stored three, correctly.
+### the fact extractor was losing what it learned
+
+The empty `user_knowledge` table was first written off here as "not a bug — that conversation
+contained no personal facts". That was wrong, and a seeded test proved it: fed a paragraph of real
+biography, the extractor stored **nothing**. The generation was being cut off mid-JSON by the token
+budget, `json.loads` raised, and the handler discarded the whole batch — every fact in it, including
+the complete ones before the truncation point.
+
+- `_parse_facts()` now salvages a truncated array by scanning braces and keeping the objects that
+  did close, so a cut-off response loses the last fact instead of all of them.
+- The budget is no longer a fixed ceiling: `FACT_EXTRACTION_TOKENS` (1024) is a target,
+  `FACT_EXTRACTION_MIN_TOKENS` (256) a floor, and `_fit_batch()` trims the batch until prompt +
+  completion fit the context window. A test caught the first version of this fix pushing the total
+  past the window.
+- Messages are batched (`FACT_EXTRACTION_BATCH`), retried a bounded number of times
+  (`FACT_EXTRACTION_MAX_ATTEMPTS`) rather than forever, and bare strings coming back where objects
+  were expected are coerced instead of dropped.
+- Extraction waits for the LLM to go idle (`_wait_for_llm_idle`, capped at 180 s) — on 2 cores it
+  was competing with the conversation it was learning from.
+- Absence statements ("I don't have a car") are recognised and not stored as possessions.
+
+### more than one wake phrase
+
+The trained spotter is a classifier for exactly one phrase, and openWakeWord ships six models —
+`hey jarvis` is the only Jarvis-shaped one of them, so "jarvis, are you there" could not be added
+by configuration. Two detectors now run side by side while armed: the neural spotter for
+`hey jarvis` (instant, no transcription), and a transcript match against an editable list for
+everything else (`ok jarvis`, `jarvis`, `wake up jarvis`, `jarvis are you there`, …) about 0.4 s
+later. Say the command in the same breath and it is answered directly. Matching lives in
+`frontend/src/wake-phrases.js` as pure functions so the rules are testable without a microphone;
+the remainder is sliced from the original string, so `what's the weather` does not reach the model
+as `what s the weather`. Editable under **⚙ → Wake phrases**.
+
+### security review — twelve findings
+
+An external pass over the v3.3.0 tree. Full disposition in [AUDIT.md](AUDIT.md); the ones that
+change behaviour:
+
+- **The auth allowlist matched by prefix.** Any path *beginning* with an allowlisted string skipped
+  authentication. Now an exact-match set, with explicit prefixes for the static trees only.
+- **CORS no longer falls back to `*`** when unconfigured; `ALLOWED_ORIGIN_REGEX` covers the LAN, and
+  `allow_credentials` follows the real origin list.
+- **`POST /auth/password`** — change your own password without an admin editing the database. It
+  revokes every other session and keeps yours.
+- Enrolled face identities are admin/device-only, and the match score is rounded for non-admins so
+  it cannot be used as a distance oracle against enrolled faces.
+- HSTS is only sent over HTTPS, and 401/403 responses now carry the security headers too.
+- **Outbound fetches are guarded** (`safehttp.py`): redirect chains capped and re-checked, and
+  `Authorization` dropped when a redirect changes host — urllib would otherwise hand the Home
+  Assistant token to whatever a hostile MCP endpoint redirected to. Link-local (cloud-metadata)
+  addresses are blocked outright. LAN and loopback stay allowed, because Home Assistant lives on
+  the LAN and a local MCP server is a normal way to run one; `JARVIS_HTTP_ALLOW_LOCAL=0` tightens
+  that for exposed deployments.
+- **MCP configuration is closed to demo households.** A demo visitor is an admin of their own
+  household, and the MCP list is process-wide — so `_require_admin` alone let a visitor add an
+  entry everyone sees and make the server fetch a URL of their choosing.
+- **Embedding models are no longer downloaded by the web process.** `JARVIS_AUTO_DOWNLOAD_MODELS`
+  now defaults to off; setup fetches them, and the images bake them.
+- Three npm advisories with fixes taken (`postcss`, `nanoid`, `brace-expansion`). Four remain
+  without fixes and reach no shipped code — they are build-time only, absent from `dist/`.
+
+### containers and units
+
+Every image drops to a non-root user (uid `10001`, `101` for nginx; the frontend listens on `8080`),
+and every compose service runs `cap_drop: [ALL]` with `no-new-privileges:true`. **A bind mount over
+`/app/memory`, `/app/config` or `/app/logs` must now be chowned to `10001`.**
+
+The hardened systemd unit and the installer had drifted apart, and neither listed `config/` — so on
+a hardened install `ProtectSystem=strict` left it read-only and `/models/switch`,
+`/voice/mics/select` and `POST /mcp/servers` were writing to a read-only filesystem, silently, until
+someone used them. One source of truth now (`ORCH_WRITABLE_DIRS`), plus `tests/test_systemd_units.py`
+to fail the build if they diverge again.
+
+> **Not yet verified by a human.** The wake phrases, the reactor HUD, the microphone picker and the
+> voice settings panel have been exercised by tests, rasterised canvas calls and live HTTP probes,
+> but nobody has spoken to them or looked at them. The container images are statically reviewed and
+> **not build-tested** — there is no Docker on the box this was written on.
 
 ## v3.3.0 — 2026-08-10 — the live voice page, and images that actually contain it
 

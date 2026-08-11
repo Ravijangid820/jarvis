@@ -698,3 +698,90 @@ Hardening applied this session:
 **Open by design (documented, not regressions):** TLS on the orchestrator (LAN still plaintext — the
 top remaining item; see [[jarvis-tls-pending]] equivalent), at-rest DB encryption, and a hash-pinned
 dependency lockfile (`uv pip compile` + `--require-hashes`) for fully tamper-evident `.exe` builds.
+
+---
+
+# External review — 2026-08-10/11 (12 findings, all dispositioned)
+
+A whole-project pass delivered as a report rather than a patch set, covering the v3.3.0 tree.
+No critical. Every finding below was reproduced against the running box before it was touched —
+several were narrower than reported, and two were **worse**.
+
+## Fixed 2026-08-10
+
+| # | Sev | Finding | Fix |
+|---|---|---|---|
+| 01 | HIGH | Auth middleware allowlist matched by **prefix**, so `/health/../admin/users` and any path merely *starting* with an allowlisted string skipped authentication | exact-match `PUBLIC_PATHS` frozenset + an explicit `PUBLIC_PREFIXES` tuple for the static trees only |
+| 02 | MED | No password-change endpoint: a leaked password could only be rotated by an admin editing the DB | `POST /auth/password` — verifies the current password, revokes every *other* session, keeps the caller's |
+| 03 | MED | `GET /faces/enrolled` returned enrolled identities to any authenticated user | device-key/admin only |
+| 05 | MED | Face-match score returned at full precision to any caller — a distance oracle for probing enrolled faces | rounded to 1 dp for users, 3 dp for admins |
+| 06 | LOW | Legacy `<salt>:<hex>` password hashes never upgraded | `login()` re-hashes to PBKDF2 opportunistically on success |
+| 07 | MED | `CORSMiddleware` fell back to `allow_origins=["*"]` when unconfigured | no wildcard fallback; `ALLOWED_ORIGIN_REGEX` for the LAN, `allow_credentials` follows the real origin list |
+| 08 | LOW | HSTS sent on plaintext responses; 401/403 bypassed the security-header path | `_apply_security_headers(request=…)` — HSTS only when `request.url.scheme == "https"`, and errors go through it |
+
+## Fixed 2026-08-11
+
+**09 — [MED] SSRF-shaped surface on MCP and Home Assistant URLs.** Reported as "no loopback /
+link-local / RFC1918 filtering". Half-accepted, deliberately: **the RFC1918 block is not
+implemented and will not be**. Jarvis is a self-hosted LAN-first box — Home Assistant *is* at
+`192.168.x.x` and a local MCP server on `127.0.0.1` is a normal deployment — so that rule would
+break the product to defend an admin against their own machine.
+
+What was actually wrong, and is now fixed in `src/orchestrator/safehttp.py`:
+
+- **Redirects were uncapped and unchecked.** The second hop is chosen by the remote endpoint, not
+  by the admin who typed the URL. Capped at 3, and every hop re-validated.
+- **`Authorization` followed redirects across hosts.** urllib copies request headers onto the
+  redirected request verbatim, so a hostile MCP endpoint answering `302` could harvest the
+  long-lived Home Assistant token. Credentials (`Authorization`, `Cookie`, `Mcp-Session-Id`) are
+  now dropped when the host changes. Proven by `tests/test_safehttp.py` with two real servers on
+  `127.0.0.1` and `127.0.0.2` — a genuine cross-host redirect, not a mocked handler.
+- **Link-local (`169.254.0.0/16`, `fe80::/10`) is blocked unconditionally**, including
+  IPv4-mapped forms. It is cloud-metadata territory and no legitimate endpoint lives there.
+- **Only one of the three token-carrying call sites in `ha.py` had been converted** on the first
+  pass; a test now fails if `ha.py` calls `urllib.request.urlopen` directly again. (`llm.py` and
+  `main.py` are deliberately exempt: loopback, no credentials, and routing them through the guard
+  would break them under strict mode.)
+- `JARVIS_HTTP_ALLOW_LOCAL=0` opts into the textbook rule for genuinely exposed deployments.
+
+**The real hole was the caller, not the address.** `/mcp/servers` and `/mcp/test` were gated on
+`_require_admin` — but in demo mode *every visitor is an admin of their own household*, and the
+MCP server list is process-wide, so a visitor could add an entry everyone sees and make the box
+fetch a URL of their choosing. Those routes are now `_require_not_demo` as well.
+
+**10 — [LOW] Model download from inside the request-serving process.** Confirmed: `init_embeddings()`
+ran `bash src/scripts/download_models.sh` whenever the ONNX bundle was missing, and the flag
+defaulted to on. Not injectable (fixed path, SHA-pinned script), but it is network egress and a
+multi-hundred-MB write from the web process — and under the hardened unit it cannot succeed anyway.
+Default is now **off**; `JARVIS_AUTO_DOWNLOAD_MODELS=1` opts back in. The images bake the bundle at
+`/opt/jarvis/embed_onnx`, so nothing in the container path relied on it.
+
+**11 — [MED] npm advisories.** Reported as 4 high; there were **7** by the time it was checked
+(PostCSS advisories landed in between). Three had fixes and were taken (`postcss` 8.5.15→8.5.26,
+`nanoid` 3.3.12→3.3.18, `brace-expansion` 5.0.6→5.0.9); build + all 86 frontend tests green after.
+The remaining four — `sharp`, `onnxruntime-node`, `adm-zip`, `@huggingface/transformers` — have no
+fix and **reach no shipped code**: zero occurrences in `dist/`, all transitive through the Node
+side of `@huggingface/transformers` (the browser uses the `web` path) and Vite's toolchain. Build-
+machine risk only; re-check when upstream publishes.
+
+**12 — [MED] Hardened systemd unit and installer disagreed.** Worse than reported. The template
+omitted `backups`, and **neither** listed `config/` — so on this very box `ProtectSystem=strict`
+had `/srv/jarvis/config` mounted read-only, and `/models/switch`, `/voice/mics/select` and
+`POST /mcp/servers` were all writing to a read-only filesystem. Verified in the live service's
+mount namespace, not inferred:
+
+```
+$ grep /srv/jarvis /proc/<pid>/mountinfo     # config/ absent from the rw list
+$ nsenter -t <pid> -m -- touch /srv/jarvis/config/.rw-probe
+touch: cannot touch '…': Read-only file system
+```
+
+Fixed by making `ORCH_WRITABLE_DIRS` in `install_services.sh` the single source of truth (it feeds
+both the ownership pass and `ReadWritePaths`), adding `config` to it, and adding
+`tests/test_systemd_units.py`, which fails if the template and the installer drift apart again or
+if a new `BASE_DIR / "<dir>"` write target appears outside the writable set. The live unit was
+repaired with a drop-in and the service restarted; `config/` is now read-write and healthy.
+
+That last one is the pattern worth remembering: a missing `ReadWritePaths` entry does not fail at
+boot. It fails silently, months later, the first time someone uses the one endpoint that writes
+there — which is precisely why the fix is a test and not just an edit.
