@@ -36,6 +36,41 @@ Everything defaults; override in `.env` or inline (`ADMIN_PASS=secret docker com
 `LLAMA_IMAGE` (pin the llama tag, or use `:server-cuda` on a GPU host), `EMBED_MODEL`, `HOST_PORT`.
 Details: [docker.md](docker.md).
 
+### If your UI is served from somewhere else — set `ALLOWED_ORIGINS`
+
+Only relevant when the page and the API are on **different origins**: a GitHub Pages site, a
+separate nginx, a Vite dev server. The bundled UI is served by this same container with relative
+URLs, so a normal install needs nothing here.
+
+```bash
+-e ALLOWED_ORIGINS=https://your-site.example      # exact origin: scheme + host, no path, no slash
+```
+
+**As of 3.4.0 an empty value means "allow nothing".** Up to 3.3.0 it fell back to `*`, so
+cross-origin front ends worked by accident and most people never set it — upgrading without setting
+it blocks every call, and the browser reports it as a CORS error. Comma-separate several origins.
+
+Verify (a stranger's origin must print nothing, yours must echo back):
+
+```bash
+curl -sD - -o /dev/null -H "Origin: https://your-site.example" http://<host>:5000/health \
+  | grep -i access-control-allow-origin
+```
+
+The variable is read at process start, so it needs the container **recreated**, not just restarted.
+Full reference and a triage table for "the page cannot reach the API":
+[docker.md](docker.md#environment-variables).
+
+### Pointing at the LLM by hand
+
+The default `JARVIS_FAST_BRAIN_URL` names the **Compose service** (`http://llama:8081`). That
+hostname does not resolve on a network you built yourself, so `docker run`, Portainer and Proxmox
+OCI containers must set it explicitly, or `/health` reports `"status":"offline"`:
+
+```bash
+-e JARVIS_FAST_BRAIN_URL=http://<llama-container-ip>:8081
+```
+
 ## Verify
 Log in → **Admin → System Services** → `N/N operational`, LLM row green with the loaded model. Send a chat.
 

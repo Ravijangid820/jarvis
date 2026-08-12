@@ -42,6 +42,31 @@ itself; `docker build -f Dockerfile.combined .` with zero arguments produces a w
 `EMBED_ONNX_DIR` + `EMBED_MODEL` (the bundle's `meta.json` must match `EMBED_MODEL`, or it's refused —
 that guard protects your stored memories' vector space).
 
+### If your UI is served from somewhere else — set `ALLOWED_ORIGINS`
+
+Only relevant when the page and the API are on **different origins**: a GitHub Pages site, a
+separate nginx, a Vite dev server. The bundled UI is served by this same container with relative
+URLs, so a normal install needs nothing here.
+
+```bash
+-e ALLOWED_ORIGINS=https://your-site.example      # exact origin: scheme + host, no path, no slash
+```
+
+**As of 3.4.0 an empty value means "allow nothing".** Up to 3.3.0 it fell back to `*`, so
+cross-origin front ends worked by accident and most people never set it — upgrading without setting
+it blocks every call, and the browser reports it as a CORS error. Comma-separate several origins.
+
+Verify (a stranger's origin must print nothing, yours must echo back):
+
+```bash
+curl -sD - -o /dev/null -H "Origin: https://your-site.example" http://<host>:5000/health \
+  | grep -i access-control-allow-origin
+```
+
+The variable is read at process start, so it needs the container **recreated**, not just restarted.
+Full reference and a triage table for "the page cannot reach the API":
+[docker.md](docker.md#environment-variables).
+
 ## Verify
 Log in → **Admin → System Services**: expect `N/N operational`, the LLM row showing the loaded model
 (`Qwen3.5-2B-Q4_K_M · ctx 4096`), and Embeddings green. Then send a chat.

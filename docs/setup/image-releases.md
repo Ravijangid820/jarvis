@@ -1,5 +1,12 @@
 # Container images (GHCR)
 
+> **Upgrading to 3.4.0 or later from 3.3.0 or earlier.** `ALLOWED_ORIGINS` empty now means "allow
+> no cross-origin caller"; it used to fall back to `*`. A UI served from another origin (GitHub
+> Pages, a separate nginx) must name its origin explicitly — set it *before* pulling, or every call
+> is blocked and the browser reports a CORS error. Same-origin deployments are unaffected. See
+> [docker.md](docker.md#upgrading-to-340--read-this-first).
+
+
 The **LLM engine is upstream's** (`ghcr.io/ggml-org/llama.cpp:server`) — we don't compile llama.cpp.
 This repo publishes **four** images, all at the same version, all built together by the Actions
 workflow on a `v*` tag:
