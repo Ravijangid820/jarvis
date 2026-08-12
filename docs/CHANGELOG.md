@@ -4,7 +4,55 @@ All notable changes to this project are documented in this file.
 
 ---
 
-## Unreleased — grounding, wake phrases, and a twelve-finding security pass
+## v3.4.0 — 2026-08-12 — grounding, wake phrases, a security pass, and a much shorter wait
+
+### it recited the state of the house when you said hello
+
+The first time a human typed into the chat page, this happened:
+
+    You:    I
+    Jarvis: The tube light remains off, as do the switches and fan.
+    You:    Hey Jarvis
+    Jarvis: The tube light remains off, as do the switches and fan.
+
+The device block looked guilty and it was not. Three generations against the real model, same
+greeting: with the block, *"the system is monitoring the home"*; with an added "BACKGROUND ONLY,
+do not report this" instruction, *"the tube light, switch board, and fan are all off"* — worse;
+with **no** device block at all, *"the lights, temperature, and security systems are running as
+configured"*, inventing hardware that does not exist. The block is doing its job. A 2B model
+handed a contentless turn simply will not stay quiet, and the system prompt's "never invent
+status" is ignored.
+
+Greetings therefore never reach the model. `is_greeting()` is strict — it strips a leading *or*
+trailing wake word and matches only utterances with no content of their own, so "hey jarvis, turn
+off the fan" is still a command and "hi, what's the weather" is still a question. The reply is one
+of four dry templates, stored as `kind='greeting'` and withheld from the model's history for the
+same reason device acknowledgements are. The word list mirrors `wake-phrases.js` and
+`voice_bridge.py`, so the same words answer the same way typed, in the browser, or at the box's
+own microphone.
+
+### the wait before the first word
+
+Chatting through Jarvis felt far slower than llama.cpp's own UI. Generation is identical (~5 tok/s
+either way) — the gap is entirely time-to-first-token, and prefill on a CPU without AVX2 runs at
+~11 tok/s, so every prompt token costs ~90 ms.
+
+- **A chat title cost a second LLM request per conversation** — 5.7 s of the single llama slot for
+  four cosmetic words, run before the stream's done event, so the user sat through it. Titles now
+  come from the first message with a stopword filter and no model at all. `JARVIS_LLM_TITLES=1`
+  brings the old ones back.
+- **Embedding ran moments after every reply**: ~1.2 s per message, ~1.9 s per turn, landing while
+  the next message was being typed and competing with its prefill. It is now flushed in batches
+  once the box is quiet — also 64% cheaper per message (1183 ms → 425 ms over ten), because the
+  ONNX pass and the Chroma write are paid once instead of per message.
+- Deferring cost durability, so the pending set moved from an in-memory queue into the schema
+  (`conversation_history.embedded`) and now survives a restart — closing a hole the old design had
+  too. A valve flushes anyway after 15 minutes, since an unbroken conversation never goes idle.
+
+What is left is inherent: 144-192 volatile tokens per turn at ~90 ms each. The remaining levers are
+hardware (AVX2 is 3-5× on prefill) and the size of the persona.
+
+### the assistant is told what house it lives in
 
 ### the assistant is told what house it lives in
 
