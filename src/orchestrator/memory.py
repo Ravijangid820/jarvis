@@ -16,13 +16,13 @@ from config import (
     BASE_DIR, CHROMA_DB_PATH, EMBED_DOC_PREFIX, EMBED_MODEL_NAME, EMBED_ONNX_DIR, EMBED_QUERY_PREFIX,
     FACT_DEDUP_SIM, FACT_DEDUP_WORD, FACT_EXTRACTION_BATCH, FACT_EXTRACTION_MAX_ATTEMPTS,
     FACT_EXTRACTION_MIN_TOKENS, FACT_EXTRACTION_PROMPT, FACT_EXTRACTION_TOKENS,
-    IDLE_CHECK_INTERVAL, MAX_CONTEXT_TOKENS, PROMPT_SAFETY_MARGIN,
+    IDLE_CHECK_INTERVAL, MAX_CONTEXT_TOKENS, PROMPT_SAFETY_MARGIN, WARM_CACHE_AFTER_EXTRACTION,
     IDLE_THRESHOLD_SECONDS, RAG_DISTANCE_THRESHOLD,
     RAG_MAX_RESULTS, VALID_FACT_CATEGORIES, logger,
 )
 from budget import estimate_message_tokens, estimate_tokens, truncate_to_tokens
 from db import get_db
-from llm import llm_content, request_llm
+from llm import llm_content, request_llm, warm_prefix
 
 # --- Embeddings + vector store ----------------------------------------------
 # Initialized lazily by init_embeddings() (called once at startup), NOT at import:
@@ -833,6 +833,16 @@ def extract_facts_batch(messages: List[Dict]):
     held = len(messages) - len(done)
     if held:
         logger.info("Memory Core: holding %d message(s) for a later extraction pass", held)
+
+    # Put the conversation's prefix back in the KV cache. Extraction has just spent the single
+    # llama-server slot on a prompt that shares nothing with any chat. llama.cpp will often restore
+    # the chat's prefix from a context checkpoint by itself, making this a no-op; it is here for
+    # when it cannot, because that case costs the user a full re-evaluation of the system message.
+    # Safe to do here: this runs only after the system has been idle, so the CPU is free and the
+    # work is exactly what the user would otherwise have waited for.
+    if WARM_CACHE_AFTER_EXTRACTION:
+        import chat as _chat        # local import: chat imports memory, so a module-level one cycles
+        warm_prefix(_chat.last_system_prefix())
 
 
 def _memory_worker():

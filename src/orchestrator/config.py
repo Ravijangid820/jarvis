@@ -173,6 +173,12 @@ FACT_EXTRACTION_BATCH = 6
 FACT_EXTRACTION_MAX_ATTEMPTS = 3
 IDLE_THRESHOLD_SECONDS = 120   # extract facts after 2 min of inactivity
 IDLE_CHECK_INTERVAL = 30       # check for idle every 30 seconds
+# After idle fact-extraction, re-prime llama-server's KV cache with the chat's system prefix.
+# The server has ONE slot: extraction leaves ITS prompt there, so without this the next thing the
+# user types re-evaluates the whole ~630-token system message (measured: 57 s on a no-AVX2 CPU).
+# Costs one prefill of otherwise-idle CPU. Set JARVIS_WARM_CACHE=0 on a box where background CPU
+# is more precious than the first reply after a pause.
+WARM_CACHE_AFTER_EXTRACTION: bool = os.environ.get("JARVIS_WARM_CACHE", "1") != "0"
 FACT_DEDUP_SIM = 0.90          # semantic-similarity merge threshold
 FACT_DEDUP_WORD = 0.85         # word-overlap fallback threshold
 

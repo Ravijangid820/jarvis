@@ -160,6 +160,44 @@ def request_llm_stream(messages: List[Dict[str, str]], temperature=None, top_k=N
         raise
 
 
+def warm_prefix(system_content: Optional[str], timeout: Optional[float] = None) -> bool:
+    """Put the conversation's stable system prefix back at the head of llama-server's KV cache.
+
+    llama-server runs with --parallel 1: ONE slot, holding ONE token sequence. It reuses whatever
+    prefix the next prompt shares with that sequence (its log says "selected slot by LCP
+    similarity"), so a chat's ~630-token system message is normally evaluated once and then reused
+    for the rest of the conversation.
+
+    A background job — fact extraction — sends a prompt sharing no prefix with the chat, so the
+    slot ends up holding that instead. In practice llama.cpp often rescues this by restoring the
+    chat's prefix from a context checkpoint, and when it does, this warm-up is redundant. It is
+    insurance against the times it does not: checkpoints are bounded in size and number, and a
+    miss means the user's next message re-evaluates the whole ~630-token system message — 57 s on
+    this CPU, for tokens that had already been computed once.
+
+    This sends the system message ALONE with max_tokens=1. llama.cpp applies the same chat
+    template, so the tokens match the head of the next real prompt exactly and the cache is
+    restored. The cost is one prefill of work the user would otherwise wait for — which is why it
+    belongs after background work, while nobody is typing, and never on the request path.
+
+    Fail-soft by design: a warm-up that doesn't happen costs latency, never correctness.
+    """
+    if not system_content:
+        return False
+    payload = {"model": "local", "messages": [{"role": "system", "content": system_content}],
+               "max_tokens": 1, "temperature": 0, "cache_prompt": True}
+    req = urllib.request.Request(LLM_URL, data=json.dumps(payload).encode("utf-8"),
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout or REQUEST_TIMEOUT) as r:
+            r.read()
+        logger.info("KV cache warmed (%d chars of system prefix)", len(system_content))
+        return True
+    except Exception as e:
+        logger.info("KV cache warm-up skipped (%s: %s)", type(e).__name__, e)
+        return False
+
+
 def count_prompt_tokens(messages: List[Dict[str, str]]) -> Dict[str, Any]:
     """Count a chat prompt using llama.cpp when available.
 

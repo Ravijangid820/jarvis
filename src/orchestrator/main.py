@@ -57,7 +57,8 @@ import intent_router
 import mcp
 from db import (PRIMARY_HOUSEHOLD_ID, get_db, get_household_setting, init_db,
                 set_household_setting)
-from llm import count_prompt_tokens, llm_content, request_llm, request_llm_stream, request_llm_tools, synthesize_tts
+from llm import (count_prompt_tokens, llm_content, request_llm, request_llm_stream, request_llm_tools,
+                 synthesize_tts, warm_prefix)
 
 
 # Which household owns the smart home this process is connected to. The HA client (ha.py) holds ONE
@@ -2642,16 +2643,31 @@ def _validate_chat(request: "QueryRequest", raw_request: Request):
 
 
 def _maybe_title(needs_title: bool, session_id: str, user_id: int, user_text: str):
+    """Name a new conversation from its first message.
+
+    Deliberately NOT an LLM call any more. It ran on every new chat, before the stream's done
+    event, and cost 5.7 s of the single llama-server slot (measured) for four cosmetic words — so
+    the user's first reply took that much longer to finish. It also displaced the conversation
+    from the slot; llama.cpp usually restores the prefix from a checkpoint afterwards, but that is
+    a bounded resource and a miss costs a full re-evaluation.
+
+    JARVIS_LLM_TITLES=1 restores the model-written titles for anyone who prefers them; that path
+    warms the prefix back afterwards, so a checkpoint miss cannot land on the next message.
+    """
     if not needs_title:
         return None
     try:
-        resp = request_llm([{"role": "system", "content": "Reply with a very short title (1-4 words). No quotes. /no_think"},
-                            {"role": "user", "content": user_text}], temperature=0.3, n_predict=25)
-        raw_val = llm_content(resp)
-        if "<think>" in raw_val:
-            import re
-            raw_val = re.sub(r"<think>.*?</think>", "", raw_val, flags=re.DOTALL).strip()
-        title = raw_val.replace('"', "").replace(".", "").strip()
+        if os.environ.get("JARVIS_LLM_TITLES") == "1":
+            resp = request_llm([{"role": "system", "content": "Reply with a very short title (1-4 words). No quotes. /no_think"},
+                                {"role": "user", "content": user_text}], temperature=0.3, n_predict=25)
+            raw_val = llm_content(resp)
+            if "<think>" in raw_val:
+                import re
+                raw_val = re.sub(r"<think>.*?</think>", "", raw_val, flags=re.DOTALL).strip()
+            title = raw_val.replace('"', "").replace(".", "").strip() or chat.title_from_text(user_text)
+            warm_prefix(chat.last_system_prefix())
+        else:
+            title = chat.title_from_text(user_text)
         if title:
             chat.rename_session(session_id, title, user_id)
             return title
