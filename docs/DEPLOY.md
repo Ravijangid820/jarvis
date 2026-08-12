@@ -7,20 +7,33 @@ lives on the box and is gitignored.
 ## One-time config additions
 Add to `/srv/jarvis/config/jarvis.json` (see `jarvis.example.json` for the full shape):
 
-```jsonc
+```json
 "orchestrator": {
-  "host": "0.0.0.0",            // loopback + Tailscale both need to reach it; firewall restricts LAN
-  "allowed_origins": []          // [] = no cross-origin; the SPA/admin are same-origin
+  "allowed_origins": []
 }
 ```
+
+`config.py` parses this with `json.load()`, which rejects comments — so the block above is plain
+JSON on purpose. `allowed_origins: []` means no cross-origin caller is allowed, which is right when
+the SPA and admin page are served by this same process (they use relative URLs). A front end on
+another origin must be named here, or in `ALLOWED_ORIGINS`.
+
+There is deliberately no `"host"` key: it is read only when `main.py` is executed directly, and
+both real launchers pass `--host` on the command line (`install_services.sh` for systemd,
+`docker/entrypoint.sh` for the images). Setting it in the config file does nothing.
 
 ## Coordinated deploy (run on the box)
 
 ```bash
 cd /srv/jarvis
 
-# 1) Install the updated units
-sudo cp systemd/llama-fast.service systemd/jarvis-orchestrator.service /etc/systemd/system/
+# 1) Install/refresh the units — ALWAYS via the installer, never `cp`.
+#    It generates units matched to this box (service user, resolved uv and llama paths, the
+#    ReadWritePaths the app actually needs). Copying systemd/jarvis-orchestrator.service over the
+#    top replaces a generated hardened unit with the plain template: back to running as root, on a
+#    box whose data directories are owned by `jarvis`, and conflicting with the TLS drop-in.
+#    Preview first with DRY_RUN=1 (writes to systemd/generated/, changes nothing).
+sudo JARVIS_USER=jarvis bash src/scripts/install_services.sh
 sudo systemctl daemon-reload
 
 # 2) Build the frontend — REQUIRED whenever anything under frontend/ changed.

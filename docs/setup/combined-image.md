@@ -31,7 +31,9 @@ Open **http://localhost:5000** — login `admin` / your `ADMIN_PASS` (defaults t
 
 ## Configuration
 No config required. Override anything with `-e` (Docker) or Options (Proxmox) — common ones:
-`ADMIN_USER`/`ADMIN_PASS`, `LLM_CTX` (context window), `LLAMA_THREADS`, `LLM_MODEL` (your own GGUF),
+`ADMIN_USER`/`ADMIN_PASS`, `LLM_CTX` (context window), `LLAMA_THREADS`, `LLM_MODEL` (your own GGUF —
+in THIS image an absolute in-container path such as `/models/my.gguf`, not the `./models`-relative
+form the compose stack uses; a relative value exits with `no GGUF model found`),
 `EMBED_MODEL`. Full list + how config layers work: [docker.md](docker.md).
 
 ### Tokens — there are none

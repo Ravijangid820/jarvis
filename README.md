@@ -29,7 +29,7 @@ text-to-speech — running entirely on a 2011-era laptop in a Proxmox LXC. No cl
 ## Demo
 
 > 📸 _Add a screenshot here:_ drop a UI capture at `docs/screenshot.png` (chat UI mid-stream +
-> the memory panel makes a great shot) and replace this line with `![Jarvis](docs/screenshot.png)`.
+> the memory panel makes a great shot) and replace this line with ``.
 > An optional demo GIF at `docs/demo.gif` sells the voice loop.
 
 ## Hardware

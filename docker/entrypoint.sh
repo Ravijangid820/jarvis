@@ -7,6 +7,24 @@ cd /app
 log()  { printf '[jarvis] %s\n' "$1"; }
 rule() { printf '[jarvis] %s\n' "────────────────────────────────────────────────────────────"; }
 
+# 0) Writability. The images run as uid 10001, and compose bind-mounts ./config by default — on a
+#    fresh clone that directory is owned by whoever cloned it, so the config seeding below fails.
+#    It used to fail SILENTLY (this script deliberately omits `set -e`, so one failed cp is not
+#    fatal), and the app then fell back to jarvis.example.json — whose fast_brain_url points at
+#    127.0.0.1. The result was a UI that looked fine and reported "status":"offline" forever.
+#    Better to refuse to start and say exactly which chown is missing.
+for d in config memory logs; do
+  [ -d "$d" ] || continue
+  if ! touch "$d/.write-probe" 2>/dev/null; then
+    log "FATAL: /app/$d is not writable by uid $(id -u)."
+    log "  A bind-mounted host directory must be owned by the container user:"
+    log "    sudo chown -R 10001:10001 ./config ./memory ./logs"
+    log "  (Named volumes are chowned by Docker and need nothing.)"
+    exit 1
+  fi
+  rm -f "$d/.write-probe" 2>/dev/null || true
+done
+
 # 1) Config. /app/config is routinely bind-mounted (that's how you keep jarvis.json across
 #    upgrades), and a mount REPLACES the directory — so everything the image shipped in it
 #    disappears, including schema.sql, without which db.init_db() raises outright. Restore the

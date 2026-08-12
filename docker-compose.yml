@@ -24,7 +24,11 @@ services:
       - ALL
     image: ${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server}
     command: >
-      -m /models/${LLM_MODEL:-Qwen3.5-2B-Q4_K_M.gguf}
+      # Path RELATIVE TO ./models, and it must match where download_models.sh puts the file:
+      # models/qwen3.5_2b/Qwen3.5-2B-Q4_K_M.gguf. A bare filename here meant the documented
+      # first run — download_models.sh && docker compose up -d — could never start: llama
+      # exited on a missing file and the orchestrator never came up behind service_healthy.
+      -m /models/${LLM_MODEL:-qwen3.5_2b/Qwen3.5-2B-Q4_K_M.gguf}
       -c ${LLM_CTX:-4096}
       -t ${LLAMA_THREADS:-4}
       --host 0.0.0.0 --port 8081 --parallel 1

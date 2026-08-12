@@ -109,13 +109,20 @@ every compose service adds `cap_drop: [ALL]` and `no-new-privileges:true`. A cod
 the orchestrator therefore lands as an unprivileged account with no capabilities, rather than as
 root against a writable image.
 
-**If you bind-mount host directories, they must be writable by that uid.** Named volumes — the
-default in every compose file here — are chowned by Docker and need nothing. But if you swap one
-for a host path:
+**Bind-mounted host directories must be writable by that uid — and `./config` is bind-mounted by
+default.** `docker-compose.yml` mounts `./config:/app/config` out of the box, and on a fresh clone
+that directory belongs to whoever cloned the repo, not to uid 10001. So this is a required first
+step, not a special case for people who customise their volumes. (`/app/memory` and `/app/logs` are
+named volumes by default and need nothing; the prod compose can mount those from the host too.)
 
 ```bash
 sudo chown -R 10001:10001 ./memory ./config ./logs
 ```
+
+The entrypoint checks this before doing anything else and exits with the exact chown to run. It did
+not always: the seeding step failed silently, the app fell back to the read-only example config —
+whose `fast_brain_url` points at `127.0.0.1` — and you got a UI that looked fine and reported
+`"status":"offline"` forever.
 
 Without it the container starts and then fails on its first write (the database, or the config it
 seeds on first run). The uid is fixed rather than assigned at build time precisely so this only has
@@ -164,6 +171,9 @@ The baked default sits at a **separate path** from the `./models` mount, so over
 additive — your model is used without removing or hiding the default, and no rebuild is needed:
 1. Drop the `.gguf` under `./models/` (e.g. `./models/llama3.2-3b/Llama-3.2-3B-Instruct-Q4_K_M.gguf`).
 2. Set `LLM_MODEL=llama3.2-3b/Llama-3.2-3B-Instruct-Q4_K_M.gguf` in `.env` (path relative to `./models`).
+   **Compose only.** The all-in-one image reads `LLM_MODEL` as an ABSOLUTE path inside the container
+   (`docker/all-in-one.sh`), so the same value there produces `ERROR: no GGUF model found` and the
+   container exits. For that image, mount the file and give the full in-container path.
 3. `docker compose up -d` (only the `llama` container restarts).
 
 (Or, instead of placing the file, set `LLM_GGUF_URL` + `LLM_GGUF_SHA256` to fetch your override on first
@@ -413,7 +423,7 @@ mask whatever the file says.
 | `JARVIS_HTTP_ALLOW_LOCAL` | `1` | `0` refuses outbound MCP/Home Assistant URLs pointing at loopback or RFC1918. Left on by default because Home Assistant *is* on the LAN. |
 | `JARVIS_LLM_TITLES` | `0` | `1` restores model-written chat titles. Off by default: it cost a second LLM request per conversation (5.7 s of the single slot on a slow CPU) for four cosmetic words. |
 | `JARVIS_WARM_CACHE` | `1` | Re-primes llama-server's KV cache after idle fact extraction. `0` if background CPU matters more than the first reply after a pause. |
-| `DEMO_PUBLIC_SIGNUP` | `0` | Public demo households. Leave off for a private deployment. |
+| `DEMO_PUBLIC_SIGNUP` | follows `JARVIS_MODE` | Public demo households. Unset, it is ON whenever `JARVIS_MODE=demo` (which `docker-compose.demo.yml` sets) and off otherwise — it is not a plain `0`. Set it explicitly to be sure. |
 
 ## When the page cannot reach the API
 
@@ -525,7 +535,8 @@ images are built on every release, so a `:latest` set always comes from one comm
   model you want as the default there.
 - **Piper** is fetched at build time (`piper_setup.sh`, pinned + SHA-verified) and the build **fails**
   if it doesn't land. An image that silently lacks TTS looks fine until someone presses "speak".
-- **GGUF path**: the `llama` service's command hard-codes `Qwen3.5-2B-Q4_K_M.gguf` — set `LLM_MODEL`
+- **GGUF path**: the `llama` service defaults to `qwen3.5_2b/Qwen3.5-2B-Q4_K_M.gguf`, matching where
+  `download_models.sh` writes it — set `LLM_MODEL`
   in `docker-compose.yml`/`.env` if you use a different model file.
 - **`/app/config` bind-mounts** hide `schema.sql` and the config templates the image ships there. The
   entrypoint restores them from `/opt/jarvis/config-template` on every start, so an empty host
