@@ -5,7 +5,6 @@ Depends on config, db, and llm — never on chat/main (keeps the import graph ac
 """
 import json
 import os
-import queue
 import re
 import threading
 import time
@@ -16,13 +15,14 @@ from config import (
     BASE_DIR, CHROMA_DB_PATH, EMBED_DOC_PREFIX, EMBED_MODEL_NAME, EMBED_ONNX_DIR, EMBED_QUERY_PREFIX,
     FACT_DEDUP_SIM, FACT_DEDUP_WORD, FACT_EXTRACTION_BATCH, FACT_EXTRACTION_MAX_ATTEMPTS,
     FACT_EXTRACTION_MIN_TOKENS, FACT_EXTRACTION_PROMPT, FACT_EXTRACTION_TOKENS,
-    IDLE_CHECK_INTERVAL, MAX_CONTEXT_TOKENS, PROMPT_SAFETY_MARGIN,
+    EMBED_FLUSH_BATCH, EMBED_IDLE_SECONDS, EMBED_MAX_DEFER_S,
+    IDLE_CHECK_INTERVAL, MAX_CONTEXT_TOKENS, PROMPT_SAFETY_MARGIN, WARM_CACHE_AFTER_EXTRACTION,
     IDLE_THRESHOLD_SECONDS, RAG_DISTANCE_THRESHOLD,
     RAG_MAX_RESULTS, VALID_FACT_CATEGORIES, logger,
 )
 from budget import estimate_message_tokens, estimate_tokens, truncate_to_tokens
 from db import get_db
-from llm import llm_content, request_llm
+from llm import llm_content, request_llm, warm_prefix
 
 # --- Embeddings + vector store ----------------------------------------------
 # Initialized lazily by init_embeddings() (called once at startup), NOT at import:
@@ -177,14 +177,100 @@ def embed_query(text: str) -> List[List[float]]:
 
 
 # --- Background embedding ---------------------------------------------------
-# Embedding a 300M model on a no-AVX2 CPU is hundreds of ms, so it must NOT run
-# inline in the chat request path. enqueue_embedding() hands off; this worker drains.
-embed_queue: "queue.Queue" = queue.Queue()
+# The pending set is a COLUMN, not a queue: conversation_history.embedded = 0. An in-memory queue
+# was fine when it drained in seconds, but flushing at idle stretches that window to minutes, and
+# anything still queued when the process stops would vanish with no way to notice. The flag
+# survives a restart, so the next idle tick picks up exactly what was missed.
 
 
 def enqueue_embedding(msg_id, content: str, metadata: dict):
-    if vectors_available():
-        embed_queue.put((msg_id, content, metadata))
+    """Nothing to do: the message row is written with embedded=0, which IS the queue.
+
+    Embedding used to happen here, moments after the reply finished. Measured on two no-AVX2
+    cores that is ~1.2 s per message and ~1.9 s per turn (both speakers), landing exactly while
+    the next message is being typed — where it competes with prompt prefill for the same cores.
+
+    It is now flushed in batches when the box is idle, which is both cheaper (one ONNX pass and
+    one Chroma write for the whole batch: 1183 ms/msg → 425 ms/msg, measured over ten messages)
+    and invisible, because nobody is waiting. Safe because recall does not need it sooner: an
+    un-embedded message is by definition recent, and recent turns are already in the verbatim
+    history window. RAG only has to cover what has aged out.
+
+    Kept as a function so the call site in chat.store_message still reads as an explicit handoff,
+    and so a future write-through path has somewhere to live.
+    """
+    return None
+
+
+def get_unembedded_messages(limit: int = EMBED_FLUSH_BATCH) -> List[Dict[str, Any]]:
+    """Oldest-first messages still awaiting a vector, with the metadata the vector store needs."""
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT h.id, h.content, h.session_id, h.speaker, s.user_id "
+            "FROM conversation_history h JOIN chat_sessions s ON s.id = h.session_id "
+            "WHERE h.embedded = 0 ORDER BY h.id LIMIT ?", (limit,)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def _oldest_unembedded_age_s() -> float:
+    """Seconds since the oldest pending message was stored; 0.0 if there are none.
+
+    The flush valve. Without it a long unbroken conversation never reaches the idle threshold and
+    nothing is ever embedded — the failure mode of deferring work to a moment that may not come.
+    """
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT (julianday('now') - julianday(MIN(timestamp))) * 86400.0 AS age "
+            "FROM conversation_history WHERE embedded = 0").fetchone()
+        return float(row["age"] or 0.0) if row else 0.0
+    finally:
+        conn.close()
+
+
+def _mark_embedded(ids: List[int]) -> None:
+    if not ids:
+        return
+    conn = get_db()
+    try:
+        conn.executemany("UPDATE conversation_history SET embedded = 1 WHERE id = ?",
+                         [(int(i),) for i in ids])
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def flush_embeddings(limit: int = EMBED_FLUSH_BATCH) -> int:
+    """Embed every pending message in ONE batch and write them in ONE Chroma call.
+
+    Marked embedded only after the write returns, so a crash mid-flush re-does the batch rather
+    than losing it. Re-doing is harmless: Chroma add() is keyed on the message id, so a repeat
+    overwrites the same row instead of duplicating it.
+    """
+    if not vectors_available():
+        return 0
+    pending = get_unembedded_messages(limit)
+    if not pending:
+        return 0
+    t0 = time.time()
+    try:
+        documents = [p["content"] for p in pending]
+        metadatas = [{"session_id": p["session_id"], "speaker": p["speaker"],
+                      "user_id": int(p["user_id"])} for p in pending]
+        memory_collection.add(documents=documents, embeddings=_embed_documents(documents),
+                              metadatas=metadatas, ids=[str(p["id"]) for p in pending])
+    except Exception as e:
+        # Left pending on purpose — the next idle tick retries. Losing a vector is a silent hole
+        # in recall; re-embedding costs a second.
+        logger.error("Embedding flush failed for %d message(s), will retry: %s", len(pending), e)
+        return 0
+    _mark_embedded([p["id"] for p in pending])
+    logger.info("Embedded %d message(s) in %.2fs (%.0f ms/msg)",
+                len(pending), time.time() - t0, (time.time() - t0) * 1000 / len(pending))
+    return len(pending)
 
 
 # Longest we will hold an embedding back waiting for the LLM to finish. A cap rather than an
@@ -211,34 +297,6 @@ def _wait_for_llm_idle(max_wait: float = EMBED_DEFER_MAX_S) -> float:
         time.sleep(_EMBED_DEFER_POLL_S)
         waited += _EMBED_DEFER_POLL_S
     return waited
-
-
-def _embedding_worker():
-    while True:
-        item = embed_queue.get()
-        try:
-            if item is None:
-                return
-            msg_id, content, metadata = item
-            if vectors_available():
-                waited = _wait_for_llm_idle()
-                if waited >= EMBED_DEFER_MAX_S:
-                    logger.warning("Embedding deferred %.0fs and the LLM still reports busy; "
-                                   "embedding anyway so recall is not lost", waited)
-                memory_collection.add(
-                    documents=[content], embeddings=_embed_documents([content]),
-                    metadatas=[metadata], ids=[str(msg_id)],
-                )
-        except Exception as e:
-            logger.error("Embedding worker error: %s", e)
-        finally:
-            embed_queue.task_done()
-
-
-def start_embedding_worker():
-    t = threading.Thread(target=_embedding_worker, daemon=True, name="embedding-worker")
-    t.start()
-    return t
 
 
 def delete_vectors(ids: List[str]):
@@ -834,6 +892,16 @@ def extract_facts_batch(messages: List[Dict]):
     if held:
         logger.info("Memory Core: holding %d message(s) for a later extraction pass", held)
 
+    # Put the conversation's prefix back in the KV cache. Extraction has just spent the single
+    # llama-server slot on a prompt that shares nothing with any chat. llama.cpp will often restore
+    # the chat's prefix from a context checkpoint by itself, making this a no-op; it is here for
+    # when it cannot, because that case costs the user a full re-evaluation of the system message.
+    # Safe to do here: this runs only after the system has been idle, so the CPU is free and the
+    # work is exactly what the user would otherwise have waited for.
+    if WARM_CACHE_AFTER_EXTRACTION:
+        import chat as _chat        # local import: chat imports memory, so a module-level one cycles
+        warm_prefix(_chat.last_system_prefix())
+
 
 def _memory_worker():
     """Background thread: when idle and not busy, extract facts from new messages."""
@@ -847,6 +915,19 @@ def _memory_worker():
             if is_busy():
                 continue
             idle_duration = time.time() - _last_activity_time
+
+            # Embeddings first, and on a shorter fuse than fact extraction. They are cheap,
+            # bounded and needed for recall; extraction is a multi-minute LLM call. Running them
+            # in the other order would leave vectors waiting behind the slowest job on the box,
+            # and running them CONCURRENTLY would have the embedder and llama.cpp fighting over
+            # the same two cores — which is the contention this whole change exists to remove.
+            #
+            # The age check is the valve: an unbroken conversation never reaches the idle
+            # threshold, so without it "defer to idle" would mean "never".
+            if idle_duration >= EMBED_IDLE_SECONDS or _oldest_unembedded_age_s() >= EMBED_MAX_DEFER_S:
+                if flush_embeddings():
+                    continue          # re-check activity before starting the expensive job
+
             if idle_duration < IDLE_THRESHOLD_SECONDS:
                 continue
             unprocessed = get_unprocessed_messages(batch_size=FACT_EXTRACTION_BATCH)

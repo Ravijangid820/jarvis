@@ -207,3 +207,65 @@ def says_more_than_command(text: str, device_words: str = "", min_words: int = 2
     common case — flipping a light — slow again for no gain.
     """
     return len(command_residual(text, device_words).split()) >= min_words
+
+
+# --- Greetings ---------------------------------------------------------------
+# Kept in step with frontend/src/wake-phrases.js (isGreetingRemainder) and voice_bridge.py's
+# _GREETINGS: the same words must get the same answer whether they were typed, heard by the
+# browser, or heard by the box's own microphone. Divergence here is invisible and maddening.
+_WAKE_PREFIX = re.compile(r"^\s*(?:hey|hi|hello|ok|okay|yo)?\s*,?\s*jarvis\b[\s,.!?-]*", re.I)
+_WAKE_SUFFIX = re.compile(r"[\s,.!?-]*\bjarvis\b\s*$", re.I)
+_GREETING_WORDS = {
+    "hello", "hi", "hey", "yo", "hiya", "greetings",
+    "good morning", "good afternoon", "good evening", "good day",
+    "you there", "are you there", "there", "you up", "are you up",
+    "are you awake", "you awake", "wake up", "are you online", "you online",
+    "morning", "evening", "afternoon", "sup", "howdy",
+}
+# Fragments a speech-to-text pass or a stray keypress leaves behind. A bare "I" was one of the
+# messages that produced a recitation of the whole house, because the model had nothing else to
+# answer and a device list in front of it.
+_NOISE_ONLY = {"i", "a", "uh", "um", "hm", "hmm", "eh", "ah", "oh", "so", "well", "ok", "okay"}
+
+
+def is_greeting(text: str) -> bool:
+    """True when the message is ONLY a greeting (or content-free noise) — nothing to answer.
+
+    Exists because a 2B model handed a contentless turn does not stay quiet: given "hey jarvis"
+    it recited the state of every device in the house, and with the device block removed it
+    invented "the lights, temperature, and security systems are running as configured" — hardware
+    that does not exist. The system prompt forbids exactly that and is ignored; instruction
+    following at this size is not reliable enough to fix by asking. So these never reach the model.
+
+    STRICT on purpose: anything left after the greeting falls through to the normal path, so
+    "hey jarvis, turn off the fan" is a command and "hi, what's the weather" is a question. Only
+    an utterance with no content of its own is answered from here.
+    """
+    stripped = _WAKE_PREFIX.sub("", text or "", count=1)
+    # ...and trailing, because half the shipped wake phrases put the name last ("wake up jarvis",
+    # "you there jarvis"). Stripping only the prefix left "jarvis" as an unrecognised word and the
+    # whole utterance fell through to the model.
+    stripped = _WAKE_SUFFIX.sub("", stripped, count=1)
+    cleaned = " ".join(_NON_WORD.sub(" ", stripped.lower()).split())
+    if not cleaned:
+        return bool((text or "").strip())        # the wake word alone ("jarvis") — still an address
+    if cleaned in _NOISE_ONLY:
+        return True
+    if cleaned in _GREETING_WORDS:
+        return True
+    # "hello there", "hey good morning" — a greeting made only of greeting words.
+    words = cleaned.split()
+    return len(words) <= 3 and all(w in _NOISE_ONLY or w in _GREETING_WORDS
+                                   or any(g.startswith(w) or w in g.split() for g in _GREETING_WORDS)
+                                   for w in words)
+
+
+# Dry, and short enough that reading it in the transcript is not tiresome. Rotated only so a
+# screenful of greetings does not look like a stuck record; never fed back to the model, so the
+# variation cannot teach it to imitate the template (the failure that kind='device' exists for).
+GREETING_REPLIES = ("Sir.", "Sir?", "Yes, sir.", "Still here, sir.")
+
+
+def greeting_reply() -> str:
+    import random
+    return random.choice(GREETING_REPLIES)

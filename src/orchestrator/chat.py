@@ -1,4 +1,5 @@
 """Chat sessions, message persistence, and context-window-aware prompt assembly."""
+import re
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -51,7 +52,11 @@ def get_recent_context(session_id: str, limit: Optional[int] = None,
     where = "WHERE session_id = ?"
     params: List[Any] = [session_id]
     if for_llm:
-        where += " AND kind != 'device'"
+        # Both kinds are template strings the system produced, not the model: device
+        # acknowledgements ("Okay - the Light is now off.") and greeting replies ("Sir."). Feeding
+        # either back taught it to imitate them — it emitted a device ack for messages that were
+        # not commands. The transcript still shows them; the UI asks without this flag.
+        where += " AND kind NOT IN ('device', 'greeting')"
         if HISTORY_MAX_AGE_HOURS > 0:
             where += " AND timestamp >= datetime('now', ?)"
             params.append(f"-{HISTORY_MAX_AGE_HOURS} hours")
@@ -269,6 +274,10 @@ def build_messages(session_id: str, user_id: int, household_id: int, user_text: 
 
     front: List[Dict[str, str]] = [{"role": "system", "content": "\n\n".join(system_parts)}]
     current_turn = {"role": "user", "content": turn_content}
+    # Remember the stable prefix so a background job that had to use the LLM can put it back into
+    # llama-server's single slot afterwards. See llm.warm_prefix() for why that matters.
+    global _LAST_SYSTEM_PREFIX
+    _LAST_SYSTEM_PREFIX = front[0]["content"]
 
     prompt_budget = MAX_CONTEXT_TOKENS - max(completion_reserve, MIN_COMPLETION_TOKENS) - PROMPT_SAFETY_MARGIN
     prompt_budget = max(prompt_budget, MAX_CONTEXT_TOKENS // 2)
@@ -277,6 +286,57 @@ def build_messages(session_id: str, user_id: int, household_id: int, user_text: 
     history = get_recent_context(session_id, for_llm=True)  # chronological (oldest -> newest)
     included = fit_history(history, prompt_budget - fixed_tokens)
     return front + included + [current_turn]
+
+
+# The system message of the most recently assembled prompt — the exact text whose tokens sit at
+# the head of llama-server's KV cache. None until the first chat of the process.
+_LAST_SYSTEM_PREFIX: Optional[str] = None
+
+
+def last_system_prefix() -> Optional[str]:
+    """The stable prefix a warm-up should restore. See llm.warm_prefix()."""
+    return _LAST_SYSTEM_PREFIX
+
+
+# Words that carry no meaning in a chat title. Kept small on purpose: this runs on the first
+# message of a conversation and is meant to be instant, not clever.
+_TITLE_STOPWORDS = {
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "am", "do", "does", "did",
+    "can", "could", "would", "should", "will", "shall", "may", "might", "must",
+    "i", "you", "we", "he", "she", "it", "they", "me", "my", "your", "our",
+    "of", "to", "in", "on", "at", "for", "with", "about", "from", "by", "as", "and", "or",
+    "what", "whats", "who", "which", "how", "why", "when", "where",
+    "please", "just", "tell", "give", "show", "explain", "jarvis", "hey", "ok", "okay",
+    "one", "sentence", "sentences", "word", "words", "short", "briefly", "quick",
+}
+
+
+def title_from_text(text: str, max_words: int = 4) -> str:
+    """A chat title derived from the first message, with no model involved.
+
+    This used to be a second LLM request, fired on every new conversation. Measured on the
+    author's box it cost 5.7 s of the single llama-server slot (2.4 s prefill + 3.3 s generating)
+    to produce four cosmetic words — time the user spends waiting for their first reply to finish,
+    since it runs before the stream's done event.
+
+    It also displaces the conversation from that slot. Recent llama.cpp usually recovers, restoring
+    the chat's prefix from a context checkpoint on the next turn (observed: "restored context
+    checkpoint, n_past = 590" straight after a title call) — but checkpoints are a bounded
+    resource, not a guarantee, and a miss costs a full ~630-token re-evaluation: 57 s here.
+    Not worth the risk, let alone the 5.7 s, for a label.
+
+    Falls back to the raw opening words when nothing survives the stopword filter, because a
+    mediocre title is a fair trade for a conversation that starts a minute sooner.
+    """
+    cleaned = re.sub(r"[^\w\s'-]+", " ", (text or "")).strip()
+    if not cleaned:
+        return "New Chat"
+    words = cleaned.split()
+    # Compare on letters only: the list holds "whats", and the user typed "what's".
+    significant = [w for w in words if re.sub(r"[^a-z0-9]", "", w.lower()) not in _TITLE_STOPWORDS]
+    chosen = (significant or words)[:max_words]
+    title = " ".join(w if w.isupper() else w.capitalize() for w in chosen)
+    return (title[:60].rstrip() or "New Chat")
 
 
 def clamp_completion_for(messages: List[Dict[str, str]], requested: Optional[int]) -> int:

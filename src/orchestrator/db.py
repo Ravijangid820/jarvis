@@ -114,20 +114,25 @@ def set_household_setting(household_id: int, key: str, value: str) -> None:
         conn.close()
 
 
-def _safe_exec(conn: sqlite3.Connection, sql: str):
+def _safe_exec(conn: sqlite3.Connection, sql: str) -> bool:
     """Run a best-effort migration statement (e.g. ALTER that may already be applied).
 
     Only swallow the "already applied" cases (duplicate column / already-exists); re-raise
     anything else — including "no such table/column" — so a genuinely broken migration is not
     silently masked. (DROP ... IF EXISTS never raises on a missing object, so it needs no
     swallow here.)
+
+    Returns True if the statement actually ran, False if it was already applied — so a caller
+    that needs a ONE-TIME backfill for a new column can tell the two apart. Without that signal
+    the backfill would re-run on every start.
     """
     try:
         conn.execute(sql)
+        return True
     except sqlite3.OperationalError as e:
         msg = str(e).lower()
         if "duplicate column" in msg or "already exists" in msg:
-            return  # already in the expected state — benign
+            return False  # already in the expected state — benign
         raise
 
 
@@ -352,6 +357,12 @@ def init_db():
         _safe_exec(conn, "ALTER TABLE api_keys ADD COLUMN device_id TEXT")
         _safe_exec(conn, "ALTER TABLE conversation_history ADD COLUMN kind TEXT NOT NULL DEFAULT 'chat'")
         _migrate_mark_device_turns(conn)
+        # Embedding moved to idle-time batches, so "which messages still need a vector" had to
+        # become durable state rather than an in-memory queue. Existing rows are marked EMBEDDED,
+        # not pending: their vectors are already in ChromaDB, and defaulting to 0 would re-embed
+        # every message ever sent on the first idle tick (~1.2 s each, on two cores).
+        if _safe_exec(conn, "ALTER TABLE conversation_history ADD COLUMN embedded BOOLEAN DEFAULT 0"):
+            conn.execute("UPDATE conversation_history SET embedded = 1")
         # Enrollment moved into the browser (see /faces/identify), so the queue an admin used to
         # push a capture onto a remote camera is gone. Only ever transient request state — device,
         # name, pending/done/failed — never an embedding, so there is nothing here to preserve;

@@ -41,7 +41,8 @@ from pydantic import BaseModel, Field, field_validator
 import chat
 import memory
 from auth import hash_password, hash_token, verify_password
-from intents import HOME_CONTROL_VERB, is_gesture_volume, parse_home_command, parse_reminder, parse_volume, says_more_than_command
+from intents import (HOME_CONTROL_VERB, greeting_reply, is_greeting, is_gesture_volume, parse_home_command,
+                     parse_reminder, parse_volume, says_more_than_command)
 from config import (ADMIN_MAX_INPUT, ALLOWED_ORIGIN_REGEX, ALLOWED_ORIGINS, APP_VERSION, BASE_DIR, CHROMA_DB_PATH,
                     COMPLETION_RESERVE_DEFAULT, CONFIG, DEMO_MINT_PER_IP_HOURLY,
                     DEMO_PASSWORD, DEMO_PUBLIC_SIGNUP, DEMO_TTL_MINUTES,
@@ -57,7 +58,8 @@ import intent_router
 import mcp
 from db import (PRIMARY_HOUSEHOLD_ID, get_db, get_household_setting, init_db,
                 set_household_setting)
-from llm import count_prompt_tokens, llm_content, request_llm, request_llm_stream, request_llm_tools, synthesize_tts
+from llm import (count_prompt_tokens, llm_content, request_llm, request_llm_stream, request_llm_tools,
+                 synthesize_tts, warm_prefix)
 
 
 # Which household owns the smart home this process is connected to. The HA client (ha.py) holds ONE
@@ -124,7 +126,6 @@ async def lifespan(app: FastAPI):
     _load_ha_settings()        # runtime HA config (env > DB), before anything serves
     memory.init_embeddings()   # load the model now (from cache), not at import time
     _rebuild_intent_router()   # semantic device-intent index (needs both of the above)
-    memory.start_embedding_worker()
     memory.start_memory_worker()
     if DEMO_PUBLIC_SIGNUP:
         # Purge anything left over from a previous run before serving: a crash mid-session must not
@@ -135,7 +136,8 @@ async def lifespan(app: FastAPI):
                     DEMO_TTL_MINUTES, DEMO_MINT_PER_IP_HOURLY)
     logger.info("Jarvis Orchestrator started with Auth + Memory Core")
     yield
-    memory.embed_queue.put(None)  # signal the embedding worker to drain and exit
+    # Nothing to drain on the way out: pending embeddings live in conversation_history.embedded,
+    # so whatever has not been flushed is picked up by the next start rather than lost here.
 
 
 app = FastAPI(title="Jarvis Orchestrator", docs_url=None, redoc_url=None, lifespan=lifespan)
@@ -2642,16 +2644,31 @@ def _validate_chat(request: "QueryRequest", raw_request: Request):
 
 
 def _maybe_title(needs_title: bool, session_id: str, user_id: int, user_text: str):
+    """Name a new conversation from its first message.
+
+    Deliberately NOT an LLM call any more. It ran on every new chat, before the stream's done
+    event, and cost 5.7 s of the single llama-server slot (measured) for four cosmetic words — so
+    the user's first reply took that much longer to finish. It also displaced the conversation
+    from the slot; llama.cpp usually restores the prefix from a checkpoint afterwards, but that is
+    a bounded resource and a miss costs a full re-evaluation.
+
+    JARVIS_LLM_TITLES=1 restores the model-written titles for anyone who prefers them; that path
+    warms the prefix back afterwards, so a checkpoint miss cannot land on the next message.
+    """
     if not needs_title:
         return None
     try:
-        resp = request_llm([{"role": "system", "content": "Reply with a very short title (1-4 words). No quotes. /no_think"},
-                            {"role": "user", "content": user_text}], temperature=0.3, n_predict=25)
-        raw_val = llm_content(resp)
-        if "<think>" in raw_val:
-            import re
-            raw_val = re.sub(r"<think>.*?</think>", "", raw_val, flags=re.DOTALL).strip()
-        title = raw_val.replace('"', "").replace(".", "").strip()
+        if os.environ.get("JARVIS_LLM_TITLES") == "1":
+            resp = request_llm([{"role": "system", "content": "Reply with a very short title (1-4 words). No quotes. /no_think"},
+                                {"role": "user", "content": user_text}], temperature=0.3, n_predict=25)
+            raw_val = llm_content(resp)
+            if "<think>" in raw_val:
+                import re
+                raw_val = re.sub(r"<think>.*?</think>", "", raw_val, flags=re.DOTALL).strip()
+            title = raw_val.replace('"', "").replace(".", "").strip() or chat.title_from_text(user_text)
+            warm_prefix(chat.last_system_prefix())
+        else:
+            title = chat.title_from_text(user_text)
         if title:
             chat.rename_session(session_id, title, user_id)
             return title
@@ -2665,7 +2682,15 @@ def process_input(request: QueryRequest, raw_request: Request):
     user_id, household_id, session_id, user_text = _validate_chat(request, raw_request)
 
     # Fast-paths handled directly (instant, offline, no LLM): volume/gesture, then reminders.
-    ack = _handle_volume_command(user_text, raw_request) or _handle_reminder(user_text, raw_request)
+    # A greeting is answered here, never by the model. Handed "hey jarvis" a 2B model has nothing
+    # to answer and reaches for whatever context is in front of it: it recited the state of every
+    # device in the house, and with the device block removed it invented "the lights, temperature,
+    # and security systems are running as configured" — hardware that does not exist. The system
+    # prompt forbids precisely that and is ignored. is_greeting() is strict, so anything carrying
+    # actual content ("hey jarvis, turn off the fan") still goes the normal way.
+    ack = greeting_reply() if is_greeting(user_text) else None
+    ack_is_greeting = ack is not None
+    ack = ack or _handle_volume_command(user_text, raw_request) or _handle_reminder(user_text, raw_request)
     device_event = None
     if ack is None:
         home = _handle_home_command(user_text, raw_request, session_id)
@@ -2680,8 +2705,9 @@ def process_input(request: QueryRequest, raw_request: Request):
                 return {"response": ack, "speed": "", "new_title": None,
                         "audio": synthesize_tts(ack) if request.voice_feedback else None}
     if ack is not None:
-        chat.store_message(session_id, "user", user_text)
-        chat.store_message(session_id, "jarvis", ack)
+        kind = "greeting" if ack_is_greeting else "chat"
+        chat.store_message(session_id, "user", user_text, kind=kind)
+        chat.store_message(session_id, "jarvis", ack, kind=kind)
         return {"response": ack, "speed": "", "new_title": None,
                 "audio": synthesize_tts(ack) if request.voice_feedback else None}
 
@@ -2720,9 +2746,20 @@ def chat_stream(request: QueryRequest, raw_request: Request):
     user_id, household_id, session_id, user_text = _validate_chat(request, raw_request)
 
     # Fast-paths (volume/gesture, reminders) short-circuit the LLM and stream back the ack.
-    ack = _handle_volume_command(user_text, raw_request) or _handle_reminder(user_text, raw_request)
+    # A greeting is answered here, never by the model. Handed "hey jarvis" a 2B model has nothing
+    # to answer and reaches for whatever context is in front of it: it recited the state of every
+    # device in the house, and with the device block removed it invented "the lights, temperature,
+    # and security systems are running as configured" — hardware that does not exist. The system
+    # prompt forbids precisely that and is ignored. is_greeting() is strict, so anything carrying
+    # actual content ("hey jarvis, turn off the fan") still goes the normal way.
+    ack = greeting_reply() if is_greeting(user_text) else None
+    ack_is_greeting = ack is not None
+    ack = ack or _handle_volume_command(user_text, raw_request) or _handle_reminder(user_text, raw_request)
     device_event = None
-    ack_kind = "chat"
+    # Stored, shown in the transcript, and WITHHELD from the model's history — same reason
+    # device acknowledgements are: these are template strings, and a 2B model reading a screenful
+    # of "Sir." learns to answer everything with it.
+    ack_kind = "greeting" if ack_is_greeting else "chat"
     if ack is None:
         home = _handle_home_command(user_text, raw_request, session_id)
         if home is not None:
