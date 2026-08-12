@@ -52,7 +52,11 @@ def get_recent_context(session_id: str, limit: Optional[int] = None,
     where = "WHERE session_id = ?"
     params: List[Any] = [session_id]
     if for_llm:
-        where += " AND kind != 'device'"
+        # Both kinds are template strings the system produced, not the model: device
+        # acknowledgements ("Okay - the Light is now off.") and greeting replies ("Sir."). Feeding
+        # either back taught it to imitate them — it emitted a device ack for messages that were
+        # not commands. The transcript still shows them; the UI asks without this flag.
+        where += " AND kind NOT IN ('device', 'greeting')"
         if HISTORY_MAX_AGE_HOURS > 0:
             where += " AND timestamp >= datetime('now', ?)"
             params.append(f"-{HISTORY_MAX_AGE_HOURS} hours")

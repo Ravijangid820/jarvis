@@ -41,7 +41,8 @@ from pydantic import BaseModel, Field, field_validator
 import chat
 import memory
 from auth import hash_password, hash_token, verify_password
-from intents import HOME_CONTROL_VERB, is_gesture_volume, parse_home_command, parse_reminder, parse_volume, says_more_than_command
+from intents import (HOME_CONTROL_VERB, greeting_reply, is_greeting, is_gesture_volume, parse_home_command,
+                     parse_reminder, parse_volume, says_more_than_command)
 from config import (ADMIN_MAX_INPUT, ALLOWED_ORIGIN_REGEX, ALLOWED_ORIGINS, APP_VERSION, BASE_DIR, CHROMA_DB_PATH,
                     COMPLETION_RESERVE_DEFAULT, CONFIG, DEMO_MINT_PER_IP_HOURLY,
                     DEMO_PASSWORD, DEMO_PUBLIC_SIGNUP, DEMO_TTL_MINUTES,
@@ -2681,7 +2682,15 @@ def process_input(request: QueryRequest, raw_request: Request):
     user_id, household_id, session_id, user_text = _validate_chat(request, raw_request)
 
     # Fast-paths handled directly (instant, offline, no LLM): volume/gesture, then reminders.
-    ack = _handle_volume_command(user_text, raw_request) or _handle_reminder(user_text, raw_request)
+    # A greeting is answered here, never by the model. Handed "hey jarvis" a 2B model has nothing
+    # to answer and reaches for whatever context is in front of it: it recited the state of every
+    # device in the house, and with the device block removed it invented "the lights, temperature,
+    # and security systems are running as configured" — hardware that does not exist. The system
+    # prompt forbids precisely that and is ignored. is_greeting() is strict, so anything carrying
+    # actual content ("hey jarvis, turn off the fan") still goes the normal way.
+    ack = greeting_reply() if is_greeting(user_text) else None
+    ack_is_greeting = ack is not None
+    ack = ack or _handle_volume_command(user_text, raw_request) or _handle_reminder(user_text, raw_request)
     device_event = None
     if ack is None:
         home = _handle_home_command(user_text, raw_request, session_id)
@@ -2696,8 +2705,9 @@ def process_input(request: QueryRequest, raw_request: Request):
                 return {"response": ack, "speed": "", "new_title": None,
                         "audio": synthesize_tts(ack) if request.voice_feedback else None}
     if ack is not None:
-        chat.store_message(session_id, "user", user_text)
-        chat.store_message(session_id, "jarvis", ack)
+        kind = "greeting" if ack_is_greeting else "chat"
+        chat.store_message(session_id, "user", user_text, kind=kind)
+        chat.store_message(session_id, "jarvis", ack, kind=kind)
         return {"response": ack, "speed": "", "new_title": None,
                 "audio": synthesize_tts(ack) if request.voice_feedback else None}
 
@@ -2736,9 +2746,20 @@ def chat_stream(request: QueryRequest, raw_request: Request):
     user_id, household_id, session_id, user_text = _validate_chat(request, raw_request)
 
     # Fast-paths (volume/gesture, reminders) short-circuit the LLM and stream back the ack.
-    ack = _handle_volume_command(user_text, raw_request) or _handle_reminder(user_text, raw_request)
+    # A greeting is answered here, never by the model. Handed "hey jarvis" a 2B model has nothing
+    # to answer and reaches for whatever context is in front of it: it recited the state of every
+    # device in the house, and with the device block removed it invented "the lights, temperature,
+    # and security systems are running as configured" — hardware that does not exist. The system
+    # prompt forbids precisely that and is ignored. is_greeting() is strict, so anything carrying
+    # actual content ("hey jarvis, turn off the fan") still goes the normal way.
+    ack = greeting_reply() if is_greeting(user_text) else None
+    ack_is_greeting = ack is not None
+    ack = ack or _handle_volume_command(user_text, raw_request) or _handle_reminder(user_text, raw_request)
     device_event = None
-    ack_kind = "chat"
+    # Stored, shown in the transcript, and WITHHELD from the model's history — same reason
+    # device acknowledgements are: these are template strings, and a 2B model reading a screenful
+    # of "Sir." learns to answer everything with it.
+    ack_kind = "greeting" if ack_is_greeting else "chat"
     if ack is None:
         home = _handle_home_command(user_text, raw_request, session_id)
         if home is not None:
