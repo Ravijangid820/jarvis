@@ -52,7 +52,11 @@ CREATE TABLE IF NOT EXISTS conversation_history (
     -- and feeding them back as assistant prose taught the model to imitate them: it began emitting
     -- "Okay - the Light is now off." for sentences that were not commands, claiming actions that
     -- never happened. The transcript still shows them; the model is shown live device state instead.
-    kind TEXT NOT NULL DEFAULT 'chat'
+    kind TEXT NOT NULL DEFAULT 'chat',
+    -- 0 until this message's vector is in ChromaDB. Embedding is deferred to idle (it costs ~1.2 s
+    -- of a 2-core box per message and used to land while the next reply was being typed), so the
+    -- pending set has to survive a restart -- an in-memory queue would lose it silently.
+    embedded BOOLEAN DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_history_session ON conversation_history(session_id, id);

@@ -125,7 +125,6 @@ async def lifespan(app: FastAPI):
     _load_ha_settings()        # runtime HA config (env > DB), before anything serves
     memory.init_embeddings()   # load the model now (from cache), not at import time
     _rebuild_intent_router()   # semantic device-intent index (needs both of the above)
-    memory.start_embedding_worker()
     memory.start_memory_worker()
     if DEMO_PUBLIC_SIGNUP:
         # Purge anything left over from a previous run before serving: a crash mid-session must not
@@ -136,7 +135,8 @@ async def lifespan(app: FastAPI):
                     DEMO_TTL_MINUTES, DEMO_MINT_PER_IP_HOURLY)
     logger.info("Jarvis Orchestrator started with Auth + Memory Core")
     yield
-    memory.embed_queue.put(None)  # signal the embedding worker to drain and exit
+    # Nothing to drain on the way out: pending embeddings live in conversation_history.embedded,
+    # so whatever has not been flushed is picked up by the next start rather than lost here.
 
 
 app = FastAPI(title="Jarvis Orchestrator", docs_url=None, redoc_url=None, lifespan=lifespan)

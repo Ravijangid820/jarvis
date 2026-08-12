@@ -173,6 +173,19 @@ FACT_EXTRACTION_BATCH = 6
 FACT_EXTRACTION_MAX_ATTEMPTS = 3
 IDLE_THRESHOLD_SECONDS = 120   # extract facts after 2 min of inactivity
 IDLE_CHECK_INTERVAL = 30       # check for idle every 30 seconds
+# --- Idle-time embedding ----------------------------------------------------
+# Messages are stored with embedded=0 and vectorised in batches once the box is quiet. Embedding
+# is ~1.2 s per message on two no-AVX2 cores (~1.9 s per turn), and it used to run the moment a
+# reply finished — competing with the prefill of whatever was typed next. Batching also makes it
+# cheaper outright: 1183 ms/msg one at a time vs 425 ms/msg in a batch of ten.
+EMBED_IDLE_SECONDS = 20        # quiet for this long -> flush. Well under the 120 s extraction
+                               # threshold: vectors should land in the pause after a chat, not
+                               # wait behind a multi-minute LLM job.
+EMBED_MAX_DEFER_S = 900        # ...but never hold a message longer than 15 min, even mid-conversation.
+                               # An unbroken chat never goes idle, and "defer to idle" would then
+                               # quietly mean "never".
+EMBED_FLUSH_BATCH = 32         # bounds one flush: peak RAM for the batch, and how much work a
+                               # crash mid-flush repeats.
 # After idle fact-extraction, re-prime llama-server's KV cache with the chat's system prefix.
 # The server has ONE slot: extraction leaves ITS prompt there, so without this the next thing the
 # user types re-evaluates the whole ~630-token system message (measured: 57 s on a no-AVX2 CPU).
