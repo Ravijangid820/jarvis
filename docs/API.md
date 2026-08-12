@@ -4,8 +4,7 @@ Base URL: `http://<host>:5000`. All responses are JSON unless noted.
 
 ## Authentication
 
-Every endpoint except `/health`, `/`, `/admin`, `/auth/login`, `/ca.crt`, `/favicon.svg`, and the
-static mounts requires a **Bearer token** — either a web-login **session token** or a per-user
+Every endpoint except the unauthenticated set below requires a **Bearer token** — either a web-login **session token** or a per-user
 **API key**:
 
 ```
@@ -13,8 +12,17 @@ Authorization: Bearer <token>
 ```
 
 Responses: `401` missing/malformed header · `403` invalid/expired token or non-admin on an admin
-route · `429` rate limit exceeded (per user, `rate_limit_requests_per_minute`, default 30/min).
-Non-admin users are capped at 500 characters per message (admins/API keys: 10000).
+route · `429` rate limit exceeded (per user, `rate_limit_requests_per_minute`; every shipped
+config sets **120/min**).
+
+**Unauthenticated** (`PUBLIC_PATHS` / `PUBLIC_PREFIXES` in `main.py` — the authoritative list):
+`/health`, `/`, `/admin`, `/voice`, `/auth/login`, `/demo/session`, `/ca.crt`,
+`/favicon.svg|.png|.ico`, and the prefixes `/assets/`, `/static/`, `/stt-models/`, `/face-models/`,
+`/wake-models/`, `/ort/`. Note `/voice` and `/demo/session` in particular: they are public.
+
+Input is capped at 500 characters per message for non-admins and 10000 for admins. The cap keys on
+`is_admin` alone, so a NON-admin user's API key also gets 500, and a device-scoped key never counts
+as admin. Attachments have a separate 48000-character total budget.
 
 ---
 
@@ -216,7 +224,7 @@ client to compare against. A headless device with no browser enrolls via
 
 | Method | Path | Returns |
 |---|---|---|
-| `GET` | `/health` | `{ "status": "ok", "model": "qwen3.5-2b" }` |
+| `GET` | `/health` | `{ "status": "ok\|offline", "model": "Qwen3.5-2B-Q4_K_M", "detail": "…", "n_ctx": 4096, "mode": "production", "demo_signup": false, "demo_ttl_minutes": null }` — `status` is the LLM's reachability, and `model` falls back to a display name when llama-server cannot be read |
 | `GET` | `/system` | **admin** · live host telemetry: `{ load1, cpus, cpu_pct, mem_used_mb, mem_total_mb, mem_pct, uptime_sec }` (dependency-free, from `/proc` + `os`) |
 | `GET` | `/` | React SPA (`frontend/dist/index.html`) |
 | `GET` | `/admin` | Serves the React SPA, which renders the admin console (admin-gated client-side + on every `/admin/*` endpoint) |

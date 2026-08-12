@@ -22,10 +22,14 @@ Active development happens on `main`; fixes land there. There are no separate ma
 
 Jarvis is designed to run **self-hosted and offline** — no cloud APIs, no telemetry. The posture:
 
-- **No process runs as root**, on either install path. Under systemd the orchestrator and the LLM
-  server run as a dedicated unprivileged user sandboxed with `ProtectSystem=strict`, minimal
-  `ReadWritePaths`, `ProtectHome` and `NoNewPrivileges`; a simpler root install is also offered.
-  Every container image drops to a non-root user (uid `10001`, or `101` for nginx), and every
+- **Non-root is available on both install paths, but it is OPT-IN under systemd.**
+  `install_services.sh` defaults to `JARVIS_USER=root` and generates units with no `User=`; pass
+  `JARVIS_USER=jarvis` to get the hardened, unprivileged units (`ProtectSystem=strict`, minimal
+  `ReadWritePaths`, `ProtectHome`, `NoNewPrivileges`) — that is the recommended install, and the
+  one this project runs. The container path needs no flag: every image THIS repo builds drops to a
+  non-root user (uid `10001`, or `101` for nginx). The `llama` service in the default compose file
+  runs the **upstream** `ghcr.io/ggml-org/llama.cpp:server` image, whose uid is upstream's choice
+  and is not pinned here. Every
   compose service runs with `cap_drop: [ALL]` and `no-new-privileges:true`.
   **Bind mounts need that uid.** A host directory mounted over `/app/memory`, `/app/config` or
   `/app/logs` must be writable by uid 10001 — `sudo chown -R 10001:10001 ./memory ./config ./logs`

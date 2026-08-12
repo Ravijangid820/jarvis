@@ -19,7 +19,7 @@ text-to-speech — running entirely on a 2011-era laptop in a Proxmox LXC. No cl
 - 🎙️ **Voice in & out** — wake-word speech-to-text (whisper.cpp) → assistant → spoken replies (Piper TTS).
 - ⚡ **Tuned for modest hardware** — designed for a CPU with **no AVX2** and 8 GB RAM: a 2B Q4 model, prompt token-budgeting, off-request-path embedding, and a single-slot scheduler.
 - 👤 **Real multi-user auth** — web-login sessions or revocable per-user API keys (hashed at rest), an admin console, and per-user rate limiting — no static master secret.
-- 🛡️ **Hardened by default** — non-root systemd services with strict sandboxing, a strict CSP, parameterized SQL, bounded input, and authorization enforced **in code, never by the LLM** (backed by a multi-round security audit).
+- 🛡️ **Hardened** — opt-in non-root systemd services (`JARVIS_USER=jarvis`) with strict sandboxing, non-root containers, a strict CSP, parameterized SQL, bounded input, and authorization enforced **in code, never by the LLM** (backed by a multi-round security audit).
 - 📷 **Edge vision (Raspberry Pi)** — optional on-device motion / face / pose / gesture detection that posts only small JSON events — **no video leaves the device**.
 - 🔌 **Device control** — authorized, outbound-only agents (e.g. volume) and **Home Assistant** smart-home control via narrow, allowlisted LLM tool-calling (token server-side, entity allowlist, audit-logged).
 - 🗣️ **Understands what you mean** — a layered intent pipeline: instant regex fast-paths, then a **semantic router** ("i'm melting in here" → fan) using the same local embedder as RAG — confident matches act, plausible ones ask first, and nothing ever bypasses code-side authorization.
@@ -243,7 +243,7 @@ cmake --build /srv/jarvis/whisper/build -j
 
 ## Security
 
-- **No root:** the orchestrator + LLM server run as a dedicated unprivileged user, systemd-sandboxed (`ProtectSystem=strict`, minimal write paths)
+- **Non-root (opt-in on systemd):** install with `JARVIS_USER=jarvis` and the orchestrator + LLM server run as a dedicated unprivileged user, systemd-sandboxed (`ProtectSystem=strict`, minimal write paths). Without it the installer runs them as root — the containers are non-root either way
 - All inference local (no cloud APIs); LLM server bound to `127.0.0.1`
 - Auth = web-login session tokens **or** per-user API keys (hashed at rest; no static admin secret); authorization enforced **in code, never the LLM**
 - Rate limiting; parameterized SQL; bounded/validated input; strict CSP + security headers
