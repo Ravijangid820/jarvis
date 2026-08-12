@@ -8,6 +8,37 @@ this compose (install them with `docs/setup/camera.md`, `volume-agent.md`, `voic
 > host is an LXC without Docker). Build on a Docker host, then iterate — `docker compose build` and
 > report errors; expect a short pass to green.
 
+## Upgrading to 3.4.0 — read this first
+
+**`ALLOWED_ORIGINS` empty now means "allow nothing".** Up to 3.3.0 it fell back to `*`, so a front
+end served from anywhere could call the API and most people never set it. That fallback is gone: an
+unconfigured deployment got the most permissive policy, which is backwards.
+
+If your UI is served from the **same** origin as the API (the bundled SPA, any compose file here),
+nothing changes — it uses relative URLs and never consults CORS.
+
+If your UI is served from **somewhere else** (GitHub Pages, a separate nginx, a Vite dev server),
+set this before deploying 3.4.0 or every call is blocked:
+
+```bash
+ALLOWED_ORIGINS=https://your-site.example       # exact origin: scheme + host, no path, no slash
+```
+
+Comma-separate for more than one. Verify from anywhere:
+
+```bash
+# your origin -> should echo back:
+curl -sD - -o /dev/null -H "Origin: https://your-site.example" https://api.example/health \
+  | grep -i access-control-allow-origin
+# a stranger's origin -> should print NOTHING:
+curl -sD - -o /dev/null -H "Origin: https://evil.example.com" https://api.example/health \
+  | grep -i access-control-allow-origin
+```
+
+Also new in 3.4.0: embedding models are no longer downloaded by the running service
+(`JARVIS_AUTO_DOWNLOAD_MODELS=1` re-enables it; the images bake the bundle, so it is not needed).
+
+
 ## What runs
 **The LLM is the official, upstream-maintained `ghcr.io/ggml-org/llama.cpp:server` image — we don't
 compile llama.cpp.** The only images this repo builds are the orchestrator (+ a combined convenience
@@ -348,6 +379,75 @@ docker run -d --name jarvis-orchestrator --network jarvis \
   ghcr.io/<owner>/jarvis-orchestrator:latest
 ```
 Same result as `docker compose up`. (Windows PowerShell: use `${PWD}` for the paths.)
+
+**Two things bite people who build containers by hand rather than with Compose**, because Compose
+supplies both and a bare `docker run` does not:
+
+```bash
+-e JARVIS_FAST_BRAIN_URL=http://<llama-container-ip>:8081   # `llama` is a COMPOSE hostname; it
+                                                            # does not resolve on a hand-made
+                                                            # network, and /health reports
+                                                            # "status":"offline" if it is wrong
+-e ALLOWED_ORIGINS=https://your-site.example                # only if the UI is served elsewhere
+```
+
+The same applies to container managers that create containers from an image directly — Portainer,
+Proxmox's OCI support, `podman run`. Both variables can be added in the manager's environment
+editor; the container must then be **recreated**, since a restart reuses the old environment.
+
+## Environment variables
+
+Everything here is read at process start, so a change needs the container **recreated**, not just
+restarted. Values also live in `config/jarvis.json` — but the environment wins whenever it is set
+and non-empty, so a compose default like `${ALLOWED_ORIGINS:-http://localhost:5001}` will silently
+mask whatever the file says.
+
+| Variable | Default | What it does |
+|---|---|---|
+| `ALLOWED_ORIGINS` | *(none)* | Comma-separated origins allowed to call this API cross-origin. Empty = none (see the upgrade note above). Required for a front end on another host. |
+| `ALLOWED_ORIGIN_REGEX` | *(none)* | Same idea as a pattern, for a whole LAN or a dev server. CORS has no CIDR form, so this is the only way to express "any host on 192.168.x.x". |
+| `JARVIS_FAST_BRAIN_URL` | `http://llama:8081/…` from `config/jarvis.json` | Where llama-server is. The default is the **compose service name**, so hand-built containers on a different network must set it to the LLM container's address. `/v1/chat/completions` is appended if you omit it. |
+| `ADMIN_USER` / `ADMIN_PASS` | `admin` / `admin` | Created on first start. Change `ADMIN_PASS` for anything reachable. |
+| `EMBED_ONNX_DIR` | `/opt/jarvis/embed_onnx` | The baked embedding bundle. Only change it if mounting your own. |
+| `JARVIS_AUTO_DOWNLOAD_MODELS` | `0` | `1` lets the service fetch models at startup if the bundle is missing. Off by default: that is setup work, not something a request-serving process should do. |
+| `JARVIS_HTTP_ALLOW_LOCAL` | `1` | `0` refuses outbound MCP/Home Assistant URLs pointing at loopback or RFC1918. Left on by default because Home Assistant *is* on the LAN. |
+| `JARVIS_LLM_TITLES` | `0` | `1` restores model-written chat titles. Off by default: it cost a second LLM request per conversation (5.7 s of the single slot on a slow CPU) for four cosmetic words. |
+| `JARVIS_WARM_CACHE` | `1` | Re-primes llama-server's KV cache after idle fact extraction. `0` if background CPU matters more than the first reply after a pause. |
+| `DEMO_PUBLIC_SIGNUP` | `0` | Public demo households. Leave off for a private deployment. |
+
+## When the page cannot reach the API
+
+The browser console reports **"blocked by CORS policy"** for almost every failure, including ones
+that have nothing to do with CORS — an error page from a proxy carries no
+`Access-Control-Allow-Origin` header either, so that is the only thing Chrome can see. Check the
+status code before believing the message:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://api.example/health
+```
+
+| What you see | What it means | Fix |
+|---|---|---|
+| `200` + no `access-control-allow-origin` header | genuinely CORS: the origin is not allowed | set `ALLOWED_ORIGINS` (above) and recreate the container |
+| `400` with body `Disallowed CORS origin` | same, on a preflight | as above — the body names the problem outright |
+| `502` | the app is not answering behind the proxy/tunnel | is the container up? is the proxy pointing at the right port? `http://` vs `https://` mismatch will do this too |
+| `530` / `error code: 1033` | Cloudflare-specific: no tunnel connector registered | start `cloudflared`; check its logs |
+| `200` but `/health` says `"status":"offline"` | the API is fine, the LLM is not reachable | set `JARVIS_FAST_BRAIN_URL` to the llama container's address |
+
+`/health` is unauthenticated and answers all of this at once:
+
+```bash
+curl -s https://api.example/health
+{"status":"ok","model":"Qwen3.5-2B-Q4_K_M","n_ctx":4096,"mode":"production",...}
+```
+
+`"status"` is the LLM's reachability. `"model"` falls back to a hardcoded display name when
+llama-server cannot be read, so trust `status`, not `model`.
+
+**Version check.** If behaviour does not match these docs, confirm what you are actually running —
+a container built months ago is a common surprise. `/health` returning only `{"status","model"}`
+with no `n_ctx` is pre-3.0.0.
+
 
 ## HTTPS / certificates
 Two options:

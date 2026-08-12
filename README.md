@@ -127,6 +127,8 @@ Everything is overridable — pass values on the CLI (or in an optional `.env`, 
 | `EMBED_MODEL` | embeddinggemma | Memory embedding (torch-free ONNX bundle baked in — public + SHA-pinned, no token). Custom model → export a bundle with `src/scripts/export_embed_onnx.py`. |
 | `LLM_MODEL` | baked-in Qwen | Use a different LLM (`.gguf` in `./models`). |
 | `HOST_PORT` | `5000` | Published port. |
+| `ALLOWED_ORIGINS` | *(none)* | **Only if the UI is served from another host** (GitHub Pages, a separate nginx). Exact origins, comma-separated. Empty means *no* cross-origin caller is allowed — as of 3.4.0 it no longer falls back to `*`. Same-origin setups (everything here) need nothing. |
+| `JARVIS_FAST_BRAIN_URL` | compose hostname | Where llama-server is. The default names the **Compose service**, so containers built by hand — `docker run`, Portainer, Proxmox OCI — must point it at the LLM container's address, or `/health` reports `"status":"offline"`. |
 
 The default embedding model (embeddinggemma) is under the **Gemma Terms of Use**, not Apache-2.0 — the
 required notices ship in `licenses/gemma/` and are baked into the image. See
@@ -146,8 +148,13 @@ docker compose exec orchestrator uv run python src/scripts/manage.py mint-key ad
 docker compose exec orchestrator uv run python src/scripts/manage.py create-admin <user> <pass>
 ```
 
-Run shapes (two-service / all-in-one / split), published image tags, volumes, CPU/arch support, HTTPS, and
-publishing: **[docs/setup/docker.md](docs/setup/docker.md)** · **[docs/setup/image-releases.md](docs/setup/image-releases.md)**.
+Every container drops to a **non-root user** (uid `10001`; nginx `101`, listening on `8080`). A host
+directory bind-mounted over `/app/memory`, `/app/config` or `/app/logs` must be writable by it —
+`sudo chown -R 10001:10001 ./memory ./config ./logs`. Named volumes need nothing.
+
+Run shapes (two-service / all-in-one / split), the **full environment reference**, upgrade notes, a
+**"the page cannot reach the API" triage table**, published image tags, volumes, CPU/arch support,
+HTTPS, and publishing: **[docs/setup/docker.md](docs/setup/docker.md)** · **[docs/setup/image-releases.md](docs/setup/image-releases.md)**.
 
 ## Project Structure
 

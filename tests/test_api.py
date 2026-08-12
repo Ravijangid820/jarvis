@@ -778,6 +778,16 @@ def test_no_cross_origin_access_by_default(client):
 
 def test_same_origin_use_is_unaffected(client):
     """The bundled SPA calls the API with relative URLs, so it never sends an Origin at all. This
-    is the check that tightening CORS cannot lock the owner out of their own UI."""
+    is the check that tightening CORS cannot lock the owner out of their own UI.
+
+    Asserts the request is SERVED, not that the LLM is up: /health reports "offline" wherever
+    llama-server is not running, which is every CI runner. The first version of this test asserted
+    status == "ok" and passed only on the author's box, where the model happens to be live —
+    the same mistake as the ffmpeg-dependent mic test before it.
+    """
     r = client.get("/health")
-    assert r.status_code == 200 and r.json()["status"] == "ok"
+    assert r.status_code == 200
+    assert "status" in r.json()          # served and parsed; "offline" here is a fine answer
+    assert "access-control-allow-origin" not in {k.lower() for k in r.headers}, \
+        "a same-origin request needs no CORS header, and getting one back would mean the " \
+        "middleware is answering requests it should be ignoring"
