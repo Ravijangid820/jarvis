@@ -12,6 +12,7 @@ const MicPicker = lazy(() => import('./MicPicker'))
 import { notifyError, notifyOk, confirmDialog, promptDialog } from './notify.js'
 import { openSelectedMic } from './mic-select.js'
 import { ensureStt, isSttWarm, releaseStt, transcribeAudio } from './stt-worker.js'
+import { createSilenceWatch, VOICE_MAX_MS, VOICE_NO_SPEECH_MS, VOICE_SILENCE_MS } from './vad.js'
 
 const API = import.meta.env.VITE_API_URL || ""
 const BASE = (import.meta.env.BASE_URL || "/").replace(/\/$/, "")
@@ -503,15 +504,6 @@ function App() {
   const inputValueRef = useRef("")
   const processingRef = useRef(false)
 
-  // Silence long enough to mean "I've finished talking". Generous, because Whisper needs the
-  // trailing audio anyway and clipping someone mid-thought is far more annoying than waiting.
-  const VOICE_SILENCE_MS = 1400
-  const VOICE_NO_SPEECH_MS = 7000   // clicked the mic but never spoke -> give up quietly
-  // Memory backstop, not a limit on how long you may talk — the same reasoning as /voice. Hitting
-  // it stops the take WITHOUT auto-sending, so a runaway recording lands in the box for review
-  // rather than firing a turn nobody finished.
-  const VOICE_MAX_MS = 300000
-
   /** Make sure the shared Whisper model is resident, showing progress only if it isn't already.
    *  The worker itself lives in stt-worker.js at module scope, so the live voice page and this mic
    *  share one copy and neither pays for the other's load. */
@@ -623,13 +615,14 @@ function App() {
     actx.createMediaStreamSource(stream).connect(analyser)
     const data = new Float32Array(analyser.fftSize)
 
-    // Seeded from the room on the first block, then tracked asymmetrically on EVERY block: falls
-    // quickly toward a quieter background, rises slowly. A hardcoded seed meant that with music
-    // playing the background itself read as speech immediately, and freezing the floor once speech
-    // began meant the pause that should end the take never registered — so it ran to the 30s cap.
-    let noise = -1
-    let quietSince = 0
-    const started = performance.now()
+    // The decision — adaptive noise floor, "have they stopped?" — lives in vad.js, where it can be
+    // tested against level traces. Everything left here needs a browser.
+    const watch = createSilenceWatch({
+      silenceMs: VOICE_SILENCE_MS,
+      noSpeechMs: VOICE_NO_SPEECH_MS,
+      maxMs: VOICE_MAX_MS,
+      startedAt: performance.now(),
+    })
     heardSpeechRef.current = false
 
     const tick = () => {
@@ -640,31 +633,13 @@ function App() {
       let sum = 0
       for (let i = 0; i < data.length; i++) sum += data[i] * data[i]
       const level = Math.sqrt(sum / data.length)
-      const now = performance.now()
-      if (noise < 0) noise = level          // seed from reality, not a guess
-      const floor = noise
-      noise = level < floor ? floor * 0.7 + level * 0.3 : floor * 0.998 + level * 0.002
-      const trigger = Math.max(0.012, floor * 3)
 
-      if (level > trigger) {
-        heardSpeechRef.current = true
-        quietSince = 0
-      } else if (!quietSince) {
-        quietSince = now
-      }
-
-      const quietFor = quietSince ? now - quietSince : 0
-      const spoke = heardSpeechRef.current
-      // Ended by a pause after real speech -> submit it. Never spoke, or ran too long -> stop and
-      // let the transcript land in the box instead of firing a turn nobody asked for.
-      if (spoke && quietFor >= VOICE_SILENCE_MS) {
-        autoSubmitRef.current = true
-        stopSilenceWatch()
-        stopRecording()
-        return
-      }
-      if ((!spoke && now - started >= VOICE_NO_SPEECH_MS) || now - started >= VOICE_MAX_MS) {
-        autoSubmitRef.current = false
+      const ended = watch.step(level, performance.now())
+      heardSpeechRef.current = watch.heardSpeech
+      if (ended) {
+        // Ended by a pause after real speech -> submit it. Never spoke, or ran too long -> stop and
+        // let the transcript land in the box instead of firing a turn nobody asked for.
+        autoSubmitRef.current = ended.autoSubmit
         stopSilenceWatch()
         stopRecording()
         return

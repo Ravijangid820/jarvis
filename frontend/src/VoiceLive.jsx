@@ -34,51 +34,25 @@ import { openSelectedMic } from "./mic-select.js"
 import { createHud } from "./voice-hud.js"
 import { DEFAULT_WAKE_PHRASES, isGreetingRemainder, matchWakePhrase, parsePhraseList } from "./wake-phrases.js"
 import { ensureStt, isSttWarm, transcribeAudio } from "./stt-worker.js"
+import {
+  BLOCK, blockTiming, createUtteranceGate, END_SILENCE_MS, KEEP_TAIL_MS, MAX_UTTERANCE_MS,
+  MIN_UTTERANCE_MS, PREROLL_MS, START_MS, WARMUP_MS,
+} from "./vad.js"
 
 const MicPicker = lazy(() => import("./MicPicker.jsx"))
 
-// --- VAD tuning, in milliseconds ---------------------------------------------------------------
-// Expressed as time, not block counts, and converted against the device's ACTUAL sample rate at
-// startup. A block is 2048 frames — 42.7 ms at 48 kHz but 46.4 ms at 44.1 kHz — so a hardcoded
-// count silently means something different per machine, which is a poor way to express "wait about
-// a second and a half".
-const BLOCK = 2048
-const PREROLL_MS = 430           // kept before speech is detected, so the first word survives
-const START_MS = 130             // sustained level above the trigger before an utterance opens
-// How long a pause has to last before Jarvis decides you have finished. Generous on purpose:
-// cutting someone off mid-thought is far more annoying than a moment of dead air, and people pause
-// to think mid-sentence far more than they expect.
-// Adjustable from the page (PAUSE_CHOICES) because the right value is personal: how long you
-// pause mid-thought is not something a default can know. Persisted in localStorage.
-const END_SILENCE_MS = 5000
+// --- page-level tuning, in milliseconds ---------------------------------------------------------
+// The segmentation thresholds themselves (BLOCK, PREROLL_MS, END_SILENCE_MS and the rest) live in
+// vad.js next to the state machine that reads them, so the tests can drive it with the real
+// numbers instead of a second copy of them. What is left here is this page's own behaviour.
+//
+// How long a pause has to last before Jarvis decides you have finished is adjustable from the page
+// because the right value is personal: how long you pause mid-thought is not something a default
+// can know. Persisted in localStorage.
 const PAUSE_CHOICES = [1500, 3000, 5000, 8000]
-const MIN_UTTERANCE_MS = 350     // shorter than this is a cough or a click, not speech
-// A memory backstop, NOT a limit on how long you may speak. Buffered audio is Float32 at the
-// device rate — roughly 190 KB per second — so an utterance that never closes (a stuck capture, a
-// room that never falls quiet) would grow without bound and eventually take the tab down. Five
-// minutes is ~57 MB, far beyond any real sentence, and long audio is handled properly now: the
-// worker chunks anything over 30 s WITH timestamps, which is what stops it being cut in half.
-const MAX_UTTERANCE_MS = 300000
-const TRIGGER_OVER_NOISE = 3.0   // speech must be this much louder than the floor
-const MIN_RMS = 0.012            // absolute floor, so a silent room can't make the trigger tiny
-// Noise-floor tracking, asymmetric on purpose: fall quickly toward a quieter background, rise only
-// slowly. A symmetric average lets a burst of speech drag the floor up with it, and a floor that
-// stops updating during capture cannot notice that the background is loud.
-const NOISE_FALL = 0.30          // weight on a NEW, quieter observation
-const NOISE_RISE = 0.002         // weight when the room is louder than the floor (i.e. speech)
-// The floor needs a moment to learn the room before it can judge anything. Without this it starts
-// at a hardcoded guess, and any background above that guess opens an utterance instantly — with
-// music playing, the music itself triggered capture within 85 ms and then held the level above the
-// frozen threshold, so the utterance never closed and ran to MAX_UTTERANCE_MS every time.
-const WARMUP_MS = 600
 // After a reply, keep listening this long without needing the wake word again — otherwise a
 // back-and-forth means saying "hey Jarvis" before every single sentence.
 const CONVERSATION_MS = 8000
-// Trailing silence is trimmed off before the clip goes to Whisper: at a 5 s threshold it would
-// otherwise be most of the audio, which costs transcription time on a slow CPU and invites the
-// well-known failure where Whisper invents text to fill a long silence. A little is kept so the
-// final word is not clipped.
-const KEEP_TAIL_MS = 300
 // While ARMED the only thing worth hearing is a wake phrase, which is short and followed by a
 // natural gap. Waiting out the conversational pause (up to 8s) before even looking would make
 // "jarvis, are you there" feel broken, so the armed state segments on its own much tighter pause.
@@ -122,7 +96,6 @@ export default function VoiceLive({ token, apiBase, onExit }) {
   const gateRef = useRef(true)                 // true = ignore microphone entirely (half-duplex)
   const levelRef = useRef(0)                   // 0..1, drives the rings while listening
   const ttsLevelRef = useRef(0)                // 0..1, drives the rings while speaking
-  const noiseRef = useRef(0.01)
 
   const runTurnRef = useRef(null)      // transcribe() is declared before runTurn is
   const wakePhrasesRef = useRef(wakePhrases)   // read from the audio callback, which never re-binds
@@ -133,12 +106,10 @@ export default function VoiceLive({ token, apiBase, onExit }) {
   const speakerRef = useRef(null)
   const canvasRef = useRef(null)
   const rafRef = useRef(null)
-  const blocksRef = useRef([])                 // ring/utterance buffer of Float32Array blocks
-  const voicedRef = useRef(0)
-  const quietRef = useRef(0)
-  const capturingRef = useRef(false)
-  const spokenRef = useRef(0)                  // blocks of actual SPEECH in the current utterance
-  const warmedRef = useRef(0)                  // blocks seen since going live (noise-floor warm-up)
+  const blocksRef = useRef([])                 // utterance buffer of Float32Array blocks
+  // The segmentation state machine — noise floor, warm-up, open/close counters. It lives in
+  // vad.js so it can be driven by a level trace in a test instead of only by a real microphone.
+  const vadRef = useRef(null)
   // Read from the audio callback, which is created once — plain state would be frozen at the
   // value it had when the mic opened, so changing the setting mid-session would do nothing.
   const pauseMsRef = useRef(pauseMs)
@@ -339,9 +310,7 @@ export default function VoiceLive({ token, apiBase, onExit }) {
     setTimeout(() => {
       if (phaseRef.current === "off") return
       blocksRef.current = []
-      voicedRef.current = 0
-      quietRef.current = 0
-      capturingRef.current = false
+      vadRef.current?.reset()
       gateRef.current = false
       // Follow-ups don't need the wake word again for a while — otherwise every sentence of a
       // back-and-forth has to start with "hey Jarvis".
@@ -403,10 +372,7 @@ export default function VoiceLive({ token, apiBase, onExit }) {
     } catch { /* no greeting is survivable; it still listens */ }
     // Reset the VAD so the acknowledgement's own tail can't be mistaken for the command.
     blocksRef.current = []
-    voicedRef.current = 0
-    quietRef.current = 0
-    spokenRef.current = 0
-    capturingRef.current = false
+    vadRef.current?.reset()
     awakeUntilRef.current = Date.now() + CONVERSATION_MS
     gateRef.current = false
     setPhaseBoth("listening")
@@ -528,7 +494,6 @@ export default function VoiceLive({ token, apiBase, onExit }) {
       actxRef.current = actx
       if (actx.state === "suspended") await actx.resume()
       speakerRef.current = createSpeaker()
-      warmedRef.current = 0
 
       const source = actx.createMediaStreamSource(stream)
       // ScriptProcessorNode is deprecated in favour of AudioWorklet, but it is universally
@@ -536,18 +501,19 @@ export default function VoiceLive({ token, apiBase, onExit }) {
       const node = actx.createScriptProcessor(BLOCK, 1, 1)
       // Convert the millisecond thresholds against the real sample rate, once, here — the audio
       // callback runs hundreds of times a second and should not be doing arithmetic on constants.
-      const msPerBlock = (BLOCK / actx.sampleRate) * 1000
-      const inBlocks = (ms) => Math.max(1, Math.round(ms / msPerBlock))
-      const prerollBlocks = inBlocks(PREROLL_MS)
-      const startBlocks = inBlocks(START_MS)
+      const { msPerBlock, inBlocks } = blockTiming(actx.sampleRate, BLOCK)
       endBlocksRef.current = inBlocks(pauseMsRef.current)
       msPerBlockRef.current = msPerBlock
-      const minBlocks = inBlocks(MIN_UTTERANCE_MS)
       const maxBlocks = inBlocks(MAX_UTTERANCE_MS)
-      const warmupBlocks = inBlocks(WARMUP_MS)
-      const keepTailBlocks = inBlocks(KEEP_TAIL_MS)
       const wakeEndBlocks = inBlocks(WAKE_PAUSE_MS)
       const wakeMaxBlocks = inBlocks(WAKE_MAX_UTTERANCE_MS)
+      vadRef.current = createUtteranceGate({
+        prerollBlocks: inBlocks(PREROLL_MS),
+        startBlocks: inBlocks(START_MS),
+        warmupBlocks: inBlocks(WARMUP_MS),
+        minBlocks: inBlocks(MIN_UTTERANCE_MS),
+        keepTailBlocks: inBlocks(KEEP_TAIL_MS),
+      })
       nodeRef.current = node
 
       const srcRate = actx.sampleRate
@@ -587,57 +553,30 @@ export default function VoiceLive({ token, apiBase, onExit }) {
         const level = rms(input)
         levelRef.current = Math.min(1, level * 12)
 
-        // Seed the floor from the room itself rather than a guess, then track it on EVERY block —
-        // including mid-utterance. Freezing it at capture time meant a steady background louder
-        // than the frozen trigger kept `loud` true forever, so the pause that should end the
-        // utterance never registered.
-        if (warmedRef.current === 0) noiseRef.current = level
-        warmedRef.current++
-        const floor = noiseRef.current
-        noiseRef.current = level < floor
-          ? floor * (1 - NOISE_FALL) + level * NOISE_FALL
-          : floor * (1 - NOISE_RISE) + level * NOISE_RISE
-
-        const trigger = Math.max(MIN_RMS, floor * TRIGGER_OVER_NOISE)
-        const loud = level > trigger
-
+        const vad = vadRef.current
         blocksRef.current.push(new Float32Array(input))
+        // Until an utterance opens, hold only the preroll: enough that the first word survives the
+        // detection delay, and no more.
+        if (!vad.capturing && blocksRef.current.length > vad.prerollBlocks) blocksRef.current.shift()
 
-        if (!capturingRef.current) {
-          if (blocksRef.current.length > prerollBlocks) blocksRef.current.shift()
-          // Nothing may open an utterance until the floor has had time to learn the room.
-          if (warmedRef.current < warmupBlocks) { voicedRef.current = 0; return }
-          voicedRef.current = loud ? voicedRef.current + 1 : 0
-          if (voicedRef.current >= startBlocks) {
-            capturingRef.current = true
-            quietRef.current = 0
-            spokenRef.current = voicedRef.current   // the blocks that opened it were speech too
-            if (!armed && phaseRef.current !== "hearing") setPhaseBoth("hearing")
-          }
-          return
-        }
-
-        quietRef.current = loud ? 0 : quietRef.current + 1
-        if (loud) spokenRef.current++
-        const endAfter = armed ? wakeEndBlocks : endBlocksRef.current
-        const capBlocks = armed ? wakeMaxBlocks : maxBlocks
-        const tooLong = blocksRef.current.length >= capBlocks
-        if (quietRef.current < endAfter && !tooLong) return
+        // The armed state segments on a much tighter pause and a much shorter cap: a wake phrase
+        // is a few words followed by a natural gap, and waiting out the conversational pause
+        // before even looking would make "jarvis, are you there" feel broken.
+        const decision = vad.step(level, blocksRef.current.length, {
+          endBlocks: armed ? wakeEndBlocks : endBlocksRef.current,
+          maxBlocks: armed ? wakeMaxBlocks : maxBlocks,
+        })
+        if (decision.state === "opened" && !armed && phaseRef.current !== "hearing") setPhaseBoth("hearing")
+        if (decision.state !== "closed") return
 
         // Utterance closed. Drop all but a short tail of the trailing pause — it is silence by
         // definition and only slows transcription down.
-        const trailing = Math.max(0, quietRef.current - keepTailBlocks)
-        const blocks = trailing > 0 ? blocksRef.current.slice(0, -trailing) : blocksRef.current
-        const spoken = spokenRef.current
+        const blocks = decision.dropTrailing > 0
+          ? blocksRef.current.slice(0, -decision.dropTrailing)
+          : blocksRef.current
+        const tooLong = decision.tooLong
         blocksRef.current = []
-        capturingRef.current = false
-        voicedRef.current = 0
-        quietRef.current = 0
-        spokenRef.current = 0
-        // Measured in VOICED blocks, not buffered ones. Every utterance ends with END_SILENCE_MS
-        // of quiet by construction, and that alone is several times MIN_UTTERANCE_MS — so testing
-        // the buffer length made this guard unreachable, and a cough went to Whisper as a turn.
-        if (spoken < minBlocks) return   // a click or a cough, not a sentence
+        if (!decision.usable) return   // a click or a cough, not a sentence
         // Too long to be a wake phrase: the room is talking, not addressing Jarvis. Drop it
         // unheard rather than pay for a transcription that cannot match anything.
         if (armed && tooLong) return

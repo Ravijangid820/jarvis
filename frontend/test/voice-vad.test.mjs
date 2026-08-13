@@ -1,58 +1,47 @@
-// Mirrors the VAD state machine in VoiceLive.jsx (/voice live mode). Pins the two things that
-// have bitten already: how long a pause must last before Jarvis decides you've stopped, and that
-// the thresholds mean the same wall-clock time on a 44.1 kHz device as on a 48 kHz one.
+// Continuous segmentation in /voice live mode: how long a pause must last before Jarvis decides
+// you have stopped, and that every threshold means the same wall-clock time on a 44.1 kHz device
+// as on a 48 kHz one.
+//
+// This used to be a second implementation of the state machine, replayed against synthetic level
+// traces — 160 lines that imported nothing from ../src and so could not have failed for any change
+// to the app. It now drives the real gate from vad.js, with the real thresholds; only the audio
+// buffer is simulated, since counting blocks is all these assertions need.
 import { test } from "node:test"
 import assert from "node:assert"
+import {
+  BLOCK, blockTiming, createUtteranceGate, END_SILENCE_MS, KEEP_TAIL_MS, MAX_UTTERANCE_MS,
+  MIN_UTTERANCE_MS, PREROLL_MS, START_MS, WARMUP_MS,
+} from "../src/vad.js"
 
-const BLOCK = 2048
-const PREROLL_MS = 430, START_MS = 130, END_SILENCE_MS = 5000, KEEP_TAIL_MS = 300
-const MIN_UTTERANCE_MS = 350, MAX_UTTERANCE_MS = 300000
-const TRIGGER_OVER_NOISE = 3.0, MIN_RMS = 0.012
-const NOISE_FALL = 0.30, NOISE_RISE = 0.002, WARMUP_MS = 600
+const conv = (rate) => blockTiming(rate, BLOCK)
 
-const conv = (rate) => {
-  const msPerBlock = (BLOCK / rate) * 1000
-  const inBlocks = (ms) => Math.max(1, Math.round(ms / msPerBlock))
-  return { msPerBlock, inBlocks }
-}
-
-/** Replay a level trace; returns the utterance that would be sent, in ms of buffered audio. */
-function run(levels, rate = 48000) {
+/** Replay a level trace through the real gate; reports the utterance it would send, in ms. */
+function run(levels, rate = 48000, pauseMs = END_SILENCE_MS) {
   const { msPerBlock, inBlocks } = conv(rate)
-  const prerollBlocks = inBlocks(PREROLL_MS), startBlocks = inBlocks(START_MS)
-  const endBlocks = inBlocks(END_SILENCE_MS), minBlocks = inBlocks(MIN_UTTERANCE_MS)
-  const maxBlocks = inBlocks(MAX_UTTERANCE_MS), warmupBlocks = inBlocks(WARMUP_MS)
-
-  let noise = 0, warmed = 0, voiced = 0, quiet = 0, capturing = false, buf = 0, spoken = 0
+  const gate = createUtteranceGate({
+    prerollBlocks: inBlocks(PREROLL_MS),
+    startBlocks: inBlocks(START_MS),
+    warmupBlocks: inBlocks(WARMUP_MS),
+    minBlocks: inBlocks(MIN_UTTERANCE_MS),
+    keepTailBlocks: inBlocks(KEEP_TAIL_MS),
+  })
+  const endBlocks = inBlocks(pauseMs)
+  const maxBlocks = inBlocks(MAX_UTTERANCE_MS)
+  let buf = 0                                  // stands in for VoiceLive's array of audio blocks
+  let openedAtBlock = -1
   for (let i = 0; i < levels.length; i++) {
-    const level = levels[i]
-    if (warmed === 0) noise = level
-    warmed++
-    const floor = noise
-    noise = level < floor ? floor * (1 - NOISE_FALL) + level * NOISE_FALL
-                          : floor * (1 - NOISE_RISE) + level * NOISE_RISE
-    const trigger = Math.max(MIN_RMS, floor * TRIGGER_OVER_NOISE)
-    const loud = level > trigger
     buf++
-    if (!capturing) {
-      if (buf > prerollBlocks) buf = prerollBlocks
-      if (warmed < warmupBlocks) { voiced = 0; continue }
-      voiced = loud ? voiced + 1 : 0
-      if (voiced >= startBlocks) { capturing = true; quiet = 0; spoken = voiced }
-      continue
+    if (!gate.capturing && buf > gate.prerollBlocks) buf--          // the caller's shift()
+    const r = gate.step(levels[i], buf, { endBlocks, maxBlocks })
+    if (r.state === "opened" && openedAtBlock < 0) openedAtBlock = i
+    if (r.state !== "closed") continue
+    const kept = Math.max(0, buf - r.dropTrailing)
+    return {
+      closedAtBlock: i, openedAtBlock, sentMs: r.usable ? kept * msPerBlock : 0,
+      msPerBlock, endBlocks, why: r.tooLong ? "cap" : "pause",
     }
-    quiet = loud ? 0 : quiet + 1
-    if (loud) spoken++
-    const tooLong = buf >= maxBlocks
-    if (quiet < endBlocks && !tooLong) continue
-    // Voiced blocks, not buffered ones — the trailing silence is not part of the utterance.
-    const keepTail = inBlocks(KEEP_TAIL_MS)
-    const trimmed = Math.max(0, quiet - keepTail)
-    const kept = Math.max(0, buf - trimmed)
-    const sent = spoken >= minBlocks ? kept * msPerBlock : 0
-    return { closedAtBlock: i, sentMs: sent, quietBlocks: quiet, msPerBlock, endBlocks, why: tooLong ? "cap" : "pause" }
   }
-  return { closedAtBlock: -1, sentMs: 0, msPerBlock, endBlocks }
+  return { closedAtBlock: -1, openedAtBlock, sentMs: 0, msPerBlock, endBlocks }
 }
 
 const blocksFor = (ms, rate = 48000) => Math.ceil(ms / ((BLOCK / rate) * 1000))
@@ -137,10 +126,23 @@ test("speech over music still closes on the pause, not the 15s cap", () => {
   assert.ok(r.sentMs > 0, "and the utterance is sent")
 })
 
-test("the warm-up stops a loud start from triggering instantly", () => {
-  // going live with music already playing: the first blocks must not open an utterance
-  const r = run([...quiet(400, 48000, 0.08)])
-  assert.equal(r.closedAtBlock, -1)
+test("going live with music already playing does not open an utterance", () => {
+  // The floor seeds from the room itself, so steady music simply becomes the floor.
+  const r = run([...quiet(4000, 48000, 0.08)])
+  assert.equal(r.openedAtBlock, -1, "steady background is the floor, never speech")
+})
+
+test("nothing may open an utterance until the floor has heard the room", () => {
+  // The first block or two out of an AudioContext are often digital silence, before the mic is
+  // really delivering. Seeding the floor from THAT means a trigger of 0.012 against a room at
+  // 0.05, so the room reads as speech and capture opens on block three — which is what the
+  // warm-up window exists to prevent. It cannot make a bad seed good; it holds the gate shut
+  // while the floor catches up.
+  const r = run([...quiet(150, 48000, 0), ...loud(3000, 48000, 0.05), ...quiet(9000, 48000, 0)])
+  assert.notEqual(r.openedAtBlock, -1, "it must still open eventually")
+  const openedMs = r.openedAtBlock * r.msPerBlock
+  assert.ok(openedMs >= WARMUP_MS,
+    `opened at ${openedMs.toFixed(0)}ms, inside the ${WARMUP_MS}ms warm-up`)
 })
 
 
@@ -154,11 +156,33 @@ test("a 3-second thinking pause no longer ends the sentence", () => {
   assert.ok(r.sentMs > 0)
 })
 
-test("the trailing pause is trimmed off before transcription", () => {
+test("a shorter pause setting closes the utterance sooner", () => {
+  // The setting people actually reach for. Same trace, two thresholds: it must be the threshold
+  // that decides, not something that only looks configurable.
+  const trace = [...quiet(900), ...loud(800), ...quiet(9000)]
+  const fast = run(trace, 48000, 1500)
+  const slow = run(trace, 48000, 8000)
+  assert.ok(fast.closedAtBlock < slow.closedAtBlock)
+  const gapS = (slow.closedAtBlock - fast.closedAtBlock) * slow.msPerBlock / 1000
+  assert.ok(Math.abs(gapS - 6.5) < 0.5, `${gapS.toFixed(1)}s apart, expected the 6.5s difference`)
+})
+
+test("while armed for a wake phrase the pause is much tighter", () => {
+  // "jarvis, are you there" has to be heard and answered quickly. Waiting out the conversational
+  // pause first — up to 8 s — would make the wake word feel broken.
+  const trace = [...quiet(900), ...loud(700), ...quiet(2000)]
+  assert.notEqual(run(trace, 48000, 420).closedAtBlock, -1, "armed: segments on its own short pause")
+  assert.equal(run(trace, 48000, 5000).closedAtBlock, -1, "in conversation: still listening")
+})
+
+test("the trailing pause is trimmed off before transcription, but not to the last syllable", () => {
   // 5s of silence on every clip would dominate the audio Whisper sees, costing time on a slow
-  // CPU and inviting it to hallucinate text to fill the gap.
+  // CPU and inviting it to hallucinate text to fill the gap. Trimming ALL of it is the opposite
+  // failure: the clip then ends on the final word and clips it.
   const r = run([...quiet(900), ...loud(1200), ...quiet(7000)])
   assert.ok(r.sentMs > 0, "still sends")
   assert.ok(r.sentMs < 1200 + KEEP_TAIL_MS + PREROLL_MS + 400,
     `clip is ${r.sentMs.toFixed(0)}ms — the 5s pause was not trimmed`)
+  assert.ok(r.sentMs > 1200 + PREROLL_MS + 100,
+    `clip is ${r.sentMs.toFixed(0)}ms — barely more than the speech, so no tail was kept`)
 })
