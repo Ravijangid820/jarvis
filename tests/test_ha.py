@@ -4,7 +4,7 @@ No network, no TestClient: resolve_entity is pure (allowlist injected), and the 
 functions are exercised with a monkeypatched urlopen — safehttp.urlopen, which is what ha.py
 calls; patching urllib's would no longer intercept anything, and the tests would quietly
 start making real requests instead of failing. The gates themselves
-(_can_control_devices etc.) are covered by the existing API tests.
+(deps.can_control_devices etc.) are covered by the existing API tests.
 """
 import json
 import sys
@@ -12,6 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "orchestrator"))
 
+import deps  # noqa: E402
 import ha  # noqa: E402
 
 ALLOW = ["input_boolean.test_light", "light.kitchen", "light.living_room", "switch.desk_fan"]
@@ -237,9 +238,9 @@ def test_switch_it_off_uses_last_device(monkeypatch):
     # entity HA does not have used to read as success). Fake it as present: these tests
     # fake actuation too, so they must fake existence to match.
     monkeypatch.setattr(ha, "probe_entity", lambda e: (ha.ENTITY_FOUND, {"state": "off"}))
-    monkeypatch.setattr(main, "_can_control_devices", lambda r: True)
+    monkeypatch.setattr(deps, "can_control_devices", lambda r: True)
     monkeypatch.setattr(main, "REQUIRE_PRESENCE_FOR_CONTROL", False)
-    monkeypatch.setattr(main, "_audit", lambda *a, **k: None)
+    monkeypatch.setattr(deps, "audit", lambda *a, **k: None)
     main._LAST_HOME_ENTITY.clear()
 
     # no referent yet -> asks, does NOT act, does NOT fall through (None would mean LLM)
@@ -310,9 +311,9 @@ def test_run_via_fast_path_and_start_the_fan_means_on(monkeypatch):
     # fake actuation too, so they must fake existence to match.
     monkeypatch.setattr(ha, "probe_entity", lambda e: (ha.ENTITY_FOUND, {"state": "off"}))
     monkeypatch.setattr(ha, "turn", lambda e, a: actions.append((a, e)) or True)
-    monkeypatch.setattr(main, "_can_control_devices", lambda r: True)
+    monkeypatch.setattr(deps, "can_control_devices", lambda r: True)
     monkeypatch.setattr(main, "REQUIRE_PRESENCE_FOR_CONTROL", False)
-    monkeypatch.setattr(main, "_audit", lambda *a, **k: None)
+    monkeypatch.setattr(deps, "audit", lambda *a, **k: None)
     main._LAST_HOME_ENTITY.clear()
 
     reply = main._handle_home_command("run the movie night automation", _req(), "s1")
@@ -347,9 +348,9 @@ def test_stop_vs_disable_semantics(monkeypatch):
     # fake actuation too, so they must fake existence to match.
     monkeypatch.setattr(ha, "probe_entity", lambda e: (ha.ENTITY_FOUND, {"state": "off"}))
     monkeypatch.setattr(ha, "stop", lambda e: actions.append(("stop", e)) or True)
-    monkeypatch.setattr(main, "_can_control_devices", lambda r: True)
+    monkeypatch.setattr(deps, "can_control_devices", lambda r: True)
     monkeypatch.setattr(main, "REQUIRE_PRESENCE_FOR_CONTROL", False)
-    monkeypatch.setattr(main, "_audit", lambda *a, **k: None)
+    monkeypatch.setattr(deps, "audit", lambda *a, **k: None)
     main._LAST_HOME_ENTITY.clear()
 
     reply = main._handle_home_command("stop morning automation", _req(), "s1")
@@ -398,7 +399,7 @@ def _home_ready(monkeypatch, allowed=("automation.morning",)):
     monkeypatch.setattr(ha, "HA_URL", "http://ha.test:8123")
     monkeypatch.setattr(ha, "HA_TOKEN", "tok")
     monkeypatch.setattr(ha, "HA_ALLOWED_ENTITIES", list(allowed))
-    monkeypatch.setattr(main, "_HA_HOUSEHOLD_ID", 1)
+    monkeypatch.setattr(deps, "HA_HOUSEHOLD_ID", 1)
     return main
 
 

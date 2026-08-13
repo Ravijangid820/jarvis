@@ -39,6 +39,7 @@ if "config" not in sys.modules:
     os.environ["JARVIS_HOME"] = str(_TMP)
 
 import config  # noqa: E402
+import deps  # noqa: E402
 import main  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -227,12 +228,13 @@ def test_demo_visitor_cannot_reach_the_smart_home(client):
 
 
 def test_demo_visitor_cannot_configure_or_probe_an_mcp_server(client, monkeypatch):
-    """A demo visitor IS an admin — of a throwaway household. That makes _require_admin the wrong
+    """A demo visitor IS an admin — of a throwaway household. That makes deps.require_admin the wrong
     gate for anything process-wide, and MCP config is process-wide: one visitor's entry would show
     up for everyone, and /mcp/test makes this server fetch a URL the visitor chose (SSRF). Reading
     the operator's list stays allowed; changing it and probing arbitrary URLs do not.
     """
-    monkeypatch.setattr(main, "JARVIS_MODE", "demo")
+    # deps.require_not_demo reads the mode from its own module namespace.
+    monkeypatch.setattr(deps, "JARVIS_MODE", "demo")
     _, h = _mint(client)
     assert client.get("/mcp/servers", headers=h).status_code == 200
     assert client.post("/mcp/servers", headers=h,

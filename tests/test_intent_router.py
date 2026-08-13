@@ -9,6 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "orchestrator"))
 
+import deps  # noqa: E402
 import ha  # noqa: E402
 import intent_router as ir  # noqa: E402
 
@@ -153,9 +154,9 @@ def _flow_setup(monkeypatch):
     # entity HA does not have used to read as success). Fake it as present: these tests
     # fake actuation too, so they must fake existence to match.
     monkeypatch.setattr(ha, "probe_entity", lambda e: (ha.ENTITY_FOUND, {"state": "off"}))
-    monkeypatch.setattr(main, "_can_control_devices", lambda r: True)
+    monkeypatch.setattr(deps, "can_control_devices", lambda r: True)
     monkeypatch.setattr(main, "REQUIRE_PRESENCE_FOR_CONTROL", False)
-    monkeypatch.setattr(main, "_audit", lambda *a, **k: None)
+    monkeypatch.setattr(deps, "audit", lambda *a, **k: None)
     main._PENDING_HOME.clear()
     main._LAST_HOME_ENTITY.clear()
     return main, actions

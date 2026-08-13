@@ -37,6 +37,7 @@ if "config" not in sys.modules:
     os.environ["JARVIS_HOME"] = str(_TMP)
 
 import auth  # noqa: E402
+import deps  # noqa: E402
 import config  # noqa: E402
 import main  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -285,7 +286,7 @@ def test_home_tools_are_not_offered_to_a_household_without_a_smart_home(client, 
     import ha
     monkeypatch.setattr(ha, "HA_URL", "http://ha.test:8123")
     monkeypatch.setattr(ha, "HA_TOKEN", "tok")
-    monkeypatch.setattr(main, "_HA_HOUSEHOLD_ID", HH_A)
+    monkeypatch.setattr(deps, "HA_HOUSEHOLD_ID", HH_A)
 
     class _S:
         user_id, household_id, is_admin, device_id = 1, HH_B, True, None

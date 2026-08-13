@@ -39,6 +39,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 import chat
+import deps
 import memory
 from auth import hash_password, hash_token, verify_password
 from intents import (HOME_CONTROL_VERB, greeting_reply, is_greeting, is_gesture_volume, parse_home_command,
@@ -62,35 +63,21 @@ from llm import (count_prompt_tokens, llm_content, request_llm, request_llm_stre
                  synthesize_tts, warm_prefix)
 
 
-# Which household owns the smart home this process is connected to. The HA client (ha.py) holds ONE
-# live connection in module globals — url/token/allowlist — and the intent router caches exemplar
-# embeddings derived from that allowlist. So exactly one household's Home Assistant is reachable at a
-# time, and every HA route checks the caller against this id. That is what makes "the smart home
-# belongs to one admin and the users under them" true, and it is why a demo household — which never
-# owns HA settings — has no smart home to reach rather than merely a blocked button.
-#
-# Supporting several DIFFERENT real smart homes on one box means making ha.py stateless (a per-call
-# connection) and keying the router cache by household; the household_settings table is already
-# shaped for it. Until then this is a single-smart-home deployment with hard tenant isolation.
-_HA_HOUSEHOLD_ID: Optional[int] = None
-
-
 def _load_ha_settings():
     """Apply the DB-stored (admin-UI-managed) Home Assistant settings at startup. Environment vars
     win — a field set via env stays as config.py resolved it and the UI shows it read-only."""
-    global _HA_HOUSEHOLD_ID
     try:
-        _HA_HOUSEHOLD_ID = PRIMARY_HOUSEHOLD_ID
-        url = None if HA_URL_FROM_ENV else get_household_setting(_HA_HOUSEHOLD_ID, "ha_url")
-        token = None if HA_TOKEN_FROM_ENV else get_household_setting(_HA_HOUSEHOLD_ID, "ha_token")
-        ents_raw = get_household_setting(_HA_HOUSEHOLD_ID, "ha_allowed_entities")
+        deps.set_ha_household(PRIMARY_HOUSEHOLD_ID)
+        url = None if HA_URL_FROM_ENV else get_household_setting(deps.HA_HOUSEHOLD_ID, "ha_url")
+        token = None if HA_TOKEN_FROM_ENV else get_household_setting(deps.HA_HOUSEHOLD_ID, "ha_token")
+        ents_raw = get_household_setting(deps.HA_HOUSEHOLD_ID, "ha_allowed_entities")
         allowed = None
         if ents_raw is not None:
             try:
                 allowed = json.loads(ents_raw)
             except (ValueError, TypeError):
                 allowed = []
-        ha.configure(url=url, token=token, allowed=allowed, household_id=_HA_HOUSEHOLD_ID)
+        ha.configure(url=url, token=token, allowed=allowed, household_id=deps.HA_HOUSEHOLD_ID)
     except Exception as e:
         logger.warning("Could not load Home Assistant settings from DB: %s", e)
 
@@ -429,22 +416,6 @@ async def security_middleware(request: Request, call_next):
             status_code=429, media_type="application/json", headers={"Retry-After": "5"})
 
     return _apply_security_headers(await call_next(request), request=request)
-
-
-def _household(request: Request) -> int:
-    """The caller's household id — the tenant filter every scoped query must carry.
-
-    Fails CLOSED. A principal with no household is a bug (the migration backfills every existing
-    user into household 1, and both account-creation paths set it explicitly), and the tempting
-    fallback — "assume household 1" — is precisely the leak this whole boundary exists to prevent:
-    it would hand an unscoped account the real home's address, faces and camera history.
-    """
-    hid = getattr(request.state, "household_id", None)
-    if not hid:
-        logger.error("Principal user_id=%s has no household_id; refusing to serve scoped data",
-                     getattr(request.state, "user_id", "?"))
-        raise HTTPException(status_code=403, detail="Account is not linked to a household")
-    return int(hid)
 
 
 # ----------------- Models -----------------
@@ -813,7 +784,7 @@ def demo_status(request: Request):
     try:
         row = conn.execute(
             "SELECT expires_at, CAST((julianday(expires_at) - julianday('now')) * 86400 AS INTEGER) "
-            "AS remaining FROM households WHERE id = ?", (_household(request),)).fetchone()
+            "AS remaining FROM households WHERE id = ?", (deps.household(request),)).fetchone()
     finally:
         conn.close()
     if row is None:
@@ -888,7 +859,7 @@ def change_password(req: PasswordChangeRequest, request: Request):
         revoked = cur.rowcount
     finally:
         conn.close()
-    _audit(request, "auth.password_change", f"other sessions revoked: {revoked}")
+    deps.audit(request, "auth.password_change", f"other sessions revoked: {revoked}")
     return {"status": "ok", "other_sessions_revoked": revoked}
 
 
@@ -998,7 +969,7 @@ def _system_stats() -> Dict[str, Any]:
 @app.get("/system")
 def system_stats(request: Request) -> Dict[str, Any]:
     # Admin-only: host telemetry (load/mem/uptime) is infrastructure detail, not for every user.
-    _require_admin(request)
+    deps.require_admin(request)
     return _system_stats()
 
 
@@ -1065,7 +1036,7 @@ def _service_status(household_id: int) -> list:
     ]
     # Only the household that owns the smart home sees its row — the HA URL is infrastructure
     # detail about someone's home network.
-    if ha.configured() and household_id == _HA_HOUSEHOLD_ID:
+    if ha.configured() and household_id == deps.HA_HOUSEHOLD_ID:
         services.append(s("Home Assistant", ha.ping(),
                           f"{len(ha.HA_ALLOWED_ENTITIES)} entities allowlisted · {ha.HA_URL}"))
 
@@ -1104,8 +1075,8 @@ def _service_status(household_id: int) -> list:
 def admin_services(request: Request) -> Dict[str, Any]:
     """Per-subsystem health for the admin console (active/inactive + detail), plus the app version and
     an at-a-glance operational summary (how many subsystems are up)."""
-    _require_admin(request)
-    services = _service_status(_household(request))
+    deps.require_admin(request)
+    services = _service_status(deps.household(request))
     up = sum(1 for x in services if x["status"] == "active")
     return {
         "services": services,
@@ -1126,15 +1097,15 @@ _MCP_DEMO_DETAIL = "MCP servers are configured by the operator; they are read-on
 @app.get("/mcp/servers")
 def get_mcp_servers(request: Request):
     """Return configured MCP tool servers."""
-    _require_admin(request)
+    deps.require_admin(request)
     return {"servers": mcp.get_servers()}
 
 
 @app.post("/mcp/servers")
 def add_mcp_server(req: MCPServerRequest, request: Request):
     """Add or update an MCP server."""
-    _require_admin(request)
-    _require_not_demo(_MCP_DEMO_DETAIL)
+    deps.require_admin(request)
+    deps.require_not_demo(_MCP_DEMO_DETAIL)
     try:
         server = mcp.add_server(req.name, req.url, req.type, req.description)
         return {"status": "ok", "server": server}
@@ -1147,8 +1118,8 @@ def add_mcp_server(req: MCPServerRequest, request: Request):
 @app.delete("/mcp/servers/{name}")
 def delete_mcp_server(name: str, request: Request):
     """Delete an MCP server by name."""
-    _require_admin(request)
-    _require_not_demo(_MCP_DEMO_DETAIL)
+    deps.require_admin(request)
+    deps.require_not_demo(_MCP_DEMO_DETAIL)
     if mcp.delete_server(name):
         return {"status": "ok"}
     raise HTTPException(status_code=404, detail="Server not found")
@@ -1157,8 +1128,8 @@ def delete_mcp_server(name: str, request: Request):
 @app.post("/mcp/test")
 def test_mcp_server(req: MCPServerTestRequest, request: Request):
     """Test connection to an MCP server URL."""
-    _require_admin(request)
-    _require_not_demo(_MCP_DEMO_DETAIL)
+    deps.require_admin(request)
+    deps.require_not_demo(_MCP_DEMO_DETAIL)
     ok, detail = mcp.test_server(req.url)
     return {"ok": ok, "detail": detail}
 
@@ -1166,7 +1137,7 @@ def test_mcp_server(req: MCPServerTestRequest, request: Request):
 @app.get("/mcp/servers/{name}/tools")
 def get_mcp_server_tools(name: str, request: Request):
     """Discover a configured server's MCP tools for review before any tool is enabled."""
-    _require_admin(request)
+    deps.require_admin(request)
     server = next((item for item in mcp.get_servers() if item.get("name") == name), None)
     if not server:
         raise HTTPException(status_code=404, detail="Server not found")
@@ -1188,7 +1159,7 @@ def get_available_models(request: Request):
     chat users never receive them. A selected model is only active after llama-server
     has actually restarted and reported it through /props.
     """
-    _require_admin(request)
+    deps.require_admin(request)
     models = []
     models_dir = BASE_DIR / "models"
     active_name = "Qwen3.5 2B"
@@ -1232,7 +1203,7 @@ def switch_model(req: ModelSwitchRequest, request: Request):
     requested model without pretending the live process changed prevents a UI/LLM
     mismatch and leaves the actual restart under the deployment supervisor.
     """
-    _require_admin(request)
+    deps.require_admin(request)
     models_dir = BASE_DIR / "models"
     target = None
     if models_dir.exists():
@@ -1246,7 +1217,7 @@ def switch_model(req: ModelSwitchRequest, request: Request):
     try:
         cfg_path = BASE_DIR / "config" / "active_model.json"
         cfg_path.write_text(json.dumps({"active_model": target.name.removesuffix(".gguf"), "path": str(target)}, indent=2), encoding="utf-8")
-        _audit(request, "model.stage", target.name)
+        deps.audit(request, "model.stage", target.name)
         return {"status": "restart_required", "requested": target.name.removesuffix(".gguf"),
                 "message": "Model selection saved. Restart llama-server to activate it."}
     except Exception as e:
@@ -1315,7 +1286,7 @@ def list_mics(request: Request):
     a webcam and every device after it shifts down one, so a stored bare index can quietly come to
     mean a different microphone. `stale` says the chosen device is not currently present.
     """
-    _require_admin(request)
+    deps.require_admin(request)
     found = _list_capture_devices()
     chosen = _read_active_mic()
     name = chosen.get("name")
@@ -1342,7 +1313,7 @@ def select_mic(req: MicSelectRequest, request: Request):
     process: the listener is a separate systemd unit holding an open capture stream, and the honest
     thing is to record the decision and say what has to happen for it to take effect.
     """
-    _require_admin(request)
+    deps.require_admin(request)
     found = _list_capture_devices()
     devices = found.get("devices", [])
     if req.capture_id < 0:
@@ -1361,7 +1332,7 @@ def select_mic(req: MicSelectRequest, request: Request):
         ACTIVE_MIC_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"Could not save the microphone selection: {e}")
-    _audit(request, "voice.mic_select", label)
+    deps.audit(request, "voice.mic_select", label)
     return {"status": "restart_required", "selected": payload,
             "message": f"Microphone set to “{label}”. Restart the voice listener to use it."}
 
@@ -1385,7 +1356,7 @@ def voice_inputs(request: Request):
     Devices are ALSA PCM ids from /proc/asound rather than SDL indices: they're stable across
     replug (`plughw:<card>,<dev>` plus a card name), and they're what ffmpeg captures with.
     """
-    _require_not_demo()          # a visitor must never reach a live feed of someone's room
+    deps.require_not_demo()          # a visitor must never reach a live feed of someone's room
     found = _list_capture_devices()
     return {"inputs": found.get("alsa", []), "error": found.get("error"),
             "busy": _SERVER_MIC_LOCK.locked()}
@@ -1419,7 +1390,7 @@ async def stream_server_mic(request: Request, device: str):
     This is a live feed of the room the server sits in, so: never in a demo household, one session
     at a time, hard-capped, and written to the audit log.
     """
-    _require_not_demo()
+    deps.require_not_demo()
     # The device string becomes a subprocess argument, so it is matched against the enumerated set
     # rather than sanitised. Anything else — including a value that merely *looks* like a device —
     # is refused, so no caller-supplied text can turn into an ffmpeg flag.
@@ -1462,7 +1433,7 @@ async def stream_server_mic(request: Request, device: str):
         logger.warning("server mic %s failed to open: %s", device, " ".join(err.split()))
         raise HTTPException(status_code=503, detail=f"Could not open {device}: {_ffmpeg_reason(err)}")
 
-    _audit(request, "voice.server_mic", device)
+    deps.audit(request, "voice.server_mic", device)
 
     async def pcm():
         try:
@@ -1548,8 +1519,8 @@ def enroll_face(req: FaceEnrollRequest, request: Request):
     """Register a face embedding (computed on the edge/laptop) for a person. Admin-only — faces can
     drive authorization, so enrollment is privileged. Adds to the person's embeddings (creating the
     person if new); pass replace=true to start their set over."""
-    _require_admin(request)
-    household_id = _household(request)
+    deps.require_admin(request)
+    household_id = deps.household(request)
     name = req.name.strip()
     conn = get_db()
     try:
@@ -1583,7 +1554,7 @@ def enrolled_faces(request: Request):
     """
     if not (getattr(request.state, "device_id", None) or getattr(request.state, "is_admin", False)):
         raise HTTPException(status_code=403, detail="device-scoped key (or admin) required")
-    household_id = _household(request)
+    household_id = deps.household(request)
     conn = get_db()
     try:
         # Scoped: a camera must only ever be handed the face vectors of the household it belongs
@@ -1615,7 +1586,7 @@ def identify_face(req: FaceIdentifyRequest, request: Request):
     FACE_RECOGNIZE_THRESHOLD, and the person's name otherwise. `score` is the best cosine seen
     either way, which is what makes a failed match diagnosable ("0.31, try better lighting").
     """
-    household_id = _household(request)
+    household_id = deps.household(request)
     vec = req.embedding
     conn = get_db()
     try:
@@ -1651,36 +1622,10 @@ def identify_face(req: FaceIdentifyRequest, request: Request):
     return {"name": "unknown", "score": _score(best_sim)}
 
 
-_AUDIT_CAP = 5000   # keep the most recent N audit rows
-
-
-def _audit(request: Request, action: str, detail: str = "") -> None:
-    """Append an audit entry (who did what). Best-effort — never breaks the request it's recording."""
-    try:
-        uid = getattr(request.state, "user_id", None)
-        conn = get_db()
-        try:
-            uname = None
-            if uid is not None:
-                row = conn.execute("SELECT username FROM users WHERE id = ?", (uid,)).fetchone()
-                uname = row["username"] if row else None
-            cur = conn.execute(
-                "INSERT INTO audit_log (household_id, user_id, username, action, detail) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (getattr(request.state, "household_id", None), uid, uname, action, (detail or "")[:500]))
-            if cur.lastrowid % 200 == 0:   # prune occasionally, not on every write
-                conn.execute("DELETE FROM audit_log WHERE id <= ?", (cur.lastrowid - _AUDIT_CAP,))
-            conn.commit()
-        finally:
-            conn.close()
-    except Exception as e:
-        logger.warning("audit log failed (%s): %s", action, e)
-
-
 @app.get("/admin/audit")
 def admin_audit(request: Request, limit: int = 100):
     """Recent audit entries (most recent first) — device control + admin changes."""
-    _require_admin(request)
+    deps.require_admin(request)
     limit = max(1, min(limit, 1000))
     conn = get_db()
     try:
@@ -1688,7 +1633,7 @@ def admin_audit(request: Request, limit: int = 100):
         # household must not read another's.
         rows = conn.execute(
             "SELECT id, created_at, user_id, username, action, detail FROM audit_log "
-            "WHERE household_id = ? ORDER BY id DESC LIMIT ?", (_household(request), limit)).fetchall()
+            "WHERE household_id = ? ORDER BY id DESC LIMIT ?", (deps.household(request), limit)).fetchall()
         return {"entries": [dict(r) for r in rows]}
     finally:
         conn.close()
@@ -1726,19 +1671,19 @@ def _create_backup(ts: str) -> Dict[str, Any]:
 @app.post("/admin/backup")
 def admin_backup(request: Request):
     """Create a backup now (admin). Returns the filename + size."""
-    _require_admin(request)
+    deps.require_admin(request)
     try:
         info = _create_backup(datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S"))
     except Exception as e:
         logger.error("backup failed: %s", e)
         raise HTTPException(status_code=500, detail="Backup failed")
-    _audit(request, "backup.create", f"{info['name']} ({info['size']} bytes)")
+    deps.audit(request, "backup.create", f"{info['name']} ({info['size']} bytes)")
     return {"status": "ok", **info}
 
 
 @app.get("/admin/backups")
 def admin_list_backups(request: Request):
-    _require_admin(request)
+    deps.require_admin(request)
     if not BACKUP_DIR.exists():
         return {"backups": []}
     items = []
@@ -1751,33 +1696,33 @@ def admin_list_backups(request: Request):
 
 @app.get("/admin/backups/{name}")
 def admin_download_backup(name: str, request: Request):
-    _require_admin(request)
+    deps.require_admin(request)
     if not _BACKUP_NAME_RE.match(name):
         raise HTTPException(status_code=400, detail="Bad backup name")
     p = BACKUP_DIR / name
     if not p.exists():
         raise HTTPException(status_code=404, detail="No such backup")
-    _audit(request, "backup.download", name)
+    deps.audit(request, "backup.download", name)
     return FileResponse(str(p), media_type="application/gzip", filename=name)
 
 
 @app.delete("/admin/backups/{name}")
 def admin_delete_backup(name: str, request: Request):
-    _require_admin(request)
+    deps.require_admin(request)
     if not _BACKUP_NAME_RE.match(name):
         raise HTTPException(status_code=400, detail="Bad backup name")
     p = BACKUP_DIR / name
     if not p.exists():
         raise HTTPException(status_code=404, detail="No such backup")
     p.unlink()
-    _audit(request, "backup.delete", name)
+    deps.audit(request, "backup.delete", name)
     return {"status": "ok"}
 
 
 @app.get("/presence")
 def presence(request: Request):
     """Who the cameras have recognized recently (household context). Any authenticated user."""
-    return {"present": memory.get_present_people(_household(request))}
+    return {"present": memory.get_present_people(deps.household(request))}
 
 
 @app.get("/arrivals")
@@ -1789,7 +1734,7 @@ def arrivals(request: Request, since_id: int = 0):
         rows = conn.execute(
             "SELECT id, data, created_at FROM vision_events WHERE household_id = ? "
             "AND type='presence_arrival' AND id > ? AND created_at > datetime('now', '-120 seconds') "
-            "ORDER BY id", (_household(request), since_id)).fetchall()
+            "ORDER BY id", (deps.household(request), since_id)).fetchall()
         out = []
         for r in rows:
             try:
@@ -1880,23 +1825,10 @@ def cancel_reminder(rid: int, request: Request):
         conn.close()
 
 
-def _can_control_devices(request: Request) -> bool:
-    """Authorization for device actions (lights/volume): admins always; others need the
-    per-user can_control_devices flag. Enforced HERE, in code — never by the LLM."""
-    if getattr(request.state, "is_admin", False):
-        return True
-    conn = get_db()
-    try:
-        row = conn.execute("SELECT can_control_devices FROM users WHERE id = ?", (request.state.user_id,)).fetchone()
-        return bool(row and row["can_control_devices"])
-    finally:
-        conn.close()
-
-
 def _enqueue_volume(household_id: int, action: str, value: Optional[int], device: str) -> int:
     """Validate + enqueue one volume command (the tiny vocabulary set|step|mute|unmute). Shared by
     the REST endpoint and the voice fast-path. Raises HTTPException on a bad command. NOT an authz
-    check — callers must gate on _can_control_devices first."""
+    check — callers must gate on deps.can_control_devices first."""
     action = (action or "").lower()
     params: Dict[str, Any] = {}
     if action == "set":
@@ -1961,19 +1893,19 @@ def _handle_volume_command(user_text: str, raw_request: Request) -> Optional[str
     is_gesture = vol is None and is_gesture_volume(user_text)
     if (vol is not None or is_gesture) and JARVIS_MODE == "demo":
         return "Hardware device control is disabled in public Demo Mode."
-    if (vol is not None or is_gesture) and REQUIRE_PRESENCE_FOR_CONTROL and not _authorized_person_present(_household(raw_request)):
+    if (vol is not None or is_gesture) and REQUIRE_PRESENCE_FOR_CONTROL and not _authorized_person_present(deps.household(raw_request)):
         return "I don't see anyone authorized in the room, so I can't change that right now."
     if vol is not None:
-        if not _can_control_devices(raw_request):
+        if not deps.can_control_devices(raw_request):
             return "Sorry — you're not authorized to control devices."
-        _enqueue_volume(_household(raw_request), vol["action"], vol.get("value"), VOICE_DEVICE)
-        _audit(raw_request, "device.volume", f"{vol['action']} {vol.get('value', '')}".strip())
+        _enqueue_volume(deps.household(raw_request), vol["action"], vol.get("value"), VOICE_DEVICE)
+        deps.audit(raw_request, "device.volume", f"{vol['action']} {vol.get('value', '')}".strip())
         return _spoken_volume_ack(vol["action"], vol.get("value"))
     if is_gesture_volume(user_text):                 # "Jarvis, volume" → hand-gesture control
-        if not _can_control_devices(raw_request):
+        if not deps.can_control_devices(raw_request):
             return "Sorry — you're not authorized to control devices."
-        _open_gesture_mode(_household(raw_request), VOICE_CAMERA, VOICE_DEVICE)
-        _audit(raw_request, "device.gesture_mode", VOICE_CAMERA)
+        _open_gesture_mode(deps.household(raw_request), VOICE_CAMERA, VOICE_DEVICE)
+        deps.audit(raw_request, "device.gesture_mode", VOICE_CAMERA)
         return "Gesture volume control on — raise or lower your hand."
     return None
 
@@ -2099,7 +2031,7 @@ def _handle_home_command(user_text: str, raw_request: Request, session_id: str) 
     "toggle X", "is X on?" — instant, no LLM. Only acts when the device RESOLVES against the HA
     allowlist; anything else returns None and falls through to the LLM, so ordinary sentences
     ("turn my life around") are never hijacked. "it"/"that" refers to the session's last device."""
-    if not ha.configured() or not _owns_smart_home(raw_request):
+    if not ha.configured() or not deps.owns_smart_home(raw_request):
         return None            # no smart home for this household → fall through to the LLM
     if JARVIS_MODE == "demo":
         return "Home Assistant control is disabled in public Demo Mode."
@@ -2109,15 +2041,15 @@ def _handle_home_command(user_text: str, raw_request: Request, session_id: str) 
     if pending is not None and (time.monotonic() - pending[2]) < _PENDING_TTL:
         p_entity, p_action, _ = pending
         if _YES_RE.match(user_text):
-            if not _can_control_devices(raw_request):
+            if not deps.can_control_devices(raw_request):
                 return "Sorry — you're not authorized to control devices."
-            if REQUIRE_PRESENCE_FOR_CONTROL and not _authorized_person_present(_household(raw_request)):
+            if REQUIRE_PRESENCE_FOR_CONTROL and not _authorized_person_present(deps.household(raw_request)):
                 return "I don't see anyone authorized in the room, so I can't change that right now."
             ok, eff, err = _ha_act(p_entity, p_action)
             if not ok:
                 return err
             _LAST_HOME_ENTITY[session_id] = (p_entity, time.monotonic())
-            _audit(raw_request, "device.home_assistant", f"{p_action} {p_entity} (semantic, confirmed)")
+            deps.audit(raw_request, "device.home_assistant", f"{p_action} {p_entity} (semantic, confirmed)")
             return _ha_reply(p_entity, eff)
         if _NO_RE.match(user_text):
             return "Okay — leaving it as is."
@@ -2132,17 +2064,17 @@ def _handle_home_command(user_text: str, raw_request: Request, session_id: str) 
         r = intent_router.route(user_text, memory.embed_query)
         if r is None:
             return None
-        if not _can_control_devices(raw_request):
+        if not deps.can_control_devices(raw_request):
             return None                    # don't tease users who can't control devices anyway
         label, _, _ = _ha_label(r["entity"])
         if r["decision"] == "act":
-            if REQUIRE_PRESENCE_FOR_CONTROL and not _authorized_person_present(_household(raw_request)):
+            if REQUIRE_PRESENCE_FOR_CONTROL and not _authorized_person_present(deps.household(raw_request)):
                 return "I don't see anyone authorized in the room, so I can't change that right now."
             ok, eff, err = _ha_act(r["entity"], r["action"])
             if not ok:
                 return err
             _LAST_HOME_ENTITY[session_id] = (r["entity"], time.monotonic())
-            _audit(raw_request, "device.home_assistant",
+            deps.audit(raw_request, "device.home_assistant",
                    f"{r['action']} {r['entity']} (semantic, {r['score']})")
             return _ha_reply(r["entity"], eff)
         _PENDING_HOME[session_id] = (r["entity"], r["action"], time.monotonic())
@@ -2187,9 +2119,9 @@ def _handle_home_command(user_text: str, raw_request: Request, session_id: str) 
         entity = ha.resolve_entity(cmd["device"])
     if entity is None:
         return semantic_route() or tool_or_clarify()   # meaning, then tools, then the ask; else LLM
-    if not _can_control_devices(raw_request):
+    if not deps.can_control_devices(raw_request):
         return "Sorry — you're not authorized to control devices."
-    if REQUIRE_PRESENCE_FOR_CONTROL and not _authorized_person_present(_household(raw_request)):
+    if REQUIRE_PRESENCE_FOR_CONTROL and not _authorized_person_present(deps.household(raw_request)):
         return "I don't see anyone authorized in the room, so I can't change that right now."
     if cmd["action"] == "status":
         # Same distinction as _ha_act: a device HA no longer has is a stale allowlist entry the
@@ -2206,7 +2138,7 @@ def _handle_home_command(user_text: str, raw_request: Request, session_id: str) 
     if not ok:
         return err
     _LAST_HOME_ENTITY[session_id] = (entity, time.monotonic())
-    _audit(raw_request, "device.home_assistant", f"{cmd['action']} {entity} (fast-path)")
+    deps.audit(raw_request, "device.home_assistant", f"{cmd['action']} {entity} (fast-path)")
     return _ha_reply(entity, eff)
 
 
@@ -2254,20 +2186,20 @@ def _active_tools(raw_request: Request):
     """The tool menu offered to the model on THIS request — reflects live HA config AND whether the
     caller's household owns the smart home. Withholding the tools (rather than refusing the call
     afterwards) means a demo session has no vocabulary for home control at all."""
-    return TOOLS_SPEC + (HA_TOOLS if (ha.configured() and _owns_smart_home(raw_request)) else [])
+    return TOOLS_SPEC + (HA_TOOLS if (ha.configured() and deps.owns_smart_home(raw_request)) else [])
 
 
 def _tool_set_volume(args, raw_request):
-    if not _can_control_devices(raw_request):
+    if not deps.can_control_devices(raw_request):
         return "Sorry — you're not authorized to control devices."
-    if REQUIRE_PRESENCE_FOR_CONTROL and not _authorized_person_present(_household(raw_request)):
+    if REQUIRE_PRESENCE_FOR_CONTROL and not _authorized_person_present(deps.household(raw_request)):
         return "I don't see anyone authorized in the room, so I can't change that right now."
     action, value = str(args.get("action", "set")).lower(), args.get("value")
     try:
-        _enqueue_volume(_household(raw_request), action, value, VOICE_DEVICE)
+        _enqueue_volume(deps.household(raw_request), action, value, VOICE_DEVICE)
     except HTTPException:
         return "I couldn't make that volume change."
-    _audit(raw_request, "device.volume", f"{action} {value if value is not None else ''} (tool)".strip())
+    deps.audit(raw_request, "device.volume", f"{action} {value if value is not None else ''} (tool)".strip())
     return _spoken_volume_ack(action, value)
 
 
@@ -2287,23 +2219,23 @@ def _tool_create_reminder(args, raw_request):
         conn.commit()
     finally:
         conn.close()
-    _audit(raw_request, "reminder.create", f"{text} @ {due.strftime('%Y-%m-%d %H:%M')} (tool)")
+    deps.audit(raw_request, "reminder.create", f"{text} @ {due.strftime('%Y-%m-%d %H:%M')} (tool)")
     if text in ("Timer", "Reminder"):
         return f"{text} set for {due.strftime('%H:%M')}."
     return f"Okay — I'll remind you to {text} at {due.strftime('%H:%M')}."
 
 
 def _tool_get_presence(args, raw_request):
-    names = memory.get_present_people(_household(raw_request))
+    names = memory.get_present_people(deps.household(raw_request))
     return ("I can see " + ", ".join(names) + ".") if names else "I don't see anyone right now."
 
 
 def _tool_home_control(args, raw_request):
-    if not _can_control_devices(raw_request):
+    if not deps.can_control_devices(raw_request):
         return "Sorry — you're not authorized to control devices."
-    if REQUIRE_PRESENCE_FOR_CONTROL and not _authorized_person_present(_household(raw_request)):
+    if REQUIRE_PRESENCE_FOR_CONTROL and not _authorized_person_present(deps.household(raw_request)):
         return "I don't see anyone authorized in the room, so I can't change that right now."
-    _require_smart_home(raw_request)
+    deps.require_smart_home(raw_request)
     action = str(args.get("action", "")).lower()
     entity = ha.resolve_entity(str(args.get("device", "")))
     if entity is None:
@@ -2312,14 +2244,14 @@ def _tool_home_control(args, raw_request):
     ok, eff, err = _ha_act(entity, action)
     if not ok:
         return err
-    _audit(raw_request, "device.home_assistant", f"{action} {entity} (tool)")
+    deps.audit(raw_request, "device.home_assistant", f"{action} {entity} (tool)")
     return _ha_reply(entity, eff)
 
 
 def _tool_home_status(args, raw_request):
-    if not _can_control_devices(raw_request):
+    if not deps.can_control_devices(raw_request):
         return "Sorry — you're not authorized to view device states."
-    _require_smart_home(raw_request)
+    deps.require_smart_home(raw_request)
     device = str(args.get("device") or "").strip()
     entities = [ha.resolve_entity(device)] if device else list(ha.HA_ALLOWED_ENTITIES)
     if not entities or entities[0] is None:
@@ -2401,34 +2333,11 @@ def _handle_reminder(user_text: str, raw_request: Request) -> Optional[str]:
         conn.commit()
     finally:
         conn.close()
-    _audit(raw_request, "reminder.create", f"{r['text']} @ {due.strftime('%Y-%m-%d %H:%M')}")
+    deps.audit(raw_request, "reminder.create", f"{r['text']} @ {due.strftime('%Y-%m-%d %H:%M')}")
     when = due.strftime("%H:%M")
     if r["text"] in ("Timer", "Reminder"):
         return f"{r['text']} set for {when}."
     return f"Okay — I'll remind you to {r['text']} at {when}."
-
-
-def _require_not_demo(detail: str = "Hardware & Home Assistant control is disabled in public Demo Mode."):
-    if JARVIS_MODE == "demo":
-        raise HTTPException(status_code=403, detail=detail)
-
-
-def _owns_smart_home(request: Request) -> bool:
-    """True if the caller's household is the one this process's Home Assistant belongs to."""
-    return _HA_HOUSEHOLD_ID is not None and _household(request) == _HA_HOUSEHOLD_ID
-
-
-def _require_smart_home(request: Request) -> None:
-    """Gate every Home Assistant surface on owning the smart home.
-
-    This is the authorization check the whole household boundary exists to support: a household that
-    does not own the HA connection cannot read its config, enumerate its entities, or actuate
-    anything in it. Demo households never own one, so the demo has no smart home by construction —
-    not by a mode flag that someone could forget to check on a new route.
-    """
-    if not _owns_smart_home(request):
-        raise HTTPException(status_code=403,
-                            detail="No smart home is linked to your household.")
 
 
 @app.post("/devices/volume")
@@ -2438,11 +2347,11 @@ def queue_volume(req: VolumeRequest, request: Request):
     Authorization is enforced here against the caller's identity/permissions; the command is
     a tiny validated vocabulary (no shell, no free text). The device agent pulls + executes it.
     """
-    _require_not_demo()
-    if not _can_control_devices(request):
+    deps.require_not_demo()
+    if not deps.can_control_devices(request):
         raise HTTPException(status_code=403, detail="Not authorized to control devices")
-    cmd_id = _enqueue_volume(_household(request), req.action, req.value, req.device)
-    _audit(request, "device.volume", f"{req.action} {req.value or ''} -> {req.device}".strip())
+    cmd_id = _enqueue_volume(deps.household(request), req.action, req.value, req.device)
+    deps.audit(request, "device.volume", f"{req.action} {req.value or ''} -> {req.device}".strip())
     return {"status": "ok", "id": cmd_id}
 
 
@@ -2451,7 +2360,7 @@ def report_gesture(req: GestureReport, request: Request):
     """The camera reports normalized hand height while in gesture mode; the server maps movement to
     volume steps for the mode's target. Gated by an active, voice-authorized mode for THIS camera, so
     the camera key needs no device-control permission. Returns {active} so the camera knows when to stop."""
-    _require_not_demo()
+    deps.require_not_demo()
     dev = getattr(request.state, "device_id", None)
     if not dev and getattr(request.state, "is_admin", False):
         dev = request.query_params.get("device")          # admin may drive it for testing
@@ -2467,7 +2376,7 @@ def report_gesture(req: GestureReport, request: Request):
         if abs(dy) >= _GESTURE_DEADZONE:
             step = max(-_GESTURE_STEP_CLAMP, min(int(round(dy * _GESTURE_GAIN)), _GESTURE_STEP_CLAMP))
             if step != 0:
-                _enqueue_volume(_household(request), "step", step, mode["target"])
+                _enqueue_volume(deps.household(request), "step", step, mode["target"])
     mode["last_y"] = req.y
     mode["expires"] = now + _GESTURE_TTL_S                 # refresh while the hand is active
     return {"active": True, "expires_in": int(mode["expires"] - now)}
@@ -2502,7 +2411,7 @@ async def pull_device_commands(request: Request, device: str, wait: int = 20):
     `async` + `asyncio.sleep` so a waiting poll holds no worker thread (a sync handler would
     exhaust the thread pool under many concurrent polls). The key must be bound to `device`
     (or be an admin): a key for one device can't drain another device's queue (F1)."""
-    _require_not_demo()
+    deps.require_not_demo()
     dev = getattr(request.state, "device_id", None)
     if not getattr(request.state, "is_admin", False) and dev != device:
         raise HTTPException(status_code=403, detail="This key is not bound to that device")
@@ -2510,7 +2419,7 @@ async def pull_device_commands(request: Request, device: str, wait: int = 20):
     deadline = time.time() + wait
     async with _poll_sem:
         while True:
-            cmds = await run_in_threadpool(_claim_commands, _household(request), device)
+            cmds = await run_in_threadpool(_claim_commands, deps.household(request), device)
             if cmds:
                 return {"commands": cmds}
             if time.time() >= deadline:
@@ -2538,7 +2447,7 @@ def ingest_event(req: EventRequest, request: Request):
         device_id = req.device_id        # admins may post synthetic/test events as any device
     else:
         raise HTTPException(status_code=403, detail="Only device-scoped API keys (or admins) may post events")
-    household_id = _household(request)
+    household_id = deps.household(request)
     conn = get_db()
     try:
         # Heartbeats are liveness pings, not events — keep only the latest per device (don't flood
@@ -2637,7 +2546,7 @@ def _validate_chat(request: "QueryRequest", raw_request: Request):
     if sum(len(a.content) for a in request.attachments) > attachment_limit:
         raise HTTPException(status_code=400, detail="Attachments are limited to 48,000 characters total")
     user_id = raw_request.state.user_id
-    household_id = _household(raw_request)
+    household_id = deps.household(raw_request)
     session_id = chat.resolve_session(request.session_id, user_id)
     chat.require_owned_session(session_id, user_id)
     return user_id, household_id, session_id, user_text
@@ -2851,14 +2760,9 @@ def chat_stream(request: QueryRequest, raw_request: Request):
 
 
 # ----------------- Admin -----------------
-def _require_admin(request: Request):
-    if not getattr(request.state, "is_admin", False):
-        raise HTTPException(status_code=403, detail="Admin only")
-
-
 @app.post("/admin/users")
 def admin_create_user(req: CreateUserRequest, request: Request):
-    _require_admin(request)
+    deps.require_admin(request)
     conn = get_db()
     try:
         conn.execute("BEGIN IMMEDIATE")               # serialize id selection against concurrent creates
@@ -2867,9 +2771,9 @@ def admin_create_user(req: CreateUserRequest, request: Request):
         # create a user into someone else's, so an admin cannot plant an account in another home.
         conn.execute(
             "INSERT INTO users (id, username, password_hash, role, household_id) VALUES (?, ?, ?, ?, ?)",
-            (new_id, req.username, hash_password(req.password), req.role, _household(request)))
+            (new_id, req.username, hash_password(req.password), req.role, deps.household(request)))
         conn.commit()
-        _audit(request, "user.create", f"{req.username} role={req.role} id={new_id}")
+        deps.audit(request, "user.create", f"{req.username} role={req.role} id={new_id}")
         return {"status": "ok", "id": new_id}
     except sqlite3.IntegrityError:
         conn.rollback()
@@ -2880,7 +2784,7 @@ def admin_create_user(req: CreateUserRequest, request: Request):
 
 @app.get("/admin/users")
 def admin_list_users(request: Request):
-    _require_admin(request)
+    deps.require_admin(request)
     conn = get_db()
     try:
         users = conn.execute("""
@@ -2892,7 +2796,7 @@ def admin_list_users(request: Request):
             LEFT JOIN conversation_history m ON c.id = m.session_id
             WHERE u.household_id = ?
             GROUP BY u.id
-        """, (_household(request),)).fetchall()
+        """, (deps.household(request),)).fetchall()
         return {"users": [dict(u) for u in users]}
     finally:
         conn.close()
@@ -2999,13 +2903,13 @@ def _lowest_free_user_id(conn) -> int:
 
 @app.delete("/admin/users/{user_id}")
 def admin_delete_user(user_id: int, request: Request):
-    _require_admin(request)
+    deps.require_admin(request)
     if user_id == request.state.user_id:
         raise HTTPException(status_code=400, detail="Cannot delete self")
     conn = get_db()
     try:
         conn.execute("BEGIN IMMEDIATE")     # serialize the count check + deletes (no TOCTOU lockout race)
-        household_id = _household(request)
+        household_id = deps.household(request)
         target = conn.execute("SELECT role FROM users WHERE id = ? AND household_id = ?",
                               (user_id, household_id)).fetchone()
         if target is None:
@@ -3027,17 +2931,17 @@ def admin_delete_user(user_id: int, request: Request):
     finally:
         conn.close()
     memory.delete_vectors(all_msg_ids)
-    _audit(request, "user.delete", f"id={user_id}")
+    deps.audit(request, "user.delete", f"id={user_id}")
     return {"status": "ok"}
 
 
 @app.put("/admin/users/{user_id}/role")
 def admin_set_role(user_id: int, req: RoleUpdateRequest, request: Request):
     """Promote a user to admin or demote back to user. Refuses to demote the last admin."""
-    _require_admin(request)
+    deps.require_admin(request)
     conn = get_db()
     try:
-        household_id = _household(request)
+        household_id = deps.household(request)
         if conn.execute("SELECT 1 FROM users WHERE id = ? AND household_id = ?",
                         (user_id, household_id)).fetchone() is None:
             raise HTTPException(status_code=404, detail="No such user")
@@ -3051,7 +2955,7 @@ def admin_set_role(user_id: int, req: RoleUpdateRequest, request: Request):
         conn.commit()
         if cur.rowcount == 0:
             raise HTTPException(status_code=400, detail="Cannot demote the last admin")
-        _audit(request, "user.role", f"id={user_id} -> {req.role}")
+        deps.audit(request, "user.role", f"id={user_id} -> {req.role}")
         return {"status": "ok", "role": req.role}
     finally:
         conn.close()
@@ -3060,8 +2964,8 @@ def admin_set_role(user_id: int, req: RoleUpdateRequest, request: Request):
 @app.get("/admin/home-assistant")
 def admin_ha_get(request: Request):
     """Current HA config for the admin UI. Never returns the token itself — only whether one is set."""
-    _require_admin(request)
-    if not _owns_smart_home(request):
+    deps.require_admin(request)
+    if not deps.owns_smart_home(request):
         # Not an error for a household without a smart home — just nothing to show. Reporting
         # "unconfigured" rather than 403 also avoids confirming that some OTHER household has one.
         return {"configured": False, "url": "", "token_set": False, "allowed_entities": [],
@@ -3080,12 +2984,12 @@ def admin_ha_get(request: Request):
 @app.put("/admin/home-assistant")
 def admin_ha_put(req: HAConfigRequest, request: Request):
     """Save HA config (url/token/allowlist) to the DB and apply it live — no restart."""
-    _require_admin(request)
-    _require_smart_home(request)
+    deps.require_admin(request)
+    deps.require_smart_home(request)
     if HA_URL_FROM_ENV or HA_TOKEN_FROM_ENV:
         raise HTTPException(status_code=409,
                             detail="Home Assistant is configured via environment variables — edit those instead.")
-    hid = _household(request)
+    hid = deps.household(request)
     url = (req.url or "").rstrip("/")
     set_household_setting(hid, "ha_url", url)
     if req.token:                                   # blank = keep the existing token
@@ -3095,15 +2999,15 @@ def admin_ha_put(req: HAConfigRequest, request: Request):
     set_household_setting(hid, "ha_allowed_entities", json.dumps(allowed))
     ha.configure(url=url, token=token, allowed=allowed, household_id=hid)
     _rebuild_intent_router()
-    _audit(request, "ha.config", f"url={url or '(cleared)'} entities={len(allowed)}")
+    deps.audit(request, "ha.config", f"url={url or '(cleared)'} entities={len(allowed)}")
     return {"status": "ok", "configured": ha.configured(), "connected": ha.ping()}
 
 
 @app.post("/admin/home-assistant/test")
 def admin_ha_test(req: HAConfigRequest, request: Request):
     """Probe a URL/token (blank token = use the stored one) before saving."""
-    _require_admin(request)
-    _require_smart_home(request)
+    deps.require_admin(request)
+    deps.require_smart_home(request)
     ok, detail = ha.test_connection(req.url, req.token or ha.HA_TOKEN)
     return {"ok": ok, "detail": detail}
 
@@ -3111,20 +3015,20 @@ def admin_ha_test(req: HAConfigRequest, request: Request):
 @app.get("/admin/home-assistant/entities")
 def admin_ha_entities(request: Request):
     """Controllable HA entities for the device picker (uses the currently-saved connection)."""
-    _require_admin(request)
-    _require_smart_home(request)
+    deps.require_admin(request)
+    deps.require_smart_home(request)
     return {"entities": ha.list_entities()}
 
 
 @app.post("/admin/api_keys")
 def admin_create_key(req: CreateKeyRequest, request: Request):
-    _require_admin(request)
+    deps.require_admin(request)
     conn = get_db()
     try:
         # A key may only ever be minted FOR a member of the admin's own household — otherwise an
         # admin could issue themselves a credential that authenticates as another household's user.
         if not conn.execute("SELECT 1 FROM users WHERE id = ? AND household_id = ?",
-                            (req.user_id, _household(request))).fetchone():
+                            (req.user_id, deps.household(request))).fetchone():
             raise HTTPException(status_code=400, detail="No such user")
         new_key = "jk-" + secrets.token_hex(16)
         device_id = (req.device_id or "").strip() or None     # "" → NULL (unbound), like the CLI
@@ -3133,7 +3037,7 @@ def admin_create_key(req: CreateKeyRequest, request: Request):
                      "VALUES (?, ?, ?, ?, ?)",
                      (hash_token(new_key), new_key[:10], req.user_id, req.description, device_id))
         conn.commit()
-        _audit(request, "key.create", f"user={req.user_id} device={device_id or '-'} ({new_key[:10]}…)")
+        deps.audit(request, "key.create", f"user={req.user_id} device={device_id or '-'} ({new_key[:10]}…)")
         return {"key": new_key, "device_id": device_id}
     finally:
         conn.close()
@@ -3141,7 +3045,7 @@ def admin_create_key(req: CreateKeyRequest, request: Request):
 
 @app.get("/admin/api_keys")
 def admin_list_keys(request: Request):
-    _require_admin(request)
+    deps.require_admin(request)
     conn = get_db()
     try:
         keys = conn.execute(
@@ -3149,7 +3053,7 @@ def admin_list_keys(request: Request):
             "       k.created_at, k.usage_count, k.last_used_at "
             "FROM api_keys k JOIN users u ON k.user_id = u.id "
             "WHERE u.household_id = ? ORDER BY k.created_at DESC",
-            (_household(request),)).fetchall()
+            (deps.household(request),)).fetchall()
         # Display the prefix only — the full key is never recoverable (hash at rest).
         return {"keys": [{**dict(k), "key_string": (k["key_prefix"] or "jk-") + "…"} for k in keys]}
     finally:
@@ -3158,15 +3062,15 @@ def admin_list_keys(request: Request):
 
 @app.delete("/admin/api_keys/{key_id}")
 def admin_delete_key(key_id: int, request: Request):
-    _require_admin(request)
+    deps.require_admin(request)
     conn = get_db()
     try:
         conn.execute(
             "DELETE FROM api_keys WHERE rowid = ? AND user_id IN "
             "(SELECT id FROM users WHERE household_id = ?)",
-            (key_id, _household(request)))
+            (key_id, deps.household(request)))
         conn.commit()
-        _audit(request, "key.delete", f"id={key_id}")
+        deps.audit(request, "key.delete", f"id={key_id}")
         return {"status": "ok"}
     finally:
         conn.close()
@@ -3174,10 +3078,10 @@ def admin_delete_key(key_id: int, request: Request):
 
 @app.get("/admin/stats")
 def admin_stats(request: Request):
-    _require_admin(request)
+    deps.require_admin(request)
     conn = get_db()
     try:
-        hid = _household(request)
+        hid = deps.household(request)
         # Counts are scoped too — an instance-wide total would tell a demo visitor how many real
         # users and conversations exist on the box.
         return {
@@ -3198,13 +3102,13 @@ def admin_stats(request: Request):
 def admin_events(request: Request, limit: int = 50, type: Optional[str] = None, since_id: int = 0):
     """Recent edge/vision events (most recent first). `type` filters (e.g. face_seen for the
     recognitions panel / verify); `since_id` returns only events newer than an id (efficient polling)."""
-    _require_admin(request)
+    deps.require_admin(request)
     limit = max(1, min(limit, 500))
     conn = get_db()
     try:
         q = ("SELECT id, device_id, type, data, created_at FROM vision_events "
              "WHERE household_id = ? AND id > ?")
-        params: List[Any] = [_household(request), since_id]
+        params: List[Any] = [deps.household(request), since_id]
         if type:
             q += " AND type = ?"
             params.append(type)
@@ -3227,7 +3131,7 @@ def admin_events(request: Request, limit: int = 50, type: Optional[str] = None, 
 @app.get("/admin/faces")
 def admin_list_faces(request: Request):
     """Enrolled people for the admin Faces page: name, linked user, embedding count, last sighting."""
-    _require_admin(request)
+    deps.require_admin(request)
     conn = get_db()
     try:
         # The last_seen subquery matches on NAME, so it needs the household filter too — without
@@ -3242,7 +3146,7 @@ def admin_list_faces(request: Request):
             "FROM persons p LEFT JOIN users u ON p.user_id = u.id "
             "LEFT JOIN face_embeddings e ON e.person_id = p.id "
             "WHERE p.household_id = ? "
-            "GROUP BY p.id ORDER BY p.name", (_household(request),)).fetchall()
+            "GROUP BY p.id ORDER BY p.name", (deps.household(request),)).fetchall()
         return {"faces": [dict(r) for r in rows]}
     finally:
         conn.close()
@@ -3251,11 +3155,11 @@ def admin_list_faces(request: Request):
 @app.get("/admin/faces/{person_id}/embeddings")
 def admin_list_embeddings(person_id: int, request: Request):
     """The individual embeddings for a person (for the details/expand view)."""
-    _require_admin(request)
+    deps.require_admin(request)
     conn = get_db()
     try:
         if not conn.execute("SELECT 1 FROM persons WHERE id = ? AND household_id = ?",
-                            (person_id, _household(request))).fetchone():
+                            (person_id, deps.household(request))).fetchone():
             raise HTTPException(status_code=404, detail="No such person")
         rows = conn.execute(
             "SELECT id, source, created_at FROM face_embeddings WHERE person_id = ? ORDER BY id",
@@ -3269,9 +3173,9 @@ def admin_list_embeddings(person_id: int, request: Request):
 def admin_update_face(person_id: int, req: FaceUpdateRequest, request: Request):
     """Rename a person and/or link them to a user account. Only the fields actually sent change
     (so a rename can't clobber the link); send user_id=null to clear the link."""
-    _require_admin(request)
+    deps.require_admin(request)
     fields = req.model_fields_set
-    household_id = _household(request)
+    household_id = deps.household(request)
     conn = get_db()
     try:
         if not conn.execute("SELECT 1 FROM persons WHERE id = ? AND household_id = ?",
@@ -3299,10 +3203,10 @@ def admin_update_face(person_id: int, req: FaceUpdateRequest, request: Request):
 @app.delete("/admin/faces/{person_id}")
 def admin_delete_face(person_id: int, request: Request):
     """Delete a person and all their embeddings."""
-    _require_admin(request)
+    deps.require_admin(request)
     conn = get_db()
     try:
-        household_id = _household(request)
+        household_id = deps.household(request)
         # Scope the person delete, and drop embeddings only for a person that is actually ours —
         # otherwise a guessed id would wipe another household's biometric data.
         conn.execute("DELETE FROM face_embeddings WHERE person_id IN "
@@ -3313,7 +3217,7 @@ def admin_delete_face(person_id: int, request: Request):
         conn.commit()
         if cur.rowcount == 0:
             raise HTTPException(status_code=404, detail="No such person")
-        _audit(request, "face.delete", f"person_id={person_id}")
+        deps.audit(request, "face.delete", f"person_id={person_id}")
         return {"status": "ok"}
     finally:
         conn.close()
@@ -3322,13 +3226,13 @@ def admin_delete_face(person_id: int, request: Request):
 @app.delete("/admin/faces/embeddings/{embedding_id}")
 def admin_delete_embedding(embedding_id: int, request: Request):
     """Delete one embedding (the person stays — useful to prune a bad capture)."""
-    _require_admin(request)
+    deps.require_admin(request)
     conn = get_db()
     try:
         cur = conn.execute(
             "DELETE FROM face_embeddings WHERE id = ? AND person_id IN "
             "(SELECT id FROM persons WHERE household_id = ?)",
-            (embedding_id, _household(request)))
+            (embedding_id, deps.household(request)))
         conn.commit()
         if cur.rowcount == 0:
             raise HTTPException(status_code=404, detail="No such embedding")
@@ -3389,33 +3293,33 @@ def remove_knowledge(fact_id: int, request: Request):
 @app.get("/admin/knowledge/global")
 def list_global_knowledge(request: Request):
     """Household/global facts (shared by all users). Admin-only — these go into everyone's prompt."""
-    _require_admin(request)
-    facts = memory.get_global_knowledge_list(_household(request))
+    deps.require_admin(request)
+    facts = memory.get_global_knowledge_list(deps.household(request))
     return {"facts": facts, "count": len(facts)}
 
 
 @app.post("/admin/knowledge/global")
 def add_global_knowledge(req: KnowledgeFactRequest, request: Request):
     """Add a household fact (admin-only). An external tool (e.g. a loader script) can call this too."""
-    _require_admin(request)
+    deps.require_admin(request)
     content = req.content.strip()
     if not content:
         raise HTTPException(status_code=400, detail="Empty content")
     category = (req.category or "other").lower().strip()
     if category not in VALID_FACT_CATEGORIES:
         category = "other"
-    fact_id = memory.store_global_fact(_household(request), category, content, source="manual")
-    _audit(request, "knowledge.global.add", f"[{category}] {content[:120]}")
+    fact_id = memory.store_global_fact(deps.household(request), category, content, source="manual")
+    deps.audit(request, "knowledge.global.add", f"[{category}] {content[:120]}")
     return {"id": fact_id, "status": "ok"}
 
 
 @app.put("/admin/knowledge/global/{fact_id}")
 def edit_global_knowledge(fact_id: int, req: KnowledgeFactRequest, request: Request):
-    _require_admin(request)
+    deps.require_admin(request)
     content = req.content.strip()
     if not content:
         raise HTTPException(status_code=400, detail="Empty content")
-    if not memory.update_global_fact(_household(request), fact_id, content,
+    if not memory.update_global_fact(deps.household(request), fact_id, content,
                                      req.category.lower().strip() if req.category else None):
         raise HTTPException(status_code=404, detail="No such fact")
     return {"status": "ok"}
@@ -3423,10 +3327,10 @@ def edit_global_knowledge(fact_id: int, req: KnowledgeFactRequest, request: Requ
 
 @app.delete("/admin/knowledge/global/{fact_id}")
 def remove_global_knowledge(fact_id: int, request: Request):
-    _require_admin(request)
-    if not memory.delete_global_fact(_household(request), fact_id):
+    deps.require_admin(request)
+    if not memory.delete_global_fact(deps.household(request), fact_id):
         raise HTTPException(status_code=404, detail="No such fact")
-    _audit(request, "knowledge.global.delete", f"id={fact_id}")
+    deps.audit(request, "knowledge.global.delete", f"id={fact_id}")
     return {"status": "ok"}
 
 
@@ -3434,20 +3338,20 @@ def remove_global_knowledge(fact_id: int, request: Request):
 def global_knowledge_chat(req: GlobalChatRequest, request: Request):
     """Admin 'global chat': each non-empty line of the message becomes a household fact and is stored
     immediately. Deterministic (no LLM) so it's instant and never mis-files what you said."""
-    _require_admin(request)
+    deps.require_admin(request)
     lines = [ln.strip() for ln in req.text.splitlines() if ln.strip()]
     if not lines:
         raise HTTPException(status_code=400, detail="Nothing to save")
-    saved = [{"id": memory.store_global_fact(_household(request), "household", ln, source="global-chat"), "content": ln}
+    saved = [{"id": memory.store_global_fact(deps.household(request), "household", ln, source="global-chat"), "content": ln}
              for ln in lines]
-    _audit(request, "knowledge.global.chat", f"+{len(saved)} fact(s)")
+    deps.audit(request, "knowledge.global.chat", f"+{len(saved)} fact(s)")
     return {"reply": f"Saved {len(saved)} fact{'s' if len(saved) != 1 else ''} to household knowledge.",
-            "saved": saved, "count": len(memory.get_global_knowledge_list(_household(request)))}
+            "saved": saved, "count": len(memory.get_global_knowledge_list(deps.household(request)))}
 
 
 @app.post("/knowledge/extract-now")
 def force_extraction(request: Request):
-    _require_admin(request)
+    deps.require_admin(request)
     unprocessed = memory.get_unprocessed_messages(batch_size=50)
     if not unprocessed:
         return {"status": "ok", "processed": 0, "message": "No unprocessed messages"}
