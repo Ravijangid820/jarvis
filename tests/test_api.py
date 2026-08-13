@@ -16,18 +16,28 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 
 # Configure a throwaway home + config BEFORE importing the app, and skip the model.
-_TMP = Path(tempfile.mkdtemp())
-(_TMP / "config").mkdir()
-(_TMP / "config" / "schema.sql").write_text((REPO / "config" / "schema.sql").read_text())
-_cfg = json.loads((REPO / "config" / "jarvis.example.json").read_text())
-_DB = _TMP / "test.db"
-_cfg["memory"]["db_path"] = str(_DB)
-_cfg["memory"]["chroma_db_path"] = str(_TMP / "chroma")
-(_TMP / "config" / "jarvis.json").write_text(json.dumps(_cfg))
-os.environ["JARVIS_HOME"] = str(_TMP)
-os.environ["JARVIS_NO_EMBED"] = "1"
+#
+# Guarded, like every other test module that does this. config is imported once per process and
+# caches its paths, so whichever module gets there first decides where the database lives. This
+# file used to set that up unconditionally and then bind _DB to its OWN temp path — correct in a
+# full alphabetical run where test_api imports config first, and wrong in every subset run. Any
+# `-k` selection or single-file run that reached test_device_grounding (which borrows the client
+# fixture from here) without test_api first failed with "no such table: users", which reads like
+# a schema bug rather than a fixture-ordering one.
+os.environ.setdefault("JARVIS_NO_EMBED", "1")
+if "config" not in sys.modules:
+    _TMP = Path(tempfile.mkdtemp())
+    (_TMP / "config").mkdir()
+    (_TMP / "config" / "schema.sql").write_text((REPO / "config" / "schema.sql").read_text())
+    _cfg = json.loads((REPO / "config" / "jarvis.example.json").read_text())
+    _cfg["memory"]["db_path"] = str(_TMP / "test.db")
+    _cfg["memory"]["chroma_db_path"] = str(_TMP / "chroma")
+    (_TMP / "config" / "jarvis.json").write_text(json.dumps(_cfg))
+    os.environ["JARVIS_HOME"] = str(_TMP)
 
 sys.path.insert(0, str(REPO / "src" / "orchestrator"))
+import config as _config  # noqa: E402
+_DB = Path(_config.DB_PATH)          # whoever configured it, this is the database in use
 import auth  # noqa: E402
 import main  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402

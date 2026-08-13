@@ -48,5 +48,10 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # The 86 node --test suites used to run ONLY on the author's machine: this job went
+      # straight from lint to build, so anything they would have caught reached main unopposed.
+      - name: Tests
+        run: npm test
+
       - name: Production build
         run: npm run build
