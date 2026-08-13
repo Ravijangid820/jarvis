@@ -246,6 +246,18 @@ _NOISE_ONLY = frozenset({"i", "a", "uh", "um", "hm", "hmm", "eh", "ah", "oh", "s
                          "ok", "okay"})
 
 
+def _normalise(text: str) -> str:
+    """Lowercase, drop punctuation, collapse whitespace — the form every phrase set is matched in.
+
+    Apostrophes are REMOVED, not turned into spaces, so "what's new" becomes "whats new" and not
+    "what s new". They were being split, which silently killed every listed phrase containing one:
+    the sets read fine and matched nothing. Caught end-to-end, when "What's new?" came back with a
+    list of the user's appliances.
+    """
+    text = (text or "").replace("'", "").replace("\u2019", "")
+    return " ".join(_NON_WORD.sub(" ", text.lower()).split())
+
+
 def is_greeting(text: str) -> bool:
     """True when the message is ONLY a greeting or content-free noise — nothing to answer.
 
@@ -268,7 +280,7 @@ def is_greeting(text: str) -> bool:
     # "you there jarvis"). Stripping only the prefix left "jarvis" as an unrecognised word and the
     # whole utterance fell through to the model.
     stripped = _WAKE_SUFFIX.sub("", stripped, count=1)
-    cleaned = " ".join(_NON_WORD.sub(" ", stripped.lower()).split())
+    cleaned = _normalise(stripped)
     if not cleaned:
         return bool((text or "").strip())        # the wake word alone ("jarvis") — still an address
     return cleaned in _NOISE_ONLY or cleaned in GREETING_PHRASES
@@ -286,9 +298,17 @@ def is_greeting(text: str) -> bool:
 # going", "what's the status") is left out, because for those the house really may be the subject.
 SELF_QUERY_PHRASES = frozenset({
     "how are you", "how are you doing", "how are you feeling", "how you doing", "how r u",
-    "how do you feel", "hows it going with you", "how have you been", "how are you today",
+    "how do you feel", "how have you been", "how are you today", "hows you",
     "are you ok", "are you okay", "are you alright", "you ok", "you okay", "you alright",
     "what is your status", "whats your status", "how are things with you",
+    # Conversational openers. These read as "how is the house" to a model holding a device list,
+    # and measured without any block it invents one ("the air is conditioned") 4 times in 6. A
+    # person asking them means the assistant, the same as they would of a colleague, so they get
+    # the assistant's own status — which is both what was asked and something true.
+    "hows it going", "how is it going", "hows it going with you", "how goes it",
+    "hows everything", "how is everything", "hows everything going", "how is everything going",
+    "how are things", "hows things", "whats new", "what is new", "whats up with you",
+    "you good", "are you good", "everything ok", "everything okay", "all good",
 })
 
 
@@ -300,8 +320,58 @@ def is_self_query(text: str) -> bool:
     """
     stripped = _WAKE_PREFIX.sub("", text or "", count=1)
     stripped = _WAKE_SUFFIX.sub("", stripped, count=1)
-    cleaned = " ".join(_NON_WORD.sub(" ", stripped.lower()).split())
-    return cleaned in SELF_QUERY_PHRASES
+    return _normalise(stripped) in SELF_QUERY_PHRASES
+
+
+# --- "is this message about the home at all?" --------------------------------
+# Decides whether the live device block is attached to the turn. It used to go on EVERY turn once
+# Home Assistant was configured, which is why an ordinary conversation kept turning into a status
+# report: a 2B model answers from whatever state-like data is nearest, and the house was always
+# nearest. Devices are now shown only when the message is actually about them.
+#
+# Generous on purpose, and the asymmetry is the reason. A false positive costs a few tokens of
+# context nobody reads. A false negative means a genuine question about the home is answered with
+# no device data in front of the model — and measured, that is when it invents hardware ("the air
+# is conditioned", "the temperature is set") for a house that has none. So anything that smells of
+# the home gets the block.
+_HOME_NOUNS = re.compile(
+    r"\b(light|lights|lighting|lamp|lamps|bulb|bulbs|tube ?light|fan|fans|switch|switches|"
+    r"plug|plugs|socket|sockets|heater|heating|geyser|boiler|ac|a/c|aircon|air ?con(?:ditioner)?|"
+    r"thermostat|temperature|tv|telly|television|speaker|speakers|kettle|curtain|curtains|blind|"
+    r"blinds|door|doors|appliance|appliances|device|devices|automation|automations|scene|scenes|"
+    r"home|house|room|rooms|kitchen|bedroom|bathroom|living ?room|hall|garage|upstairs|downstairs|"
+    r"outside|porch|garden)\b", re.I)
+# "is it on?", "are they off?" — a follow-up whose subject is a pronoun. Without this the block is
+# dropped exactly when the previous turn established a device as the topic.
+_PRONOUN_STATE = re.compile(r"\b(is|are|was|were)\s+(it|that|this|they|them|those)\s+"
+                            r"(on|off|running|open|closed)\b", re.I)
+# "what's on?", "is anything on?", "turn everything off" — asking the state of the house without
+# naming anything in it. Ambiguous in general English, unambiguous to a home assistant, and caught
+# by a test: "what's on?" lost its device block on the first cut of this predicate, which is the
+# precise case where the model invents rather than reports.
+_HOME_STATE_QUERY = re.compile(
+    r"\b(?:what|which|anything|everything|all)\b[\w'’\s]{0,12}?\b(?:on|off|running)\b|"
+    r"\bis\s+anything\b|\bwhat'?s\s+(?:on|off|running)\b", re.I)
+
+
+def mentions_home(text: str, device_names=()) -> bool:
+    """True when the turn plausibly concerns the home, so the live device block belongs on it.
+
+    `device_names` are the household's actual device display names, so a home whose devices are
+    called "Reading Nook" or "Aquarium" is matched on its own vocabulary rather than only the
+    generic nouns above.
+    """
+    if not text:
+        return False
+    if (_HOME_NOUNS.search(text) or HOME_CONTROL_VERB.search(text)
+            or _PRONOUN_STATE.search(text) or _HOME_STATE_QUERY.search(text)):
+        return True
+    cleaned = _normalise(text)
+    for name in device_names or ():
+        words = [w for w in _NON_WORD.sub(" ", str(name).lower()).split() if len(w) > 2]
+        if words and all(re.search(rf"\b{re.escape(w)}\b", cleaned) for w in words):
+            return True
+    return False
 
 
 # The spoken acknowledgement, and now the typed one too — they were two different sets, so saying

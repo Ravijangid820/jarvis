@@ -412,11 +412,15 @@ def test_a_device_question_still_gets_the_device_block(client, owner, home):
     assert "YOUR OWN STATUS" not in turn
 
 
-def test_ordinary_questions_are_unaffected(client, owner, home):
+def test_an_ordinary_question_carries_neither_block(client, owner, home):
+    """The general form of the complaint: an ordinary conversation should not be conducted in front
+    of a list of the user's appliances. The device block used to go on EVERY turn once Home
+    Assistant was configured, and a 2B model answers from whatever state-like data is nearest — so
+    the house was always nearest, and kept turning up in replies that had nothing to do with it."""
     sid = chat.create_session("t", owner)
     turn = _turn(sid, owner, "What is a neural network?")
     assert "YOUR OWN STATUS" not in turn
-    assert "DEVICES IN THIS HOME" in turn      # unchanged behaviour: the home stays in view
+    assert "DEVICES IN THIS HOME" not in turn
 
 
 def test_the_status_block_carries_no_numbers_to_garble(client, owner, home):
@@ -438,10 +442,28 @@ def test_self_queries_are_recognised(text):
 
 
 @pytest.mark.parametrize("text", [
-    "how is the house", "how are things", "how's everything going", "is the fan on",
-    "what is 2 + 2", "how do i reset the router",
+    "how is the house", "is the fan on", "what is 2 + 2", "how do i reset the router",
+    "what's on?", "turn everything off",
 ])
 def test_questions_about_anything_else_are_not(text):
-    """Kept tight on purpose: where "you" and "the house" are genuinely ambiguous, the house may
-    well be the subject, and the device block is the safer default."""
     assert not intents.is_self_query(text)
+
+
+@pytest.mark.parametrize("text", [
+    "what's on?", "whats on", "is anything on", "turn everything off", "is it on?",
+    "is the fan on", "switch off the tube light", "how is the house", "anything running?",
+])
+def test_a_home_question_still_gets_the_devices(text):
+    """The failure mode that matters. A genuine question about the home with no device data in
+    front of the model is when it INVENTS one — measured, it offered "the air is conditioned" for
+    a house with no air conditioning. "what's on?" names nothing and is still about the house; it
+    lost its block on the first cut of this predicate and a test caught it."""
+    assert intents.mentions_home(text, ["Fan", "Light", "Tube Light"])
+
+
+@pytest.mark.parametrize("text", [
+    "what is a neural network", "tell me a joke", "write me a python function",
+    "what is 2 + 2", "who won the world cup", "explain recursion",
+])
+def test_ordinary_conversation_does_not(text):
+    assert not intents.mentions_home(text, ["Fan", "Light", "Tube Light"])

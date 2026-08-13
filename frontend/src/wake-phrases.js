@@ -38,7 +38,11 @@ export const MAX_PREFIX_WORDS = 3
 
 /** Lowercase, strip punctuation, collapse whitespace. Whisper's casing and commas are not signal. */
 export function normalise(text) {
+  // Apostrophes are removed, not turned into spaces, so "what's" becomes "whats" and not "what s".
+  // Matches intents._normalise on the server; splitting them there silently killed every listed
+  // phrase containing one.
   return (text || "")
+    .replace(/['\u2019]/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9\s]+/g, " ")
     .split(/\s+/)

@@ -176,6 +176,16 @@ def delete_session(session_id: str, user_id: int):
 
 
 # --- Prompt assembly --------------------------------------------------------
+def _device_names() -> List[str]:
+    """This household's device display names, so mentions_home() matches a home on its own
+    vocabulary ("Reading Nook") and not only the generic nouns it ships with. Best-effort: the
+    names are a cache ha.refresh_names() fills at start-up, so this costs nothing per turn."""
+    try:
+        return [str(n) for n in (ha.friendly_names() or {}).values()]
+    except Exception:
+        return []
+
+
 def build_messages(session_id: str, user_id: int, household_id: int, user_text: str,
                    custom_sys_prompt: Optional[str] = None,
                    completion_reserve: int = COMPLETION_RESERVE_DEFAULT,
@@ -261,7 +271,7 @@ def build_messages(session_id: str, user_id: int, household_id: int, user_text: 
     # neither. So the slot always carries something true; only the subject changes.
     if intents.is_self_query(user_text):
         turn_parts.append(sysinfo.self_status_block())
-    elif ha.configured() and ha.owns(household_id):
+    elif ha.configured() and ha.owns(household_id) and intents.mentions_home(user_text, _device_names()):
         devices = ha.snapshot()
         if devices:
             lines = "\n".join(f"  {d['name']} — {d['state']}" for d in devices)
