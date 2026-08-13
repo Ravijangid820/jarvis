@@ -9,7 +9,8 @@ import json
 
 import pytest
 
-from test_api import _tok, main
+from test_api import _tok, main  # noqa: F401  (main boots the app; the routes live in routes/)
+from routes import voice as routes_voice
 # Reuse test_api's booted app rather than standing up a second one. Aliased and re-exposed so the
 # F811 that ruff raises for an imported fixture named in a parameter list is confined to this one
 # line instead of every test below it.
@@ -30,13 +31,13 @@ TWO_MICS = {
 @pytest.fixture(autouse=True)
 def _clean_selection():
     """Each test starts with no microphone chosen, and leaves none behind."""
-    main.ACTIVE_MIC_PATH.unlink(missing_ok=True)
+    routes_voice.ACTIVE_MIC_PATH.unlink(missing_ok=True)
     yield
-    main.ACTIVE_MIC_PATH.unlink(missing_ok=True)
+    routes_voice.ACTIVE_MIC_PATH.unlink(missing_ok=True)
 
 
 def _fake_devices(monkeypatch, payload):
-    monkeypatch.setattr(main, "_list_capture_devices", lambda: payload)
+    monkeypatch.setattr(routes_voice, "_list_capture_devices", lambda: payload)
 
 
 def test_listing_and_selecting_are_admin_only(client, monkeypatch):
@@ -57,7 +58,7 @@ def test_selecting_a_mic_stores_name_and_index_and_reports_it_active(client, mon
     r = client.post("/voice/mics/select", headers=h, json={"capture_id": 1})
     assert r.status_code == 200 and r.json()["status"] == "restart_required"
     # The NAME is persisted, not just the index — that is what survives a device being unplugged.
-    assert json.loads(main.ACTIVE_MIC_PATH.read_text()) == {"capture_id": 1, "name": "Boya BY-M1"}
+    assert json.loads(routes_voice.ACTIVE_MIC_PATH.read_text()) == {"capture_id": 1, "name": "Boya BY-M1"}
 
     after = client.get("/voice/mics", headers=h).json()
     assert after["selected"]["name"] == "Boya BY-M1" and after["stale"] is False
@@ -95,11 +96,11 @@ def test_selecting_a_device_that_is_not_there_is_rejected(client, monkeypatch):
     _fake_devices(monkeypatch, TWO_MICS)
     h = {"Authorization": "Bearer " + _tok(client, "tony", "pw-admin")}
     assert client.post("/voice/mics/select", headers=h, json={"capture_id": 7}).status_code == 404
-    assert not main.ACTIVE_MIC_PATH.exists()
+    assert not routes_voice.ACTIVE_MIC_PATH.exists()
     # -1 is always valid: it means "the system default", and is the way back from a bad choice
     # even when the device list is empty or wrong.
     assert client.post("/voice/mics/select", headers=h, json={"capture_id": -1}).status_code == 200
-    assert json.loads(main.ACTIVE_MIC_PATH.read_text())["capture_id"] == -1
+    assert json.loads(routes_voice.ACTIVE_MIC_PATH.read_text())["capture_id"] == -1
 
 
 def test_no_sound_card_is_an_answer_not_an_error(client, monkeypatch):
@@ -210,32 +211,32 @@ def _pretend_ffmpeg_exists(monkeypatch):
     """The endpoint refuses early when ffmpeg is missing, so any test reaching PAST that check must
     say what it assumes. CI runners have no ffmpeg; this box does, which is the only reason the
     lock test below ever passed here — it was asserting 409 while CI got a truthful 503."""
-    monkeypatch.setattr(main.shutil, "which", lambda name: "/usr/bin/ffmpeg" if name == "ffmpeg" else None)
+    monkeypatch.setattr(routes_voice.shutil, "which", lambda name: "/usr/bin/ffmpeg" if name == "ffmpeg" else None)
 
 
 def test_only_one_session_may_hold_the_server_mic(client, monkeypatch):
     _fake_devices(monkeypatch, ALSA_TWO)
     _pretend_ffmpeg_exists(monkeypatch)
     h = {"Authorization": "Bearer " + _tok(client, "pepper", "pw-user")}
-    assert main._SERVER_MIC_LOCK.acquire(blocking=False)      # pretend another session has it
+    assert routes_voice._SERVER_MIC_LOCK.acquire(blocking=False)      # pretend another session has it
     try:
         r = client.get("/voice/server-mic/stream?device=plughw:0,0", headers=h)
         assert r.status_code == 409
         assert client.get("/voice/inputs", headers=h).json()["busy"] is True
     finally:
-        main._SERVER_MIC_LOCK.release()
+        routes_voice._SERVER_MIC_LOCK.release()
     assert client.get("/voice/inputs", headers=h).json()["busy"] is False
 
 
 def test_missing_ffmpeg_is_reported_not_crashed(client, monkeypatch):
     _fake_devices(monkeypatch, ALSA_TWO)
-    monkeypatch.setattr(main.shutil, "which", lambda _n: None)
+    monkeypatch.setattr(routes_voice.shutil, "which", lambda _n: None)
     h = {"Authorization": "Bearer " + _tok(client, "pepper", "pw-user")}
     r = client.get("/voice/server-mic/stream?device=plughw:0,0", headers=h)
     assert r.status_code == 503 and "ffmpeg" in r.json()["detail"]
     # A refused request must not strand the lock — the next session has to be able to take it.
-    assert main._SERVER_MIC_LOCK.acquire(blocking=False)
-    main._SERVER_MIC_LOCK.release()
+    assert routes_voice._SERVER_MIC_LOCK.acquire(blocking=False)
+    routes_voice._SERVER_MIC_LOCK.release()
 
 
 def test_a_missing_ffmpeg_outranks_a_busy_microphone(client, monkeypatch):
@@ -244,11 +245,11 @@ def test_a_missing_ffmpeg_outranks_a_busy_microphone(client, monkeypatch):
     have worked. Pinned because it is exactly the ordering a later refactor would flip by accident.
     """
     _fake_devices(monkeypatch, ALSA_TWO)
-    monkeypatch.setattr(main.shutil, "which", lambda _n: None)
+    monkeypatch.setattr(routes_voice.shutil, "which", lambda _n: None)
     h = {"Authorization": "Bearer " + _tok(client, "pepper", "pw-user")}
-    assert main._SERVER_MIC_LOCK.acquire(blocking=False)
+    assert routes_voice._SERVER_MIC_LOCK.acquire(blocking=False)
     try:
         r = client.get("/voice/server-mic/stream?device=plughw:0,0", headers=h)
         assert r.status_code == 503 and "ffmpeg" in r.json()["detail"]
     finally:
-        main._SERVER_MIC_LOCK.release()
+        routes_voice._SERVER_MIC_LOCK.release()
