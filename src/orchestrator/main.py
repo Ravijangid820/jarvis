@@ -41,6 +41,7 @@ from pydantic import BaseModel, Field, field_validator
 import chat
 import deps
 import memory
+from routes import mcp as routes_mcp
 from auth import hash_password, hash_token, verify_password
 from intents import (HOME_CONTROL_VERB, greeting_reply, is_greeting, is_gesture_volume, parse_home_command,
                      parse_reminder, parse_volume, says_more_than_command)
@@ -56,7 +57,6 @@ from config import (ADMIN_MAX_INPUT, ALLOWED_ORIGIN_REGEX, ALLOWED_ORIGINS, APP_
                     JARVIS_MODE, logger)
 import ha
 import intent_router
-import mcp
 from db import (PRIMARY_HOUSEHOLD_ID, get_db, get_household_setting, init_db,
                 set_household_setting)
 from llm import (count_prompt_tokens, llm_content, request_llm, request_llm_stream, request_llm_tools,
@@ -545,17 +545,6 @@ class FaceIdentifyRequest(BaseModel):
     # Same shape as FaceEnrollRequest.embedding — the client computes it exactly the same way,
     # the only difference is that nothing is stored.
     embedding: List[float] = Field(..., min_length=8, max_length=2048)
-
-
-class MCPServerRequest(BaseModel):
-    name: str = Field(..., min_length=1, max_length=64)
-    url: str = Field(..., min_length=5, max_length=500)
-    type: str = Field(default="http", max_length=32)
-    description: str = Field(default="", max_length=200)
-
-
-class MCPServerTestRequest(BaseModel):
-    url: str = Field(..., min_length=5, max_length=500)
 
 
 class ModelSwitchRequest(BaseModel):
@@ -1083,71 +1072,6 @@ def admin_services(request: Request) -> Dict[str, Any]:
         "version": APP_VERSION,
         "summary": {"up": up, "total": len(services), "operational": up == len(services)},
     }
-
-
-# ----------------- MCP Server Management -----------------
-# The MCP server list is process-wide, not per-household, and configuring one makes this server
-# fetch a URL a caller chose. In demo mode every visitor is an admin OF THEIR OWN HOUSEHOLD, so
-# _require_admin does not mean "trusted operator" there — it means "anyone who clicked Try it".
-# Until MCP config is household-scoped, demo households stay out of it entirely; that, rather
-# than an address blocklist, is what keeps untrusted callers away from this fetch (safehttp.py).
-_MCP_DEMO_DETAIL = "MCP servers are configured by the operator; they are read-only in public Demo Mode."
-
-
-@app.get("/mcp/servers")
-def get_mcp_servers(request: Request):
-    """Return configured MCP tool servers."""
-    deps.require_admin(request)
-    return {"servers": mcp.get_servers()}
-
-
-@app.post("/mcp/servers")
-def add_mcp_server(req: MCPServerRequest, request: Request):
-    """Add or update an MCP server."""
-    deps.require_admin(request)
-    deps.require_not_demo(_MCP_DEMO_DETAIL)
-    try:
-        server = mcp.add_server(req.name, req.url, req.type, req.description)
-        return {"status": "ok", "server": server}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to add server: {e}")
-
-
-@app.delete("/mcp/servers/{name}")
-def delete_mcp_server(name: str, request: Request):
-    """Delete an MCP server by name."""
-    deps.require_admin(request)
-    deps.require_not_demo(_MCP_DEMO_DETAIL)
-    if mcp.delete_server(name):
-        return {"status": "ok"}
-    raise HTTPException(status_code=404, detail="Server not found")
-
-
-@app.post("/mcp/test")
-def test_mcp_server(req: MCPServerTestRequest, request: Request):
-    """Test connection to an MCP server URL."""
-    deps.require_admin(request)
-    deps.require_not_demo(_MCP_DEMO_DETAIL)
-    ok, detail = mcp.test_server(req.url)
-    return {"ok": ok, "detail": detail}
-
-
-@app.get("/mcp/servers/{name}/tools")
-def get_mcp_server_tools(name: str, request: Request):
-    """Discover a configured server's MCP tools for review before any tool is enabled."""
-    deps.require_admin(request)
-    server = next((item for item in mcp.get_servers() if item.get("name") == name), None)
-    if not server:
-        raise HTTPException(status_code=404, detail="Server not found")
-    try:
-        return {"server": name, "tools": mcp.discover_tools(server.get("url", ""))}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.info("MCP tool discovery failed for %s: %s", name, e)
-        raise HTTPException(status_code=502, detail="MCP tool discovery failed")
 
 
 # ----------------- Multi-Model Discovery & Switching -----------------
@@ -3357,6 +3281,12 @@ def force_extraction(request: Request):
         return {"status": "ok", "processed": 0, "message": "No unprocessed messages"}
     memory.extract_facts_batch(unprocessed)
     return {"status": "ok", "processed": len(unprocessed)}
+
+
+# ----------------- Routers -----------------
+# Registered here rather than at the top of the file so their paths are matched in roughly the
+# order they used to be defined in. Nothing under routes/ imports main, so the graph stays a tree.
+app.include_router(routes_mcp.router)
 
 
 # ----------------- Static UI -----------------

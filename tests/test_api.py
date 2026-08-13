@@ -40,6 +40,7 @@ import config as _config  # noqa: E402
 _DB = Path(_config.DB_PATH)          # whoever configured it, this is the database in use
 import auth  # noqa: E402
 import main  # noqa: E402
+import mcp  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 
@@ -217,8 +218,8 @@ def test_chat_token_estimate_uses_llama_counter_or_fallback(client, monkeypatch)
 def test_mcp_tool_discovery_is_admin_only_and_returns_reviewable_tools(client, monkeypatch):
     admin = _tok(client, "tony", "pw-admin")
     user = _tok(client, "pepper", "pw-user")
-    monkeypatch.setattr(main.mcp, "get_servers", lambda: [{"name": "weather", "url": "https://mcp.example/tools"}])
-    monkeypatch.setattr(main.mcp, "discover_tools", lambda url: [{
+    monkeypatch.setattr(mcp, "get_servers", lambda: [{"name": "weather", "url": "https://mcp.example/tools"}])
+    monkeypatch.setattr(mcp, "discover_tools", lambda url: [{
         "name": "forecast", "description": "Get a forecast", "inputSchema": {"type": "object", "properties": {}},
     }])
     assert client.get("/mcp/servers/weather/tools", headers={"Authorization": "Bearer " + user}).status_code == 403
