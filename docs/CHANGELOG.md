@@ -54,8 +54,6 @@ hardware (AVX2 is 3-5× on prefill) and the size of the persona.
 
 ### the assistant is told what house it lives in
 
-### the assistant is told what house it lives in
-
 A real transcript showed it denying it could control anything ("I don't have a body or access to
 real-world devices"), inventing status it had no source for ("the lights are on, the temperature is
 set"), and — twice — emitting `Okay — the Light is now off.` for utterances that were **not

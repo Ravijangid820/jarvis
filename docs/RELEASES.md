@@ -6,6 +6,7 @@ see [CHANGELOG.md](CHANGELOG.md); for published image tags see
 
 | Version | Date | Theme |
 |---|---|---|
+| **v3.4.0** | 2026-08-12 | **Grounding and the wait before the first word** — greetings answered without the model, live device state on the turn, model-free titles, idle-batch embedding, a twelve-finding security pass |
 | **v3.3.0** | 2026-08-10 | **Live voice, end to end** — wake word, reactor HUD, mic selection, warm models, browser face enrolment — and the container fixes that finally ship them |
 | v3.2.1 | 2026-08-03 | Patch: two silent-failure fixes (CSP-blocked inline script, ORT path 404 on Pages) + build-time guards |
 | **v3.2.0** | 2026-08-03 | **Speech-to-text on the device** — in-browser Whisper (WASM); the server spends no CPU on STT |
@@ -98,9 +99,47 @@ fetch, a runtime loader reaching for a CDN, `immutable` caching freezing stale h
 stale binary into browsers, and a missing wasm variant that hung instead of erroring. v3.2.1 added two
 more of the same family and the build-time guards that now catch them.
 
+**v3.3.0 — the live voice page, and images that actually contain it (August 10).** `/voice` became a
+real thing to talk to rather than a demo: an openWakeWord spotter running in the tab, so "hey Jarvis"
+needs no server and no audio on the wire; a reactor HUD that shows what it is doing; a microphone
+picker, including the *server's* microphone streamed to the browser; models kept warm so "Preparing
+model…" is a first-run event rather than a per-utterance one; and face enrolment moved into the
+browser of the device holding the camera — detect, align and embed in a Worker, with only the vector
+sent, so the camera agent lost its last code path that could put a frame on the wire.
+
+The other half of the release was the images not containing any of it. Four images publish, and any
+of them that serves the SPA has to bake the face, wake-word and STT browser bundles; several did
+not, so the feature existed in the repo and not in the artifact. Publishing is now `v*`-tag-only —
+merges to main stopped triggering builds, which had been quietly moving `latest`.
+
+**v3.4.0 — grounding, and the wait before the first word (August 12).** Two threads, both starting
+from a real transcript.
+
+*Grounding.* The first human to type into the chat page said "I" and was told the state of every
+light in the house. Three generations against the real model showed the device block was not the
+cause — removing it made the model invent hardware that does not exist — so greetings stop reaching
+the model at all, answered from four dry templates and withheld from the history for the same
+reason device acknowledgements are. Separately, the prompt had never mentioned the devices: 989
+characters of persona and nothing else, which is why it had been claiming both that it could not
+control anything and that the lights were on. It now sees the allowlisted devices and their live
+state, on the user turn rather than the system prefix so the KV cache survives.
+
+*The wait.* Chatting through Jarvis felt far slower than llama.cpp's own UI, and generation was
+identical either way — the whole gap was time-to-first-token, at ~90 ms per prompt token on a CPU
+without AVX2. A chat title was costing a second LLM request per conversation (5.7 s of the single
+slot, for four cosmetic words, before the stream's done event); it is now derived from the first
+message with no model involved. Embedding was running ~1.2 s per message moments after each reply,
+landing exactly while the next message was being typed; it is now flushed in batches once the box
+is quiet, which is also 64% cheaper per message. Deferring cost durability, so the pending set moved
+out of an in-memory queue and into the schema — closing a hole the old design had too.
+
+Also: a twelve-finding security pass, more than one wake phrase, and the fact extractor no longer
+losing what it learned.
+
 ## How releases work
-- Bump `pyproject.toml` → tag `vX.Y.Z` → GitHub Actions builds `jarvis-combined` +
-  `jarvis-orchestrator` at `X.Y.Z` **and** moves `latest`. **git tag = pyproject = image tags.**
+- Bump `pyproject.toml` → tag `vX.Y.Z` → GitHub Actions builds **four** images —
+  `jarvis-combined`, `jarvis-orchestrator`, `jarvis-llama` and `jarvis-frontend` — at `X.Y.Z`
+  **and** moves `latest`. **git tag = pyproject = image tags.**
 - Published versions are **immutable** — a content change is always a new version (that's why v2.3.1
   exists).
 - Test builds: run the workflow manually from any branch with an RC tag (e.g. `2.5.0-rc1`) — manual

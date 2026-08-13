@@ -2,7 +2,7 @@
 
 One page of flow diagrams for the whole system (GitHub renders these natively). Prose deep-dives:
 [ARCHITECTURE.md](ARCHITECTURE.md) · [WORKFLOWS.md](WORKFLOWS.md) · [API.md](API.md). Current as of
-**v2.6.0**.
+**v3.4.0**.
 
 ---
 
@@ -11,8 +11,8 @@ One page of flow diagrams for the whole system (GitHub renders these natively). 
 ```mermaid
 flowchart TB
   subgraph CLIENTS["Clients & agents — outbound-only, no listening ports"]
-    B["Browser / phone PWA<br/>React 19 · chat + Admin"]
-    V["Voice listener (server box)<br/>whisper.cpp · wake word 'Jarvis'"]
+    B["Browser / phone PWA<br/>React 19 · chat + Admin + /voice<br/>wake word + Whisper STT run HERE"]
+    V["Voice listener (server box)<br/>whisper-stream → voice_bridge.py"]
     CAM["Camera agent (laptop/Pi)<br/>YuNet+SFace · events only"]
     VOL["Volume agent (Windows)<br/>pulls /devices/commands"]
   end
@@ -90,10 +90,14 @@ sequenceDiagram
     H->>L: /v1/chat/completions (stream · cache_prompt · n_predict)
     L-->>U: tokens stream live (SSE)
     H->>T: TTS if voice_feedback (disk-cached)
-    H->>C: store user+jarvis messages · title new sessions
+    H->>C: store user+jarvis messages (embedded=0) · title new sessions (no LLM)
   end
-  Note over M: when idle ≥120 s → fact extraction → embed → ChromaDB
+  Note over M: idle ≥20 s (or a message waiting ≥15 min) → batch-embed pending messages<br/>idle ≥120 s → fact extraction (LLM) → SQLite facts
 ```
+
+A greeting is answered before any of this: `is_greeting` → a canned reply, stored and shown but
+never replayed to the model. Titles are derived from the first message by `chat.title_from_text`;
+the LLM is not involved unless `JARVIS_LLM_TITLES=1`.
 
 ---
 
@@ -144,22 +148,43 @@ prompt injection to smuggle in either direction.
 
 ## 6. Memory / RAG
 
+**Two independent write paths.** They are drawn together because they run in the same worker, but
+they produce different things and only one of them ends in ChromaDB.
+
 ```mermaid
 flowchart TB
-  subgraph W["write path — never blocks chat"]
-    MSG["stored messages"] --> IDLE{"idle ≥ 120 s?"}
-    IDLE -->|yes| EXT["LLM fact extraction → JSON"]
+  MSG["chat.store_message<br/>row written with embedded = 0"]
+  subgraph W1["vectors — every message, batched at idle"]
+    MSG --> PEND[("pending set =<br/>conversation_history.embedded = 0")]
+    PEND --> GATE{"idle ≥ 20 s<br/>OR oldest pending ≥ 15 min?"}
+    GATE -->|yes| FL["flush_embeddings()<br/>ONE ONNX batch, ONE Chroma write"]
+    FL --> CHR[("ChromaDB<br/>jarvis_memory_cos")]
+    FL -.->|"write failed → stay pending, retry"| PEND
+  end
+  subgraph W2["facts — user messages only, at deeper idle"]
+    MSG --> IDLE{"idle ≥ 120 s?"}
+    IDLE -->|yes| EXT["LLM fact extraction → JSON<br/>(batch of 6)"]
     EXT --> DED{"duplicate?<br/>sim ≥ 0.90 or word-overlap ≥ 0.85"}
-    DED -->|new| SQ[("SQLite facts")] --> BG["background embed worker"] --> CHR[("ChromaDB<br/>jarvis_memory_cos")]
+    DED -->|new| SQ[("SQLite user_knowledge")]
   end
   subgraph R["read path — during prompt assembly"]
     QU["user message"] --> QE["embed (query prefix)"] --> S["top-5 cosine search"]
     S --> F{"distance ≤ 0.6?"}
-    F -->|yes| INJ["→ prompt knowledge block (cap 512 tok)"]
+    F -->|yes| INJ["→ RECALLED MEMORIES on the current turn (cap 512 tok)"]
     F -->|no| DROP["discarded"]
   end
   CHR -.-> S
+  SQ -.->|"injected wholesale into the system prefix"| INJ
 ```
+
+**Facts are never embedded into ChromaDB.** `store_fact` writes to SQLite and stops there; the
+dedup check embeds candidates transiently and throws the vectors away. ChromaDB holds conversation
+messages, keyed by `conversation_history.id`, and nothing else. (An earlier version of this diagram
+showed `SQLite facts → embed worker → ChromaDB`, which never existed.)
+
+The two stores reach the prompt by different routes, too: facts go into the **stable system
+prefix** (so the KV cache survives), RAG hits hang off the **current user turn** (because they
+change every turn).
 
 SQLite is the **source of truth** (chats, facts); ChromaDB is a rebuildable index
 (`reembed_memory.py`). The embedder runs torch-free on ONNX — same vectors, verified cosine 1.0.
@@ -170,19 +195,28 @@ SQLite is the **source of truth** (chats, facts); ChromaDB is a rebuildable inde
 
 ```mermaid
 flowchart TB
-  CFG["config.py — no app deps"] --> DB2["db.py<br/>SQLite + app_settings"]
+  CFG["config.py — no app deps"] --> DB2["db.py<br/>SQLite · migrations<br/>app_settings + household_settings"]
   CFG --> AUTH["auth.py<br/>PBKDF2"]
+  CFG --> SH["safehttp.py<br/>redirect + credential guard"]
   CFG --> HA2["ha.py<br/>HA client + guardrails"]
   CFG --> OE["onnx_embed.py<br/>torch-free embedder"]
   CFG --> LLM2["llm.py<br/>llama client + TTS"]
-  DB2 & AUTH & LLM2 & OE --> MEM["memory.py<br/>embeddings · Chroma · facts"]
+  SH --> HA2
+  DB2 & AUTH & LLM2 & OE --> MEM["memory.py<br/>embeddings · Chroma · facts · idle worker"]
   MEM --> CHAT["chat.py<br/>sessions · prompt assembly"]
   MEM --> IR2["intent_router.py<br/>semantic router"]
   HA2 --> IR2
   CHAT & IR2 --> MAIN["main.py — routes only"]
   BUD["budget.py — pure token math"] -.-> CHAT
   INT["intents.py — pure parsers"] -.-> MAIN
+  SH -.-> MCP2["mcp.py — MCP client"] -.-> MAIN
+  CHAT -.->|"function-local import, warm the KV prefix<br/>after fact extraction — the one exception"| MEM
 ```
+
+The dotted `chat → memory` edge going *backwards* is real: `memory.extract_facts_batch` ends with a
+function-local `import chat` so it can put the conversation's system prefix back into
+llama-server's KV cache. It works, and it is the one place the "memory never imports chat"
+invariant does not hold.
 
 ---
 
@@ -212,9 +246,11 @@ The LLM appears nowhere in this diagram — that's the point. Models propose; co
 
 ```mermaid
 flowchart LR
-  subgraph VOICE["voice loop (server box today; edge-voice on the roadmap)"]
-    MIC["mic"] --> WS["whisper-stream"] --> WW{"wake word<br/>'Jarvis'?"} -->|yes| INB["POST /inbox"] --> ANS["answer → Piper → speakers"]
+  subgraph VOICE["voice — two independent paths"]
+    MIC["mic on the server box"] --> WS["whisper-stream → voice_bridge.py<br/>(urllib, no shell)"] --> WW{"wake word<br/>'jarvis'?"} -->|yes| INB["POST /inbox"] --> ANS["answer → Piper → speakers"]
     WW -->|no| DROPV["dropped"]
+    BMIC["mic in the browser"] --> BWW["openWakeWord ONNX (onnxruntime-web)<br/>while armed: keyword spotting ONLY,<br/>nothing buffered, nothing sent"]
+    BWW -->|"woken"| BVAD["vad.js segments the utterance"] --> BSTT["Whisper in a worker<br/>(transformers.js)"] --> INB
   end
   subgraph VISION["camera agent — imagery never leaves the device"]
     FR["frames"] --> MO["motion gate"] --> FD["YuNet detect"] --> FRZ["SFace recognize<br/>vs pulled enrolled set"]
@@ -230,16 +266,20 @@ flowchart LR
 flowchart TB
   subgraph SHAPES["one codebase — three ways to run (identical defaults)"]
     S1["jarvis-combined<br/>one container · Proxmox OCI<br/>all-in-one entrypoint"]
-    S2["compose split<br/>official llama.cpp:server + jarvis-orchestrator<br/>LLM swappable (:server-cuda)"]
+    S2["compose split<br/>jarvis-orchestrator + jarvis-llama<br/>+ jarvis-frontend (Nginx)"]
     S3["native · systemd<br/>the 2011 box · local-CA HTTPS"]
   end
-  DEV["push to main"] --> CI["CI: ruff + 118 tests"]
+  DEV["push to main"] --> CI["CI job 1: ruff + 382 Python tests<br/>CI job 2: npm lint + 92 frontend tests + build"]
   DEV --> TAG["bump pyproject → git tag vX.Y.Z"]
   TAG --> GHA["Actions (no secrets needed)"]
-  GHA --> IMG["GHCR: X.Y.Z + latest<br/>(manual/RC builds never move latest)"]
+  GHA --> IMG["GHCR, FOUR images: X.Y.Z + latest<br/>jarvis-combined · jarvis-orchestrator<br/>jarvis-llama · jarvis-frontend<br/>(manual/RC builds never move latest)"]
   IMG --> S1 & S2
   DEV --> S3
 ```
+
+**Never built or started.** The four images have only ever been produced by a green Actions run;
+nobody has run one. Both plausible failure modes of the non-root change — uid 10001 against a bind
+mount, and nginx binding 8080 — appear at container start-up, which a build does not reach.
 
 Supply chain: every download pinned + SHA-256-verified (LLM GGUF · ONNX embed bundle from the
 project's own HF repo · Piper + voice · llama.cpp tag). **git tag = pyproject = image tags.**

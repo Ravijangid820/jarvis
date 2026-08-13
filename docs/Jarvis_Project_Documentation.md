@@ -33,9 +33,11 @@ extensible. Planned next: tool/function calling and Home Assistant / MQTT contro
 | Layer | State |
 |---|---|
 | LLM (Qwen 2B, llama.cpp, `-c 4096` + token budgeting) | ✅ |
-| Speech-to-text (whisper.cpp base.en) | ✅ |
+| Speech-to-text — whisper.cpp `base.en` on the box, **Whisper + wake word in the browser** (v3.2.0) | ✅ |
 | Orchestrator (FastAPI, modular, secured, tested) | ✅ |
-| Memory (SQLite + ChromaDB cosine RAG, background embedding) | ✅ |
+| Memory (SQLite + ChromaDB cosine RAG, **idle-time batch embedding**) | ✅ |
 | Text-to-speech (Piper, wired into chat + stream) | ✅ |
-| Tool / function calling | ⬜ planned |
-| Home automation (MQTT / Home Assistant) | ⬜ planned |
+| Tool / function calling | ✅ shipped — `TOOLS_SPEC` on `/inbox` and in the home-command round-trip; not yet offered during ordinary streamed chat ([KNOWN_ISSUES](KNOWN_ISSUES.md) #2) |
+| Home automation (Home Assistant) | ✅ shipped v2.5.0, hardened v2.5.1 — on/off/toggle/run against a hard entity allowlist, plus a semantic intent router for paraphrases (v2.6.0). No MQTT; no brightness/colour yet |
+| Multi-tenancy (households) + public demo mode | ✅ |
+| Face recognition (browser enrollment, on-device camera agent) | ✅ |
