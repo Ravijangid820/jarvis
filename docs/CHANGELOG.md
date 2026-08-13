@@ -44,6 +44,34 @@ Fixes:
 
 465 Python tests (from 385), 96 frontend (from 92).
 
+### ...and then it answered "How are you?" with a report on the house
+
+With the routing fixed, the question reached the model and got:
+
+    I am aware of the devices in your home; I do not control them myself. The lights and fan
+    are active as reported by the system, but the switches remain unconnected...
+
+Every word of that was TRUE — checked against Home Assistant at the time: fan on, light on,
+switches off. The device block is doing its job. The problem is that a question about JARVIS was
+answered with a status report on the house, and "I do not control them myself" is the model
+reciting its own system-prompt instruction back.
+
+Measured against the real model, 8 samples per arm: with the device block attached, "How are you?"
+drifted into the house **6 times out of 8**. Handed JARVIS's own status instead — uptime, load,
+memory, what is responding — **0 out of 8**. The model is not ignoring instructions; it answers
+from whatever state-like data is nearest, so the fix is to put the right data there.
+
+`intents.is_self_query` recognises a small closed set of phrasings and `chat.build_messages` fills
+the same reference slot with `sysinfo.self_status_block()`. Device questions keep the device block
+and stay correct ("Is the fan on?" -> "Fan is on."; "Is the tube light on?" -> "Tube Light is
+off.", both verified against the live devices).
+
+Three approaches were measured and rejected first, recorded in WORKFLOWS §2a so they are not
+retried: asking the model not to (four system-prompt variants; the best scored 0/5 then 5/8 — noise,
+and combining two changes was worse than either), dropping the block entirely (worse — the model
+then invents "the air is conditioned" for a house with no air conditioning), and passing real
+figures (it read "4 cores" as "a single CPU core" six times in eight).
+
 ## v3.4.0 — 2026-08-12 — grounding, wake phrases, a security pass, and a much shorter wait
 
 ### it recited the state of the house when you said hello

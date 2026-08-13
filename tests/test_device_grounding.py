@@ -18,7 +18,11 @@ from test_api import _tok, main
 from test_api import client as _app_client  # noqa: F401
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "orchestrator"))
+import re  # noqa: E402
+
 import chat  # noqa: E402
+import intents  # noqa: E402
+import sysinfo  # noqa: E402
 import ha  # noqa: E402
 from intents import command_residual, says_more_than_command  # noqa: E402
 
@@ -367,3 +371,77 @@ def test_non_admins_get_a_blunted_similarity_score(client, monkeypatch):
     pid = next(f["id"] for f in client.get("/admin/faces", headers=admin).json()["faces"]
                if f["name"] == "Oracle")
     client.delete(f"/admin/faces/{pid}", headers=admin)
+
+
+# --- "how are you?" gets Jarvis's status, not the house's -------------------------------------
+# A 2B model answers from whatever state-like data is nearest in the prompt. Measured on the box,
+# 8 samples each: with the device block attached it answered "How are you?" by reporting the lights
+# and the fan 6 times out of 8; given its own status instead, 0 out of 8. Asking it not to did not
+# work — four system-prompt variants were measured and the best scored 0/5 on one run and 5/8 on a
+# larger one, which is noise, not an effect.
+
+
+@pytest.fixture()
+def home(monkeypatch):
+    """A configured smart home owned by this household, with one device in a known state."""
+    monkeypatch.setattr(ha, "configured", lambda: True)
+    monkeypatch.setattr(ha, "owns", lambda household_id: True)
+    monkeypatch.setattr(ha, "snapshot", lambda: [{"name": "Fan", "state": "on"}])
+
+
+def _turn(session_id, owner, text):
+    """The user turn build_messages assembles — where the volatile reference blocks are attached."""
+    return chat.build_messages(session_id, owner, 1, text)[-1]["content"]
+
+
+def test_asking_how_jarvis_is_attaches_its_own_status(client, owner, home):
+    sid = chat.create_session("t", owner)
+    turn = _turn(sid, owner, "How are you?")
+    assert "YOUR OWN STATUS" in turn
+    assert "DEVICES IN THIS HOME" not in turn, \
+        "a question about Jarvis must not carry the house as its reference data"
+
+
+def test_a_device_question_still_gets_the_device_block(client, owner, home):
+    """The converse, and the more important half: swapping the block must not cost grounding.
+    Without the device block the model answers device questions wrongly — measured, it said the fan
+    was off while it was on — and invents hardware that does not exist."""
+    sid = chat.create_session("t", owner)
+    turn = _turn(sid, owner, "Is the fan on?")
+    assert "DEVICES IN THIS HOME" in turn and "Fan — on" in turn
+    assert "YOUR OWN STATUS" not in turn
+
+
+def test_ordinary_questions_are_unaffected(client, owner, home):
+    sid = chat.create_session("t", owner)
+    turn = _turn(sid, owner, "What is a neural network?")
+    assert "YOUR OWN STATUS" not in turn
+    assert "DEVICES IN THIS HOME" in turn      # unchanged behaviour: the home stays in view
+
+
+def test_the_status_block_carries_no_numbers_to_garble(client, owner, home):
+    """An earlier version passed real figures and the model rendered "4 cores" as "a single CPU
+    core" in six replies out of eight. It gains nothing from the precision, so the block states
+    bands ("load is light") that cannot become a false number."""
+    block = sysinfo.self_status_block()
+    assert not re.search(r"\d+\s*(cores?|GB|%)", block)
+    assert sysinfo.self_status()["load"] in ("light", "moderate", "heavy")
+    assert sysinfo.self_status()["memory"] in ("comfortable", "tight", "nearly full")
+
+
+@pytest.mark.parametrize("text", [
+    "How are you?", "how are you doing", "are you ok", "you alright", "what is your status",
+    "Hey Jarvis, how are you?",
+])
+def test_self_queries_are_recognised(text):
+    assert intents.is_self_query(text)
+
+
+@pytest.mark.parametrize("text", [
+    "how is the house", "how are things", "how's everything going", "is the fan on",
+    "what is 2 + 2", "how do i reset the router",
+])
+def test_questions_about_anything_else_are_not(text):
+    """Kept tight on purpose: where "you" and "the house" are genuinely ambiguous, the house may
+    well be the subject, and the device block is the safer default."""
+    assert not intents.is_self_query(text)

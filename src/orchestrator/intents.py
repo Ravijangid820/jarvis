@@ -274,6 +274,36 @@ def is_greeting(text: str) -> bool:
     return cleaned in _NOISE_ONLY or cleaned in GREETING_PHRASES
 
 
+# --- "how are you?" ----------------------------------------------------------
+# Questions about JARVIS rather than about the home. These are NOT greetings: they ask something,
+# and the model answers them well, so they go to it like any other question. What changes is the
+# reference data attached to the turn — its own status instead of the house's (see sysinfo.py and
+# chat.build_messages). Measured: with the device block attached the model answered "How are you?"
+# by reporting the lights and fan in 6 of 8 samples; given its own status instead, 0 of 8.
+#
+# Exact equality, like GREETING_PHRASES, and for the same reason. Kept tight on purpose: a phrase
+# that is genuinely ambiguous about whether it means "you" or "the house" ("how's everything
+# going", "what's the status") is left out, because for those the house really may be the subject.
+SELF_QUERY_PHRASES = frozenset({
+    "how are you", "how are you doing", "how are you feeling", "how you doing", "how r u",
+    "how do you feel", "hows it going with you", "how have you been", "how are you today",
+    "are you ok", "are you okay", "are you alright", "you ok", "you okay", "you alright",
+    "what is your status", "whats your status", "how are things with you",
+})
+
+
+def is_self_query(text: str) -> bool:
+    """True when the message asks how JARVIS itself is doing.
+
+    Only decides which reference block the turn carries — it never short-circuits the model, so a
+    misclassification costs the model slightly less apt context, never a canned answer.
+    """
+    stripped = _WAKE_PREFIX.sub("", text or "", count=1)
+    stripped = _WAKE_SUFFIX.sub("", stripped, count=1)
+    cleaned = " ".join(_NON_WORD.sub(" ", stripped.lower()).split())
+    return cleaned in SELF_QUERY_PHRASES
+
+
 # The spoken acknowledgement, and now the typed one too — they were two different sets, so saying
 # "hey Jarvis" out loud got "Good evening, sir." while typing it got "Sir." for no reason anyone
 # chose. Never repeats the previous pick: with a dozen options that alone is most of the perceived

@@ -6,7 +6,9 @@ from typing import Any, Dict, List, Optional
 from fastapi import HTTPException
 
 import ha
+import intents
 import memory
+import sysinfo
 from budget import clamp_completion, estimate_message_tokens, fit_history, truncate_to_tokens
 from config import (COMPLETION_RESERVE_DEFAULT, HISTORY_MAX_AGE_HOURS, KNOWLEDGE_TOKEN_CAP,
                     MAX_CONTEXT_MESSAGES,
@@ -245,7 +247,21 @@ def build_messages(session_id: str, user_id: int, household_id: int, user_text: 
     # In the per-turn block rather than the system prefix on purpose: states change, and the system
     # message is deliberately stable so llama.cpp can reuse its KV cache across turns. Putting
     # volatile text there would re-evaluate the whole prefix on every message.
-    if ha.configured() and ha.owns(household_id):
+    # "How are you?" gets JARVIS's own status instead of the house's.
+    #
+    # Not a special case for its own sake — it is the same reference slot, filled with the subject
+    # actually being asked about. A 2B model answers from whatever state-like data is nearest, and
+    # with the device block attached it answered "How are you?" by reporting the lights and the fan
+    # in 6 of 8 measured samples. Given its own status: 0 of 8. Asking it not to (four system-prompt
+    # variants, measured) did not work — the apparent winner scored 0/5 once and 5/8 on a larger
+    # run, which is noise.
+    #
+    # Removing the block entirely is worse than either: with nothing to answer from, the model
+    # invents hardware — "the air is conditioned", "the temperature is set" — for a house that has
+    # neither. So the slot always carries something true; only the subject changes.
+    if intents.is_self_query(user_text):
+        turn_parts.append(sysinfo.self_status_block())
+    elif ha.configured() and ha.owns(household_id):
         devices = ha.snapshot()
         if devices:
             lines = "\n".join(f"  {d['name']} — {d['state']}" for d in devices)

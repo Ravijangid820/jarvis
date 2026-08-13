@@ -101,6 +101,7 @@ The prompt is built as **exactly one system message + recent history + the curre
                (device and greeting turns excluded; older than HISTORY_MAX_AGE_HOURS=24 excluded)
 [ user ]     = [Seen by cameras: …]      ← VOLATILE, so it hangs off the current turn
                + DEVICES IN THIS HOME    (live state; see §8)
+                 …or YOUR OWN STATUS     (when the message asks how JARVIS is — see §2a)
                + RECALLED MEMORIES       (RAG hits from past sessions; see §3)
                + [Already done, by the system, for this message: …]
                + the current message     (always kept)
@@ -113,6 +114,35 @@ token each turn and force a full re-evaluation of the whole context — ~630 tok
 this box. They are attached to the **current user turn** instead, where they cost nothing to
 re-read. (Qwen also rejects multiple or non-leading system messages, so "just add another system
 block" is not available either.)
+
+### 2a. "How are you?" — the reference slot changes subject
+
+A 2B model answers from whatever state-like data sits nearest the question. With the live device
+block attached — the normal case when Home Assistant is configured — it answered *"How are you?"*
+by reporting the house in **6 of 8** measured samples ("I am functioning normally, sir. The lights
+remain on, and the fan continues spinning."). It is not disobeying; it is answering from the only
+status it was given.
+
+So `chat.build_messages` fills the same slot with a different subject: `intents.is_self_query`
+matches a small closed set of phrasings ("how are you", "are you ok", "what is your status") and
+the turn carries `sysinfo.self_status_block()` — uptime, load, memory, what is responding —
+instead of the devices. Measured the same way: **0 of 8**.
+
+Three things were tried first and are recorded so they are not tried again:
+
+- **Asking the model not to.** Four system-prompt variants. The most promising ("answer about
+  yourself and stop — the state of the home is not part of that answer") scored 0/5 on one run and
+  **5/8** on a larger one: noise, not an effect. Adding that rule *and* removing the device nouns
+  the honesty clause named scored **worse** than the rule alone. Non-monotonic, which is what
+  prompt-tuning at this size looks like.
+- **Dropping the block for non-device questions.** Worse than either. With nothing to answer from,
+  the model invents hardware — "the air is conditioned", "the temperature is set" — for a house
+  that has neither. The slot must always hold something true; only its subject may change.
+- **Passing real figures in the status block.** It rendered "4 cores" as "a single CPU core" in six
+  replies of eight. The block states bands ("load is light") that cannot become a false number.
+
+The set is deliberately tight. Where "you" and "the house" are genuinely ambiguous — "how's
+everything going" — the house may well be the subject, so the device block stays.
 
 Token counting uses a deliberately conservative **char-based estimate** (`~4 chars/token`,
 `budget.estimate_tokens`) — there is no tokenizer in-process. The budget:
