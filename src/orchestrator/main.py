@@ -12,21 +12,15 @@ Domain logic lives in focused modules:
 """
 import json
 import os
-import re
-import shutil
-import sqlite3
 import secrets
-import tarfile
-import tempfile
 import threading
 import time
 import urllib.request
-from pathlib import Path
 from urllib.parse import urlsplit
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -36,78 +30,33 @@ from pydantic import BaseModel, Field, field_validator
 
 import chat
 import deps
+import ha_config
+import purge
 import memory
+from routes import admin as routes_admin
 from routes import chat as routes_chat
 from routes import devices as routes_devices
 from routes import faces as routes_faces
 from routes import mcp as routes_mcp
 from routes import voice as routes_voice
 from auth import hash_password, hash_token, verify_password
-from config import (ALLOWED_ORIGIN_REGEX, ALLOWED_ORIGINS, APP_VERSION, BASE_DIR, CHROMA_DB_PATH,
-                    CONFIG, DEMO_MINT_PER_IP_HOURLY,
+from config import (ALLOWED_ORIGIN_REGEX, ALLOWED_ORIGINS, APP_VERSION, BASE_DIR, CONFIG, DEMO_MINT_PER_IP_HOURLY,
                     DEMO_PASSWORD, DEMO_PUBLIC_SIGNUP, DEMO_TTL_MINUTES,
                     DEMO_USER_ID_BASE, DEMO_USERNAME,
-                    HA_TOKEN_FROM_ENV, HA_URL_FROM_ENV,
                     INDEX_HTML, KNOWLEDGE_TOKEN_CAP, LLM_URL, PIPER_BIN, PIPER_MODEL,
                     RATE_LIMIT_RPM, REACT_DIST_DIR, FACE_MODELS_DIR, STATIC_DIR, STT_MODELS_DIR, VALID_FACT_CATEGORIES,
                     WAKE_MODELS_DIR,
                     JARVIS_MODE, logger)
 import ha
-import intent_router
-from db import (PRIMARY_HOUSEHOLD_ID, get_db, get_household_setting, init_db,
-                set_household_setting)
-
-
-def _load_ha_settings():
-    """Apply the DB-stored (admin-UI-managed) Home Assistant settings at startup. Environment vars
-    win — a field set via env stays as config.py resolved it and the UI shows it read-only."""
-    try:
-        deps.set_ha_household(PRIMARY_HOUSEHOLD_ID)
-        url = None if HA_URL_FROM_ENV else get_household_setting(deps.HA_HOUSEHOLD_ID, "ha_url")
-        token = None if HA_TOKEN_FROM_ENV else get_household_setting(deps.HA_HOUSEHOLD_ID, "ha_token")
-        ents_raw = get_household_setting(deps.HA_HOUSEHOLD_ID, "ha_allowed_entities")
-        allowed = None
-        if ents_raw is not None:
-            try:
-                allowed = json.loads(ents_raw)
-            except (ValueError, TypeError):
-                allowed = []
-        ha.configure(url=url, token=token, allowed=allowed, household_id=deps.HA_HOUSEHOLD_ID)
-    except Exception as e:
-        logger.warning("Could not load Home Assistant settings from DB: %s", e)
-
-
-def _refresh_ha_names_and_router():
-    """Cache the entities' friendly names, then embed the router exemplars built FROM them.
-
-    Ordering is the point: exemplars and device resolution both key on the display name, so the
-    names have to land first or the router indexes machine ids ("turn on the 4node smart switch
-    switch 3") for the lifetime of the process. Both are network/CPU work, so this runs off-request
-    — at startup and whenever an admin saves the smart-home config.
-    """
-    try:
-        cached = ha.refresh_names()
-        if cached:
-            logger.info("Home Assistant: cached %d entity names", cached)
-    except Exception as e:
-        logger.warning("Home Assistant name refresh failed (%s) — resolution falls back to ids", e)
-    if memory.vectors_available():
-        intent_router.rebuild(memory.embed_documents)
-
-
-def _rebuild_intent_router():
-    """Kick the name+exemplar refresh in the background (startup + whenever the allowlist changes)."""
-    if not (ha.configured() and ha.HA_ALLOWED_ENTITIES):
-        return
-    threading.Thread(target=_refresh_ha_names_and_router, daemon=True).start()
+from db import (get_db, init_db)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    _load_ha_settings()        # runtime HA config (env > DB), before anything serves
+    ha_config.load_settings()        # runtime HA config (env > DB), before anything serves
     memory.init_embeddings()   # load the model now (from cache), not at import time
-    _rebuild_intent_router()   # semantic device-intent index (needs both of the above)
+    ha_config.rebuild_intent_router()   # semantic device-intent index (needs both of the above)
     memory.start_memory_worker()
     if DEMO_PUBLIC_SIGNUP:
         # Purge anything left over from a previous run before serving: a crash mid-session must not
@@ -406,30 +355,6 @@ class LoginRequest(BaseModel):
     password: str = Field(..., min_length=1, max_length=256)
 
 
-class CreateUserRequest(BaseModel):
-    username: str = Field(..., min_length=1, max_length=64)
-    password: str = Field(..., min_length=1, max_length=256)
-    role: Literal["user", "admin"] = "user"
-
-
-class RoleUpdateRequest(BaseModel):
-    role: Literal["user", "admin"]
-
-
-class HAConfigRequest(BaseModel):
-    url: Optional[str] = None
-    token: Optional[str] = None                 # blank/omitted on save = keep the stored token
-    allowed_entities: Optional[List[str]] = None
-
-
-class CreateKeyRequest(BaseModel):
-    user_id: int
-    description: str
-    # Optional: bind the key to one device (e.g. "laptop-cam"). A bound key may ONLY post events as
-    # that device (F1). Edge/camera agents need this — a plain unbound non-admin key can't post events.
-    device_id: Optional[str] = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9._:-]+$")
-
-
 class KnowledgeFactRequest(BaseModel):
     content: str
     category: str = "other"
@@ -452,10 +377,6 @@ class EventRequest(BaseModel):
         if v is not None and len(json.dumps(v)) > 4096:
             raise ValueError("event data too large (max 4 KB serialized)")
         return v
-
-
-class ModelSwitchRequest(BaseModel):
-    model: str = Field(..., min_length=1, max_length=128)
 
 
 
@@ -568,7 +489,7 @@ def _sweep_expired_demo_households() -> int:
     finally:
         conn.close()
     for hid in ids:
-        _purge_household_now(hid)
+        purge.purge_household_now(hid)
     if ids:
         logger.info("Demo sweeper purged %d expired household(s): %s", len(ids), ids)
     return len(ids)
@@ -695,7 +616,7 @@ def logout(request: Request):
     token = auth_header[7:] if auth_header.startswith("Bearer ") else ""
     demo_household = _demo_household_for_token(token) if token else None
     if demo_household is not None:
-        _purge_household_now(demo_household)
+        purge.purge_household_now(demo_household)
         logger.info("Demo household %d purged on logout", demo_household)
         return {"status": "ok", "demo_reset": True}
     if token:
@@ -974,177 +895,6 @@ def admin_services(request: Request) -> Dict[str, Any]:
     }
 
 
-# ----------------- Multi-Model Discovery & Switching -----------------
-@app.get("/models")
-def get_available_models(request: Request):
-    """Return an admin-safe inventory of installed GGUF models.
-
-    Model files and their absolute paths are server implementation details, so regular
-    chat users never receive them. A selected model is only active after llama-server
-    has actually restarted and reported it through /props.
-    """
-    deps.require_admin(request)
-    models = []
-    models_dir = BASE_DIR / "models"
-    active_name = "Qwen3.5 2B"
-    requested_name = None
-    try:
-        cfg_path = BASE_DIR / "config" / "active_model.json"
-        if cfg_path.exists():
-            data = json.loads(cfg_path.read_text(encoding="utf-8"))
-            if data.get("active_model"):
-                requested_name = data["active_model"]
-        p = urlsplit(LLM_URL)
-        with urllib.request.urlopen(f"{p.scheme}://{p.netloc}/props", timeout=1.5) as r:
-            props = json.loads(r.read().decode("utf-8"))
-            dgs = props.get("default_generation_settings") or {}
-            model_path = props.get("model_path") or dgs.get("model") or ""
-            if model_path:
-                active_name = os.path.basename(str(model_path)).removesuffix(".gguf")
-    except Exception:
-        pass
-
-    if models_dir.exists():
-        for gguf in sorted(models_dir.rglob("*.gguf")):
-            name = gguf.name.removesuffix(".gguf")
-            size_bytes = gguf.stat().st_size
-            size_mb = round(size_bytes / (1024 * 1024))
-            models.append({
-                "id": name,
-                "name": name,
-                "size_mb": size_mb,
-                "active": (name == active_name or name in active_name or active_name in name),
-                "requested": name == requested_name,
-            })
-    return {"models": models, "active": active_name, "requested": requested_name}
-
-
-@app.post("/models/switch")
-def switch_model(req: ModelSwitchRequest, request: Request):
-    """Stage the model selected for the next deployment-managed llama-server restart.
-
-    The server process belongs to systemd/Docker, not the web process. Persisting the
-    requested model without pretending the live process changed prevents a UI/LLM
-    mismatch and leaves the actual restart under the deployment supervisor.
-    """
-    deps.require_admin(request)
-    models_dir = BASE_DIR / "models"
-    target = None
-    if models_dir.exists():
-        for gguf in models_dir.rglob("*.gguf"):
-            if gguf.name.removesuffix(".gguf") == req.model or gguf.name == req.model:
-                target = gguf
-                break
-    if not target:
-        raise HTTPException(status_code=404, detail=f"Model '{req.model}' not found on server disk.")
-
-    try:
-        cfg_path = BASE_DIR / "config" / "active_model.json"
-        cfg_path.write_text(json.dumps({"active_model": target.name.removesuffix(".gguf"), "path": str(target)}, indent=2), encoding="utf-8")
-        deps.audit(request, "model.stage", target.name)
-        return {"status": "restart_required", "requested": target.name.removesuffix(".gguf"),
-                "message": "Model selection saved. Restart llama-server to activate it."}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to update active model config: {e}")
-
-
-@app.get("/admin/audit")
-def admin_audit(request: Request, limit: int = 100):
-    """Recent audit entries (most recent first) — device control + admin changes."""
-    deps.require_admin(request)
-    limit = max(1, min(limit, 1000))
-    conn = get_db()
-    try:
-        # Scoped: the audit trail names users and the devices they drove, so an admin of one
-        # household must not read another's.
-        rows = conn.execute(
-            "SELECT id, created_at, user_id, username, action, detail FROM audit_log "
-            "WHERE household_id = ? ORDER BY id DESC LIMIT ?", (deps.household(request), limit)).fetchall()
-        return {"entries": [dict(r) for r in rows]}
-    finally:
-        conn.close()
-
-
-# ----------------- Backups -----------------
-BACKUP_DIR = BASE_DIR / "backups"
-_BACKUP_NAME_RE = re.compile(r"^jarvis-backup-[0-9]{8}-[0-9]{6}\.tar\.gz$")
-
-
-def _create_backup(ts: str) -> Dict[str, Any]:
-    """Snapshot the irreplaceable data into backups/jarvis-backup-<ts>.tar.gz: a CONSISTENT online
-    copy of the SQLite DB (VACUUM INTO) + the ChromaDB dir. Models/config are re-creatable, so excluded
-    (and config holds secrets). `ts` is passed in (scripts can't call Date.now)."""
-    BACKUP_DIR.mkdir(exist_ok=True)
-    name = f"jarvis-backup-{ts}.tar.gz"
-    out = BACKUP_DIR / name
-    with tempfile.TemporaryDirectory() as td:
-        tmp = Path(td)
-        conn = get_db()
-        try:
-            conn.execute("VACUUM INTO ?", (str(tmp / "jarvis.db"),))   # consistent, online
-        finally:
-            conn.close()
-        chroma = Path(str(CHROMA_DB_PATH))
-        if chroma.exists():
-            shutil.copytree(chroma, tmp / "chroma_db")
-        with tarfile.open(out, "w:gz") as tar:
-            for p in sorted(tmp.iterdir()):
-                tar.add(p, arcname=p.name)
-    os.chmod(out, 0o600)   # contains password/token hashes + embeddings — keep it owner-only
-    return {"name": name, "size": out.stat().st_size}
-
-
-@app.post("/admin/backup")
-def admin_backup(request: Request):
-    """Create a backup now (admin). Returns the filename + size."""
-    deps.require_admin(request)
-    try:
-        info = _create_backup(datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S"))
-    except Exception as e:
-        logger.error("backup failed: %s", e)
-        raise HTTPException(status_code=500, detail="Backup failed")
-    deps.audit(request, "backup.create", f"{info['name']} ({info['size']} bytes)")
-    return {"status": "ok", **info}
-
-
-@app.get("/admin/backups")
-def admin_list_backups(request: Request):
-    deps.require_admin(request)
-    if not BACKUP_DIR.exists():
-        return {"backups": []}
-    items = []
-    for p in sorted(BACKUP_DIR.glob("jarvis-backup-*.tar.gz"), reverse=True):
-        st = p.stat()
-        items.append({"name": p.name, "size": st.st_size,
-                      "created_at": datetime.fromtimestamp(st.st_mtime, timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")})
-    return {"backups": items}
-
-
-@app.get("/admin/backups/{name}")
-def admin_download_backup(name: str, request: Request):
-    deps.require_admin(request)
-    if not _BACKUP_NAME_RE.match(name):
-        raise HTTPException(status_code=400, detail="Bad backup name")
-    p = BACKUP_DIR / name
-    if not p.exists():
-        raise HTTPException(status_code=404, detail="No such backup")
-    deps.audit(request, "backup.download", name)
-    return FileResponse(str(p), media_type="application/gzip", filename=name)
-
-
-@app.delete("/admin/backups/{name}")
-def admin_delete_backup(name: str, request: Request):
-    deps.require_admin(request)
-    if not _BACKUP_NAME_RE.match(name):
-        raise HTTPException(status_code=400, detail="Bad backup name")
-    p = BACKUP_DIR / name
-    if not p.exists():
-        raise HTTPException(status_code=404, detail="No such backup")
-    p.unlink()
-    deps.audit(request, "backup.delete", name)
-    return {"status": "ok"}
-
-
 @app.get("/presence")
 def presence(request: Request):
     """Who the cameras have recognized recently (household context). Any authenticated user."""
@@ -1303,375 +1053,6 @@ def ingest_event(req: EventRequest, request: Request):
         conn.close()
 
 
-# ----------------- Admin -----------------
-@app.post("/admin/users")
-def admin_create_user(req: CreateUserRequest, request: Request):
-    deps.require_admin(request)
-    conn = get_db()
-    try:
-        conn.execute("BEGIN IMMEDIATE")               # serialize id selection against concurrent creates
-        new_id = _lowest_free_user_id(conn)           # reuse a freed id, but only a residue-free one
-        # New accounts join the CREATING admin's household — there is deliberately no way to
-        # create a user into someone else's, so an admin cannot plant an account in another home.
-        conn.execute(
-            "INSERT INTO users (id, username, password_hash, role, household_id) VALUES (?, ?, ?, ?, ?)",
-            (new_id, req.username, hash_password(req.password), req.role, deps.household(request)))
-        conn.commit()
-        deps.audit(request, "user.create", f"{req.username} role={req.role} id={new_id}")
-        return {"status": "ok", "id": new_id}
-    except sqlite3.IntegrityError:
-        conn.rollback()
-        raise HTTPException(status_code=400, detail="Username exists")
-    finally:
-        conn.close()
-
-
-@app.get("/admin/users")
-def admin_list_users(request: Request):
-    deps.require_admin(request)
-    conn = get_db()
-    try:
-        users = conn.execute("""
-            SELECT u.id, u.username, u.role, u.created_at,
-                   COUNT(DISTINCT c.id) as total_chats,
-                   COUNT(m.id) as total_messages
-            FROM users u
-            LEFT JOIN chat_sessions c ON u.id = c.user_id
-            LEFT JOIN conversation_history m ON c.id = m.session_id
-            WHERE u.household_id = ?
-            GROUP BY u.id
-        """, (deps.household(request),)).fetchall()
-        return {"users": [dict(u) for u in users]}
-    finally:
-        conn.close()
-
-
-# Every table keyed by user_id — kept in one place so a purge can't miss one (and so id-reuse can
-# prove an id is residue-free before handing it to a new account).
-_USER_REF_TABLES = ("chat_sessions", "auth_sessions", "api_keys", "user_knowledge",
-                    "persons", "vision_events")
-
-
-def _purge_user(conn, user_id: int) -> List[str]:
-    """Delete EVERYTHING tied to user_id so a freed id carries no residue. Personal data (chats,
-    knowledge, keys, sessions) is removed; faces and camera events are UNLINKED (user_id→NULL) so the
-    household's recognition data survives but no longer points at the account. Returns the message ids
-    to drop from ChromaDB (caller commits, then calls memory.delete_vectors)."""
-    msg_ids = [str(r["id"]) for r in conn.execute(
-        "SELECT id FROM conversation_history WHERE session_id IN "
-        "(SELECT id FROM chat_sessions WHERE user_id = ?)", (user_id,)).fetchall()]
-    conn.execute("DELETE FROM conversation_history WHERE session_id IN "
-                 "(SELECT id FROM chat_sessions WHERE user_id = ?)", (user_id,))
-    conn.execute("DELETE FROM chat_sessions WHERE user_id = ?", (user_id,))
-    conn.execute("DELETE FROM auth_sessions WHERE user_id = ?", (user_id,))
-    conn.execute("DELETE FROM api_keys WHERE user_id = ?", (user_id,))
-    conn.execute("DELETE FROM user_knowledge WHERE user_id = ?", (user_id,))
-    conn.execute("UPDATE persons SET user_id = NULL WHERE user_id = ?", (user_id,))
-    conn.execute("UPDATE vision_events SET user_id = NULL WHERE user_id = ?", (user_id,))
-    conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
-    return msg_ids
-
-
-# Tables carrying household_id that a household purge must clear. persons is listed even though
-# _purge_user unlinks (rather than deletes) faces: unlinking is right when ONE member leaves a home
-# that continues to exist, but a demo household's faces belong to a member of the public and must
-# actually be destroyed with it.
-_HOUSEHOLD_REF_TABLES = ("global_knowledge", "persons", "vision_events",
-                         "device_commands", "device_heartbeats", "audit_log", "household_settings")
-
-
-def _purge_household(conn, household_id: int) -> tuple:
-    """Delete a household and everything in it. Returns (chroma message ids, member user ids) so
-    the caller can clear the vector store both ways.
-
-    This is the demo reset primitive: logout and TTL expiry both route here, so "reset" means the
-    same thing however it was triggered. Every member is purged through _purge_user first (which
-    owns the user-scoped tables), then the household-scoped rows, then the household itself.
-    """
-    member_ids = [r["id"] for r in conn.execute(
-        "SELECT id FROM users WHERE household_id = ?", (household_id,)).fetchall()]
-    msg_ids: List[str] = []
-    for uid in member_ids:
-        msg_ids.extend(_purge_user(conn, uid))
-    # Faces are DESTROYED here, not unlinked: face_embeddings is biometric data belonging to a
-    # member of the public, and _purge_user's unlink semantics would leave it behind with a NULL
-    # user_id. Delete the embeddings before the persons rows they hang off.
-    conn.execute("DELETE FROM face_embeddings WHERE person_id IN "
-                 "(SELECT id FROM persons WHERE household_id = ?)", (household_id,))
-    for table in _HOUSEHOLD_REF_TABLES:      # fixed allowlist, not user input
-        conn.execute(f"DELETE FROM {table} WHERE household_id = ?", (household_id,))
-    conn.execute("DELETE FROM households WHERE id = ?", (household_id,))
-    return msg_ids, member_ids
-
-
-def _purge_household_now(household_id: int) -> int:
-    """Purge a household in its own transaction and drop its vectors. Returns the number of
-    messages removed. Used by demo logout and the TTL sweeper."""
-    conn = get_db()
-    try:
-        conn.execute("BEGIN IMMEDIATE")
-        msg_ids, member_ids = _purge_household(conn, household_id)
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        logger.error("purge of household %s failed: %s", household_id, e)
-        return 0
-    finally:
-        conn.close()
-    # Both deletes, deliberately. The id list is precise but only covers what existed when it was
-    # taken; an embedding still in the worker queue lands in Chroma AFTER the purge and would
-    # survive it. The per-user sweep catches those, so a demo visitor's utterances are not
-    # recallable once their session ends.
-    memory.delete_vectors(msg_ids)
-    memory.delete_vectors_for_users(member_ids)
-    return len(msg_ids)
-
-
-def _id_has_residue(conn, uid: int) -> bool:
-    """True if any user-scoped table still holds rows for uid (defense-in-depth before id reuse)."""
-    for t in _USER_REF_TABLES:   # table names are a fixed allowlist, not user input
-        if conn.execute(f"SELECT 1 FROM {t} WHERE user_id = ? LIMIT 1", (uid,)).fetchone():
-            return True
-    return False
-
-
-def _lowest_free_user_id(conn) -> int:
-    """Smallest positive id that's neither in use nor carrying residue — so a reused id is provably
-    clean. (Reuse is the operator's choice; this makes it safe.)"""
-    used = {r["id"] for r in conn.execute("SELECT id FROM users")}
-    nid = 1
-    while nid in used or _id_has_residue(conn, nid):
-        nid += 1
-    return nid
-
-
-@app.delete("/admin/users/{user_id}")
-def admin_delete_user(user_id: int, request: Request):
-    deps.require_admin(request)
-    if user_id == request.state.user_id:
-        raise HTTPException(status_code=400, detail="Cannot delete self")
-    conn = get_db()
-    try:
-        conn.execute("BEGIN IMMEDIATE")     # serialize the count check + deletes (no TOCTOU lockout race)
-        household_id = deps.household(request)
-        target = conn.execute("SELECT role FROM users WHERE id = ? AND household_id = ?",
-                              (user_id, household_id)).fetchone()
-        if target is None:
-            raise HTTPException(status_code=404, detail="No such user")
-        # Never allow removing a household's last admin — it would lock that household out of its
-        # own console. The count is per-household: another home's admins are no help here.
-        if target["role"] == "admin" and conn.execute(
-                "SELECT COUNT(*) AS n FROM users WHERE role='admin' AND household_id = ?",
-                (household_id,)).fetchone()["n"] <= 1:
-            raise HTTPException(status_code=400, detail="Cannot delete the last admin")
-        all_msg_ids = _purge_user(conn, user_id)
-        conn.commit()
-    except HTTPException:
-        raise
-    except Exception as e:
-        conn.rollback()
-        logger.error("admin_delete_user(%s) failed: %s", user_id, e)
-        raise HTTPException(status_code=500, detail="Failed to delete user")
-    finally:
-        conn.close()
-    memory.delete_vectors(all_msg_ids)
-    deps.audit(request, "user.delete", f"id={user_id}")
-    return {"status": "ok"}
-
-
-@app.put("/admin/users/{user_id}/role")
-def admin_set_role(user_id: int, req: RoleUpdateRequest, request: Request):
-    """Promote a user to admin or demote back to user. Refuses to demote the last admin."""
-    deps.require_admin(request)
-    conn = get_db()
-    try:
-        household_id = deps.household(request)
-        if conn.execute("SELECT 1 FROM users WHERE id = ? AND household_id = ?",
-                        (user_id, household_id)).fetchone() is None:
-            raise HTTPException(status_code=404, detail="No such user")
-        # Atomic guard (no separate count→update, so no TOCTOU race): the demote applies only if it
-        # won't drop THIS household's admin count to zero.
-        cur = conn.execute(
-            "UPDATE users SET role = ? WHERE id = ? AND household_id = ? AND "
-            "(? != 'user' OR role != 'admin' OR "
-            " (SELECT COUNT(*) FROM users WHERE role='admin' AND household_id = ?) > 1)",
-            (req.role, user_id, household_id, req.role, household_id))
-        conn.commit()
-        if cur.rowcount == 0:
-            raise HTTPException(status_code=400, detail="Cannot demote the last admin")
-        deps.audit(request, "user.role", f"id={user_id} -> {req.role}")
-        return {"status": "ok", "role": req.role}
-    finally:
-        conn.close()
-
-
-@app.get("/admin/home-assistant")
-def admin_ha_get(request: Request):
-    """Current HA config for the admin UI. Never returns the token itself — only whether one is set."""
-    deps.require_admin(request)
-    if not deps.owns_smart_home(request):
-        # Not an error for a household without a smart home — just nothing to show. Reporting
-        # "unconfigured" rather than 403 also avoids confirming that some OTHER household has one.
-        return {"configured": False, "url": "", "token_set": False, "allowed_entities": [],
-                "env_managed": False, "connected": False, "owned": False}
-    return {
-        "owned": True,
-        "configured": ha.configured(),
-        "url": ha.HA_URL,
-        "token_set": bool(ha.HA_TOKEN),
-        "allowed_entities": list(ha.HA_ALLOWED_ENTITIES),
-        "env_managed": HA_URL_FROM_ENV or HA_TOKEN_FROM_ENV,   # set via env → UI is read-only
-        "connected": ha.ping(),
-    }
-
-
-@app.put("/admin/home-assistant")
-def admin_ha_put(req: HAConfigRequest, request: Request):
-    """Save HA config (url/token/allowlist) to the DB and apply it live — no restart."""
-    deps.require_admin(request)
-    deps.require_smart_home(request)
-    if HA_URL_FROM_ENV or HA_TOKEN_FROM_ENV:
-        raise HTTPException(status_code=409,
-                            detail="Home Assistant is configured via environment variables — edit those instead.")
-    hid = deps.household(request)
-    url = (req.url or "").rstrip("/")
-    set_household_setting(hid, "ha_url", url)
-    if req.token:                                   # blank = keep the existing token
-        set_household_setting(hid, "ha_token", req.token)
-    token = get_household_setting(hid, "ha_token") or ""
-    allowed = list(req.allowed_entities if req.allowed_entities is not None else ha.HA_ALLOWED_ENTITIES)
-    set_household_setting(hid, "ha_allowed_entities", json.dumps(allowed))
-    ha.configure(url=url, token=token, allowed=allowed, household_id=hid)
-    _rebuild_intent_router()
-    deps.audit(request, "ha.config", f"url={url or '(cleared)'} entities={len(allowed)}")
-    return {"status": "ok", "configured": ha.configured(), "connected": ha.ping()}
-
-
-@app.post("/admin/home-assistant/test")
-def admin_ha_test(req: HAConfigRequest, request: Request):
-    """Probe a URL/token (blank token = use the stored one) before saving."""
-    deps.require_admin(request)
-    deps.require_smart_home(request)
-    ok, detail = ha.test_connection(req.url, req.token or ha.HA_TOKEN)
-    return {"ok": ok, "detail": detail}
-
-
-@app.get("/admin/home-assistant/entities")
-def admin_ha_entities(request: Request):
-    """Controllable HA entities for the device picker (uses the currently-saved connection)."""
-    deps.require_admin(request)
-    deps.require_smart_home(request)
-    return {"entities": ha.list_entities()}
-
-
-@app.post("/admin/api_keys")
-def admin_create_key(req: CreateKeyRequest, request: Request):
-    deps.require_admin(request)
-    conn = get_db()
-    try:
-        # A key may only ever be minted FOR a member of the admin's own household — otherwise an
-        # admin could issue themselves a credential that authenticates as another household's user.
-        if not conn.execute("SELECT 1 FROM users WHERE id = ? AND household_id = ?",
-                            (req.user_id, deps.household(request))).fetchone():
-            raise HTTPException(status_code=400, detail="No such user")
-        new_key = "jk-" + secrets.token_hex(16)
-        device_id = (req.device_id or "").strip() or None     # "" → NULL (unbound), like the CLI
-        # Store only the hash + a short display prefix; the plaintext is shown once.
-        conn.execute("INSERT INTO api_keys (key_string, key_prefix, user_id, description, device_id) "
-                     "VALUES (?, ?, ?, ?, ?)",
-                     (hash_token(new_key), new_key[:10], req.user_id, req.description, device_id))
-        conn.commit()
-        deps.audit(request, "key.create", f"user={req.user_id} device={device_id or '-'} ({new_key[:10]}…)")
-        return {"key": new_key, "device_id": device_id}
-    finally:
-        conn.close()
-
-
-@app.get("/admin/api_keys")
-def admin_list_keys(request: Request):
-    deps.require_admin(request)
-    conn = get_db()
-    try:
-        keys = conn.execute(
-            "SELECT k.rowid AS id, k.key_prefix, k.user_id, k.description, k.device_id, "
-            "       k.created_at, k.usage_count, k.last_used_at "
-            "FROM api_keys k JOIN users u ON k.user_id = u.id "
-            "WHERE u.household_id = ? ORDER BY k.created_at DESC",
-            (deps.household(request),)).fetchall()
-        # Display the prefix only — the full key is never recoverable (hash at rest).
-        return {"keys": [{**dict(k), "key_string": (k["key_prefix"] or "jk-") + "…"} for k in keys]}
-    finally:
-        conn.close()
-
-
-@app.delete("/admin/api_keys/{key_id}")
-def admin_delete_key(key_id: int, request: Request):
-    deps.require_admin(request)
-    conn = get_db()
-    try:
-        conn.execute(
-            "DELETE FROM api_keys WHERE rowid = ? AND user_id IN "
-            "(SELECT id FROM users WHERE household_id = ?)",
-            (key_id, deps.household(request)))
-        conn.commit()
-        deps.audit(request, "key.delete", f"id={key_id}")
-        return {"status": "ok"}
-    finally:
-        conn.close()
-
-
-@app.get("/admin/stats")
-def admin_stats(request: Request):
-    deps.require_admin(request)
-    conn = get_db()
-    try:
-        hid = deps.household(request)
-        # Counts are scoped too — an instance-wide total would tell a demo visitor how many real
-        # users and conversations exist on the box.
-        return {
-            "users": conn.execute("SELECT COUNT(*) FROM users WHERE household_id = ?", (hid,)).fetchone()[0],
-            "chats": conn.execute(
-                "SELECT COUNT(*) FROM chat_sessions s JOIN users u ON s.user_id = u.id "
-                "WHERE u.household_id = ?", (hid,)).fetchone()[0],
-            "messages": conn.execute(
-                "SELECT COUNT(*) FROM conversation_history h "
-                "JOIN chat_sessions s ON h.session_id = s.id JOIN users u ON s.user_id = u.id "
-                "WHERE u.household_id = ?", (hid,)).fetchone()[0],
-        }
-    finally:
-        conn.close()
-
-
-@app.get("/admin/events")
-def admin_events(request: Request, limit: int = 50, type: Optional[str] = None, since_id: int = 0):
-    """Recent edge/vision events (most recent first). `type` filters (e.g. face_seen for the
-    recognitions panel / verify); `since_id` returns only events newer than an id (efficient polling)."""
-    deps.require_admin(request)
-    limit = max(1, min(limit, 500))
-    conn = get_db()
-    try:
-        q = ("SELECT id, device_id, type, data, created_at FROM vision_events "
-             "WHERE household_id = ? AND id > ?")
-        params: List[Any] = [deps.household(request), since_id]
-        if type:
-            q += " AND type = ?"
-            params.append(type)
-        q += " ORDER BY id DESC LIMIT ?"
-        params.append(limit)
-        rows = conn.execute(q, params).fetchall()
-        events = []
-        for r in rows:
-            e = dict(r)
-            try:
-                e["data"] = json.loads(e["data"]) if e["data"] else {}
-            except (ValueError, TypeError):
-                e["data"] = {}
-            events.append(e)
-        return {"events": events, "count": len(events)}
-    finally:
-        conn.close()
-
-
 # ----------------- Knowledge -----------------
 @app.get("/knowledge")
 def list_knowledge(request: Request):
@@ -1793,6 +1174,7 @@ def force_extraction(request: Request):
 # ----------------- Routers -----------------
 # Registered here rather than at the top of the file so their paths are matched in roughly the
 # order they used to be defined in. Nothing under routes/ imports main, so the graph stays a tree.
+app.include_router(routes_admin.router)
 app.include_router(routes_chat.router)
 app.include_router(routes_devices.router)
 app.include_router(routes_faces.router)

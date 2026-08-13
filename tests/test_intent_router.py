@@ -1,5 +1,5 @@
 """Semantic intent router — mechanics with FAKE embeddings (deterministic bag-of-words),
-plus the confirmation flow in main. Threshold calibration against the real embedder was done
+plus the confirmation flow in routes/devices.py. Threshold calibration against the real embedder was done
 on the box (values recorded in intent_router.py); these tests pin the LOGIC, not the model.
 """
 import math
@@ -165,8 +165,8 @@ def _flow_setup(monkeypatch):
 
 def test_confirm_then_yes_executes(monkeypatch):
     main, actions = _flow_setup(monkeypatch)
-    monkeypatch.setattr(main.intent_router, "ready", lambda: True)
-    monkeypatch.setattr(main.intent_router, "route",
+    monkeypatch.setattr(ir, "ready", lambda: True)
+    monkeypatch.setattr(ir, "route",
                         lambda text, f: {"decision": "confirm", "entity": "switch.desk_fan",
                                          "action": "on", "score": 0.7})
     reply = routes_devices._handle_home_command("i am kind of warm", _req(), "s1")
@@ -181,8 +181,8 @@ def test_confirm_then_yes_executes(monkeypatch):
 
 def test_confirm_then_no_cancels(monkeypatch):
     main, actions = _flow_setup(monkeypatch)
-    monkeypatch.setattr(main.intent_router, "ready", lambda: True)
-    monkeypatch.setattr(main.intent_router, "route",
+    monkeypatch.setattr(ir, "ready", lambda: True)
+    monkeypatch.setattr(ir, "route",
                         lambda text, f: {"decision": "confirm", "entity": "switch.desk_fan",
                                          "action": "on", "score": 0.7})
     routes_devices._handle_home_command("i am kind of warm", _req(), "s1")
@@ -193,7 +193,7 @@ def test_confirm_then_no_cancels(monkeypatch):
 def test_unrelated_message_drops_the_proposal(monkeypatch):
     main, actions = _flow_setup(monkeypatch)
     routes_devices._PENDING_HOME["s1"] = ("switch.desk_fan", "on", time.monotonic())
-    monkeypatch.setattr(main.intent_router, "ready", lambda: False)     # router quiet now
+    monkeypatch.setattr(ir, "ready", lambda: False)     # router quiet now
     reply = routes_devices._handle_home_command("what is the capital of france", _req(), "s1")
     assert reply is None and actions == []                              # goes to the LLM
     assert "s1" not in routes_devices._PENDING_HOME                               # proposal dropped
@@ -201,8 +201,8 @@ def test_unrelated_message_drops_the_proposal(monkeypatch):
 
 def test_act_decision_executes_immediately(monkeypatch):
     main, actions = _flow_setup(monkeypatch)
-    monkeypatch.setattr(main.intent_router, "ready", lambda: True)
-    monkeypatch.setattr(main.intent_router, "route",
+    monkeypatch.setattr(ir, "ready", lambda: True)
+    monkeypatch.setattr(ir, "route",
                         lambda text, f: {"decision": "act", "entity": "switch.desk_fan",
                                          "action": "on", "score": 0.85})
     reply = routes_devices._handle_home_command("i'm melting in here", _req(), "s1")
