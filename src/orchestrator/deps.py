@@ -17,6 +17,7 @@ from typing import Optional
 
 from fastapi import HTTPException, Request
 
+import memory
 from config import JARVIS_MODE, logger
 from db import get_db
 
@@ -75,6 +76,29 @@ def can_control_devices(request: Request) -> bool:
         row = conn.execute("SELECT can_control_devices FROM users WHERE id = ?",
                            (request.state.user_id,)).fetchone()
         return bool(row and row["can_control_devices"])
+    finally:
+        conn.close()
+
+
+def authorized_person_present(household_id: int) -> bool:
+    """True if a person currently present in THIS household maps to a user of it who is allowed to
+    control devices. Used only when REQUIRE_PRESENCE_FOR_CONTROL is on.
+
+    Both sides of the join are scoped: an unscoped `persons.name IN (…)` would let a namesake in
+    another household satisfy the presence check and unlock this one's devices.
+    """
+    names = memory.get_present_people(household_id)
+    if not names:
+        return False
+    conn = get_db()
+    try:
+        ph = ",".join("?" * len(names))
+        row = conn.execute(
+            f"SELECT 1 FROM persons p JOIN users u ON p.user_id = u.id WHERE p.name IN ({ph}) "
+            "AND p.household_id = ? AND u.household_id = ? "
+            "AND (u.role = 'admin' OR u.can_control_devices = 1) LIMIT 1",
+            [*names, household_id, household_id]).fetchone()
+        return row is not None
     finally:
         conn.close()
 

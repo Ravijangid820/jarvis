@@ -66,20 +66,20 @@ def test_titles_do_not_call_the_llm(monkeypatch):
     def explode(*a, **k):
         raise AssertionError("title generation must not call the LLM")
     monkeypatch.setattr(llm, "request_llm", explode)
-    import main
-    monkeypatch.setattr(main, "request_llm", explode)
+    from routes import chat as routes_chat
+    monkeypatch.setattr(routes_chat, "request_llm", explode)
     monkeypatch.delenv("JARVIS_LLM_TITLES", raising=False)
     renamed = {}
-    monkeypatch.setattr(main.chat, "rename_session", lambda s, t, u: renamed.update(t=t))
-    assert main._maybe_title(True, "sid", 1, "what is a neural network?") == "Neural Network"
+    monkeypatch.setattr(chat, "rename_session", lambda s, t, u: renamed.update(t=t))
+    assert routes_chat._maybe_title(True, "sid", 1, "what is a neural network?") == "Neural Network"
     assert renamed["t"] == "Neural Network"
 
 
 def test_no_title_work_when_the_session_already_has_one(monkeypatch):
-    import main
-    monkeypatch.setattr(main.chat, "rename_session",
+    from routes import chat as routes_chat
+    monkeypatch.setattr(chat, "rename_session",
                         lambda *a: pytest.fail("must not rename an existing session"))
-    assert main._maybe_title(False, "sid", 1, "hello") is None
+    assert routes_chat._maybe_title(False, "sid", 1, "hello") is None
 
 
 # --------------------------------------------------------------- the warm-up

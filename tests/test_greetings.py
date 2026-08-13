@@ -32,6 +32,7 @@ from test_api import client as _app_client  # noqa: F401
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "orchestrator"))
 
 import chat  # noqa: E402
+from routes import chat as routes_chat  # noqa: E402
 from intents import GREETING_REPLIES, greeting_reply, is_greeting  # noqa: E402
 
 
@@ -131,7 +132,7 @@ def no_llm(monkeypatch):
         return _fn
 
     for name in ("request_llm", "request_llm_tools", "request_llm_stream"):
-        monkeypatch.setattr(main, name, _spy(name))
+        monkeypatch.setattr(routes_chat, name, _spy(name))
     return calls
 
 
@@ -201,7 +202,7 @@ def test_a_message_with_content_still_reaches_the_model(client, session, monkeyp
         asked.append(messages)
         return {"choices": [{"message": {"content": "A neural network is a model."}}]}
 
-    monkeypatch.setattr(main, "request_llm_tools", _fake_llm)
+    monkeypatch.setattr(routes_chat, "request_llm_tools", _fake_llm)
     r = client.post("/inbox", json={"text": "what is a neural network", "session_id": sid},
                     headers={"Authorization": "Bearer " + tok})
     assert r.status_code == 200

@@ -41,6 +41,7 @@ _DB = Path(_config.DB_PATH)          # whoever configured it, this is the databa
 import auth  # noqa: E402
 import main  # noqa: E402
 import mcp  # noqa: E402
+from routes import chat as routes_chat  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 
@@ -207,7 +208,7 @@ def test_mcp_and_model_inventory_are_admin_only(client):
 
 def test_chat_token_estimate_uses_llama_counter_or_fallback(client, monkeypatch):
     admin = _tok(client, "tony", "pw-admin")
-    monkeypatch.setattr(main, "count_prompt_tokens", lambda messages: {"tokens": 42, "source": "llama.cpp"})
+    monkeypatch.setattr(routes_chat, "count_prompt_tokens", lambda messages: {"tokens": 42, "source": "llama.cpp"})
     r = client.post("/chat/token-estimate", headers={"Authorization": "Bearer " + admin},
                     json={"text": "Count this prompt", "session_id": "default"})
     assert r.status_code == 200

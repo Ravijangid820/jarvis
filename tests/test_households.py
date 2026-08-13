@@ -40,6 +40,7 @@ import auth  # noqa: E402
 import deps  # noqa: E402
 import config  # noqa: E402
 import main  # noqa: E402
+from routes import devices as routes_devices  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 _DB = config.DB_PATH
@@ -294,7 +295,7 @@ def test_home_tools_are_not_offered_to_a_household_without_a_smart_home(client, 
     class _R:
         state = _S()
 
-    names = [t["function"]["name"] for t in main._active_tools(_R())]
+    names = [t["function"]["name"] for t in routes_devices._active_tools(_R())]
     assert "home_control" not in names and "home_status" not in names
     assert "set_volume" in names          # non-HA tools are unaffected
 

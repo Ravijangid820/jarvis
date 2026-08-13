@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "orchestrat
 
 import deps  # noqa: E402
 import ha  # noqa: E402
+from routes import devices as routes_devices  # noqa: E402
 import intent_router as ir  # noqa: E402
 
 class _FakeState:
@@ -155,10 +156,10 @@ def _flow_setup(monkeypatch):
     # fake actuation too, so they must fake existence to match.
     monkeypatch.setattr(ha, "probe_entity", lambda e: (ha.ENTITY_FOUND, {"state": "off"}))
     monkeypatch.setattr(deps, "can_control_devices", lambda r: True)
-    monkeypatch.setattr(main, "REQUIRE_PRESENCE_FOR_CONTROL", False)
+    monkeypatch.setattr(routes_devices, "REQUIRE_PRESENCE_FOR_CONTROL", False)
     monkeypatch.setattr(deps, "audit", lambda *a, **k: None)
-    main._PENDING_HOME.clear()
-    main._LAST_HOME_ENTITY.clear()
+    routes_devices._PENDING_HOME.clear()
+    routes_devices._LAST_HOME_ENTITY.clear()
     return main, actions
 
 
@@ -168,14 +169,14 @@ def test_confirm_then_yes_executes(monkeypatch):
     monkeypatch.setattr(main.intent_router, "route",
                         lambda text, f: {"decision": "confirm", "entity": "switch.desk_fan",
                                          "action": "on", "score": 0.7})
-    reply = main._handle_home_command("i am kind of warm", _req(), "s1")
+    reply = routes_devices._handle_home_command("i am kind of warm", _req(), "s1")
     assert reply is not None and reply.lower().startswith("should i turn on")
-    assert main._PENDING_HOME.get("s1") is not None and actions == []   # asked, did NOT act
+    assert routes_devices._PENDING_HOME.get("s1") is not None and actions == []   # asked, did NOT act
 
-    reply = main._handle_home_command("yes please", _req(), "s1")
+    reply = routes_devices._handle_home_command("yes please", _req(), "s1")
     assert "fan is now on" in reply.lower()
     assert actions == [("on", "switch.desk_fan")]
-    assert "s1" not in main._PENDING_HOME                               # consumed
+    assert "s1" not in routes_devices._PENDING_HOME                               # consumed
 
 
 def test_confirm_then_no_cancels(monkeypatch):
@@ -184,18 +185,18 @@ def test_confirm_then_no_cancels(monkeypatch):
     monkeypatch.setattr(main.intent_router, "route",
                         lambda text, f: {"decision": "confirm", "entity": "switch.desk_fan",
                                          "action": "on", "score": 0.7})
-    main._handle_home_command("i am kind of warm", _req(), "s1")
-    reply = main._handle_home_command("no, leave it", _req(), "s1")
+    routes_devices._handle_home_command("i am kind of warm", _req(), "s1")
+    reply = routes_devices._handle_home_command("no, leave it", _req(), "s1")
     assert "leaving it" in reply.lower() and actions == []
 
 
 def test_unrelated_message_drops_the_proposal(monkeypatch):
     main, actions = _flow_setup(monkeypatch)
-    main._PENDING_HOME["s1"] = ("switch.desk_fan", "on", time.monotonic())
+    routes_devices._PENDING_HOME["s1"] = ("switch.desk_fan", "on", time.monotonic())
     monkeypatch.setattr(main.intent_router, "ready", lambda: False)     # router quiet now
-    reply = main._handle_home_command("what is the capital of france", _req(), "s1")
+    reply = routes_devices._handle_home_command("what is the capital of france", _req(), "s1")
     assert reply is None and actions == []                              # goes to the LLM
-    assert "s1" not in main._PENDING_HOME                               # proposal dropped
+    assert "s1" not in routes_devices._PENDING_HOME                               # proposal dropped
 
 
 def test_act_decision_executes_immediately(monkeypatch):
@@ -204,6 +205,6 @@ def test_act_decision_executes_immediately(monkeypatch):
     monkeypatch.setattr(main.intent_router, "route",
                         lambda text, f: {"decision": "act", "entity": "switch.desk_fan",
                                          "action": "on", "score": 0.85})
-    reply = main._handle_home_command("i'm melting in here", _req(), "s1")
+    reply = routes_devices._handle_home_command("i'm melting in here", _req(), "s1")
     assert "fan is now on" in reply.lower()
     assert actions == [("on", "switch.desk_fan")]

@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "orchestrat
 
 import deps  # noqa: E402
 import ha  # noqa: E402
+from routes import devices as routes_devices  # noqa: E402
 
 ALLOW = ["input_boolean.test_light", "light.kitchen", "light.living_room", "switch.desk_fan"]
 
@@ -194,15 +195,14 @@ def test_settings_store_roundtrip(tmp_path, monkeypatch):
 # --- the v2.5.0 regression: tools must reflect LIVE config, not import-time config ---
 
 def test_ha_tools_offered_only_when_configured(monkeypatch):
-    import main
     monkeypatch.setattr(ha, "HA_URL", "")
     monkeypatch.setattr(ha, "HA_TOKEN", "")
-    names = [t["function"]["name"] for t in main._active_tools(_req())]
+    names = [t["function"]["name"] for t in routes_devices._active_tools(_req())]
     assert "set_volume" in names and "home_control" not in names
     # configure at RUNTIME (what the admin UI does) -> tools appear on the next request
     monkeypatch.setattr(ha, "HA_URL", "http://ha.test:8123")
     monkeypatch.setattr(ha, "HA_TOKEN", "tok")
-    names = [t["function"]["name"] for t in main._active_tools(_req())]
+    names = [t["function"]["name"] for t in routes_devices._active_tools(_req())]
     assert "home_control" in names and "home_status" in names
 
 
@@ -228,7 +228,6 @@ def test_parse_home_command_never_hijacks():
 def test_switch_it_off_uses_last_device(monkeypatch):
     """The real-conversation regression: 'switch on the fan' then 'switch it off' must act on
     the fan — and a pronoun with no referent must ASK, not fall through to the LLM."""
-    import main
     turned = []
     monkeypatch.setattr(ha, "HA_URL", "http://ha.test:8123")
     monkeypatch.setattr(ha, "HA_TOKEN", "tok")
@@ -239,24 +238,24 @@ def test_switch_it_off_uses_last_device(monkeypatch):
     # fake actuation too, so they must fake existence to match.
     monkeypatch.setattr(ha, "probe_entity", lambda e: (ha.ENTITY_FOUND, {"state": "off"}))
     monkeypatch.setattr(deps, "can_control_devices", lambda r: True)
-    monkeypatch.setattr(main, "REQUIRE_PRESENCE_FOR_CONTROL", False)
+    monkeypatch.setattr(routes_devices, "REQUIRE_PRESENCE_FOR_CONTROL", False)
     monkeypatch.setattr(deps, "audit", lambda *a, **k: None)
-    main._LAST_HOME_ENTITY.clear()
+    routes_devices._LAST_HOME_ENTITY.clear()
 
     # no referent yet -> asks, does NOT act, does NOT fall through (None would mean LLM)
-    reply = main._handle_home_command("switch it off", _req(), "s1")
+    reply = routes_devices._handle_home_command("switch it off", _req(), "s1")
     assert reply is not None and "which device" in reply.lower() and turned == []
 
     # name the device -> acts + remembers
-    assert "fan is now on" in main._handle_home_command("switch on the fan", _req(), "s1").lower()
+    assert "fan is now on" in routes_devices._handle_home_command("switch on the fan", _req(), "s1").lower()
     assert turned == [("input_boolean.desk_fan", "on")]
 
     # pronoun now resolves to the fan
-    assert "fan is now off" in main._handle_home_command("switch it off", _req(), "s1").lower()
+    assert "fan is now off" in routes_devices._handle_home_command("switch it off", _req(), "s1").lower()
     assert turned[-1] == ("input_boolean.desk_fan", "off")
 
     # a DIFFERENT session has no referent -> asks again (no cross-session leakage)
-    reply = main._handle_home_command("turn it on", _req(), "s2")
+    reply = routes_devices._handle_home_command("turn it on", _req(), "s2")
     assert reply is not None and "which device" in reply.lower()
 
 
@@ -300,7 +299,6 @@ def test_run_refuses_non_runnable_domains(monkeypatch):
 
 
 def test_run_via_fast_path_and_start_the_fan_means_on(monkeypatch):
-    import main
     actions = []
     monkeypatch.setattr(ha, "HA_URL", "http://ha.test:8123")
     monkeypatch.setattr(ha, "HA_TOKEN", "tok")
@@ -312,15 +310,15 @@ def test_run_via_fast_path_and_start_the_fan_means_on(monkeypatch):
     monkeypatch.setattr(ha, "probe_entity", lambda e: (ha.ENTITY_FOUND, {"state": "off"}))
     monkeypatch.setattr(ha, "turn", lambda e, a: actions.append((a, e)) or True)
     monkeypatch.setattr(deps, "can_control_devices", lambda r: True)
-    monkeypatch.setattr(main, "REQUIRE_PRESENCE_FOR_CONTROL", False)
+    monkeypatch.setattr(routes_devices, "REQUIRE_PRESENCE_FOR_CONTROL", False)
     monkeypatch.setattr(deps, "audit", lambda *a, **k: None)
-    main._LAST_HOME_ENTITY.clear()
+    routes_devices._LAST_HOME_ENTITY.clear()
 
-    reply = main._handle_home_command("run the movie night automation", _req(), "s1")
+    reply = routes_devices._handle_home_command("run the movie night automation", _req(), "s1")
     assert "running the movie night automation now" in reply.lower()
     assert actions[-1] == ("run", "automation.movie_night")
 
-    reply = main._handle_home_command("start the fan", _req(), "s1")   # run on a plain device = on
+    reply = routes_devices._handle_home_command("start the fan", _req(), "s1")   # run on a plain device = on
     assert "fan is now on" in reply.lower()
     assert actions[-1] == ("on", "switch.desk_fan")
 
@@ -337,7 +335,6 @@ def test_parse_run_phrasings():
 def test_stop_vs_disable_semantics(monkeypatch):
     """"stop" aborts the run but PRESERVES the automation's enabled state; only explicit
     enable/disable (or turn on/off) changes it. "stop the fan" still just switches it off."""
-    import main
     actions = []
     monkeypatch.setattr(ha, "HA_URL", "http://ha.test:8123")
     monkeypatch.setattr(ha, "HA_TOKEN", "tok")
@@ -349,21 +346,21 @@ def test_stop_vs_disable_semantics(monkeypatch):
     monkeypatch.setattr(ha, "probe_entity", lambda e: (ha.ENTITY_FOUND, {"state": "off"}))
     monkeypatch.setattr(ha, "stop", lambda e: actions.append(("stop", e)) or True)
     monkeypatch.setattr(deps, "can_control_devices", lambda r: True)
-    monkeypatch.setattr(main, "REQUIRE_PRESENCE_FOR_CONTROL", False)
+    monkeypatch.setattr(routes_devices, "REQUIRE_PRESENCE_FOR_CONTROL", False)
     monkeypatch.setattr(deps, "audit", lambda *a, **k: None)
-    main._LAST_HOME_ENTITY.clear()
+    routes_devices._LAST_HOME_ENTITY.clear()
 
-    reply = main._handle_home_command("stop morning automation", _req(), "s1")
+    reply = routes_devices._handle_home_command("stop morning automation", _req(), "s1")
     assert "stopped the morning automation" in reply.lower() and "stays enabled" in reply.lower()
     assert actions[-1] == ("stop", "automation.morning")     # NOT ("off", ...) — stays enabled
 
-    assert "morning automation is disabled" in main._handle_home_command("disable the morning automation", _req(), "s1").lower()
+    assert "morning automation is disabled" in routes_devices._handle_home_command("disable the morning automation", _req(), "s1").lower()
     assert actions[-1] == ("off", "automation.morning")      # explicit disable -> off
 
-    assert "morning automation is enabled" in main._handle_home_command("enable morning automation", _req(), "s1").lower()
+    assert "morning automation is enabled" in routes_devices._handle_home_command("enable morning automation", _req(), "s1").lower()
     assert actions[-1] == ("on", "automation.morning")
 
-    assert "fan is now off" in main._handle_home_command("stop the fan", _req(), "s1").lower()
+    assert "fan is now off" in routes_devices._handle_home_command("stop the fan", _req(), "s1").lower()
     assert actions[-1] == ("off", "switch.desk_fan")          # plain device: stop = off
 
 
@@ -395,12 +392,10 @@ def test_parse_enable_disable():
 
 def _home_ready(monkeypatch, allowed=("automation.morning",)):
     """Configure a reachable-looking smart home owned by the caller's household (1)."""
-    import main
     monkeypatch.setattr(ha, "HA_URL", "http://ha.test:8123")
     monkeypatch.setattr(ha, "HA_TOKEN", "tok")
     monkeypatch.setattr(ha, "HA_ALLOWED_ENTITIES", list(allowed))
     monkeypatch.setattr(deps, "HA_HOUSEHOLD_ID", 1)
-    return main
 
 
 def test_antibluff_guard_asks_instead_of_reaching_the_llm(monkeypatch):
@@ -410,41 +405,41 @@ def test_antibluff_guard_asks_instead_of_reaching_the_llm(monkeypatch):
     The tool round-trip is stubbed out: this asserts the ROUTING, and a unit test must not depend
     on llama-server being up or on what a 2B model happens to emit today.
     """
-    main = _home_ready(monkeypatch)
-    monkeypatch.setattr(main, "_home_tool_roundtrip", lambda *a, **k: None)   # model calls nothing
-    reply = main._handle_home_command("morning automation stop please now thanks", _req(), "s1")
+    _home_ready(monkeypatch)
+    monkeypatch.setattr(routes_devices, "_home_tool_roundtrip", lambda *a, **k: None)   # model calls nothing
+    reply = routes_devices._handle_home_command("morning automation stop please now thanks", _req(), "s1")
     assert reply is not None and "morning" in reply.lower()
 
     # ordinary sentences (no allowlisted device) still reach the LLM untouched
-    assert main._handle_home_command("stop telling me jokes", _req(), "s1") is None
+    assert routes_devices._handle_home_command("stop telling me jokes", _req(), "s1") is None
     # device named but NO control verb (just chatting about it) -> LLM is fine
-    assert main._handle_home_command("the morning automation is my favorite", _req(), "s1") is None
+    assert routes_devices._handle_home_command("the morning automation is my favorite", _req(), "s1") is None
 
 
 def test_tool_roundtrip_answers_when_the_rules_and_router_both_miss(monkeypatch):
     """The layer the web UI never had. /inbox always called the LLM with tools; /chat/stream called
     it with none, so a phrasing the rules and the semantic router both missed reached a toolless
     model that answered as if it had acted. A tool result now wins over the canned question."""
-    main = _home_ready(monkeypatch)
-    monkeypatch.setattr(main, "_home_tool_roundtrip", lambda *a, **k: "Okay — running the morning automation now.")
-    reply = main._handle_home_command("morning automation stop please now thanks", _req(), "s1")
+    _home_ready(monkeypatch)
+    monkeypatch.setattr(routes_devices, "_home_tool_roundtrip", lambda *a, **k: "Okay — running the morning automation now.")
+    reply = routes_devices._handle_home_command("morning automation stop please now thanks", _req(), "s1")
     assert reply == "Okay — running the morning automation now."
 
 
 def test_tool_roundtrip_never_fires_on_ordinary_chat(monkeypatch):
     """It costs a full generation on a box that does ~6 tok/s, so it must be reachable ONLY when
     the utterance already carries a control verb AND names an allowlisted device."""
-    main = _home_ready(monkeypatch)
+    _home_ready(monkeypatch)
     calls = []
 
     def _spy(*a, **k):
         calls.append(a)
         return "acted"
 
-    monkeypatch.setattr(main, "_home_tool_roundtrip", _spy)
-    assert main._handle_home_command("stop telling me jokes", _req(), "s1") is None
-    assert main._handle_home_command("what is the weather like today", _req(), "s1") is None
-    assert main._handle_home_command("the morning automation is my favorite", _req(), "s1") is None
+    monkeypatch.setattr(routes_devices, "_home_tool_roundtrip", _spy)
+    assert routes_devices._handle_home_command("stop telling me jokes", _req(), "s1") is None
+    assert routes_devices._handle_home_command("what is the weather like today", _req(), "s1") is None
+    assert routes_devices._handle_home_command("the morning automation is my favorite", _req(), "s1") is None
     assert calls == []
 
 
@@ -520,11 +515,10 @@ def test_act_on_a_missing_entity_reports_failure_not_success(monkeypatch):
     """The corrosive one. HA's generic turn_off answers 200 with an empty body for an entity_id it
     does not have, so Jarvis said "Okay — the fan is now off" having done nothing at all. It must
     now say so, and must NOT call the service at all."""
-    import main
     called = []
     monkeypatch.setattr(ha, "probe_entity", lambda e: (ha.ENTITY_MISSING, None))
     monkeypatch.setattr(ha, "turn", lambda e, a: called.append((e, a)) or True)
-    ok, eff, err = main._ha_act("input_boolean.fan", "off")
+    ok, eff, err = routes_devices._ha_act("input_boolean.fan", "off")
     assert ok is False
     assert called == []                      # never actuated a device HA doesn't have
     assert "doesn't have" in err and "fan" in err
@@ -533,21 +527,19 @@ def test_act_on_a_missing_entity_reports_failure_not_success(monkeypatch):
 def test_missing_entity_and_unreachable_ha_are_different_sentences(monkeypatch):
     """A stale allowlist entry is fixable in the admin page; an outage is not. Collapsing the two
     into one message sends the user looking in the wrong place."""
-    import main
     monkeypatch.setattr(ha, "turn", lambda e, a: True)
     monkeypatch.setattr(ha, "probe_entity", lambda e: (ha.ENTITY_MISSING, None))
-    _, _, missing = main._ha_act("switch.gone", "off")
+    _, _, missing = routes_devices._ha_act("switch.gone", "off")
     monkeypatch.setattr(ha, "probe_entity", lambda e: (ha.HA_UNREACHABLE, None))
-    _, _, down = main._ha_act("switch.gone", "off")
+    _, _, down = routes_devices._ha_act("switch.gone", "off")
     assert missing != down
     assert "couldn't reach" in down
 
 
 def test_a_present_entity_still_acts_normally(monkeypatch):
-    import main
     monkeypatch.setattr(ha, "probe_entity", lambda e: (ha.ENTITY_FOUND, {"state": "on"}))
     monkeypatch.setattr(ha, "turn", lambda e, a: True)
-    ok, eff, err = main._ha_act("switch.desk_fan", "off")
+    ok, eff, err = routes_devices._ha_act("switch.desk_fan", "off")
     assert (ok, eff, err) == (True, "off", None)
 
 
@@ -585,14 +577,13 @@ def test_refresh_names_keeps_the_old_cache_when_ha_is_unreachable(monkeypatch):
 
 def test_reply_wording_is_domain_aware():
     """Replies state what actually happened in the entity's own terms."""
-    import main
-    assert main._ha_reply("automation.morning", "off") == \
+    assert routes_devices._ha_reply("automation.morning", "off") == \
         "Okay — the morning automation is disabled. It won't run until you enable it again."
-    assert "stays enabled" in main._ha_reply("automation.morning", "stop")
-    assert main._ha_reply("input_boolean.test_light", "on") == "Okay — the test light is now on."
-    assert main._ha_reply("script.reset_all", "run") == "Okay — I ran the reset all script."
-    assert main._ha_state_phrase("automation.morning", {"state": "off"}) == \
+    assert "stays enabled" in routes_devices._ha_reply("automation.morning", "stop")
+    assert routes_devices._ha_reply("input_boolean.test_light", "on") == "Okay — the test light is now on."
+    assert routes_devices._ha_reply("script.reset_all", "run") == "Okay — I ran the reset all script."
+    assert routes_devices._ha_state_phrase("automation.morning", {"state": "off"}) == \
         "The morning automation is disabled."
-    assert main._ha_state_phrase("input_boolean.test_light",
+    assert routes_devices._ha_state_phrase("input_boolean.test_light",
                                  {"state": "on", "attributes": {"friendly_name": "Test Light"}}) == \
         "Test Light is on."
