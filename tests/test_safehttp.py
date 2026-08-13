@@ -81,6 +81,13 @@ def test_strict_mode_is_read_per_call(monkeypatch):
 
 
 def test_unresolvable_host_is_a_clean_error():
+    """ENVIRONMENT-DEPENDENT: needs .invalid to actually NXDOMAIN.
+
+    RFC 6761 reserves the TLD precisely so this is safe, but a resolver configured with a wildcard
+    upstream — some captive portals and ISP "search assistance" services do this — will answer with
+    an address instead, and then guard_url has something to resolve and no reason to complain. A
+    failure here is far more likely to be the network than the code.
+    """
     with pytest.raises(safehttp.BlockedURL, match="resolve"):
         safehttp.guard_url("http://no-such-host.invalid/mcp")
 
@@ -119,7 +126,15 @@ def _serve(host, redirect_to=None):
 
 @pytest.fixture
 def two_servers():
-    """A 'victim' (holds the token) and an 'attacker' on a different host, both on loopback."""
+    """A 'victim' (holds the token) and an 'attacker' on a different host, both on loopback.
+
+    ENVIRONMENT-DEPENDENT: binding 127.0.0.2 works on Linux, where the whole 127.0.0.0/8 block is
+    attached to the loopback interface, and this project's CI is Linux. On macOS and the BSDs only
+    127.0.0.1 is configured by default, so this fixture fails to bind there until someone runs
+    `sudo ifconfig lo0 alias 127.0.0.2 up`. Two distinct hosts are the point of the test — a
+    redirect within the SAME host is allowed to keep its Authorization header — so there is no
+    single-address version of it.
+    """
     attacker = _serve("127.0.0.2")
     victim = _serve("127.0.0.1", redirect_to=f"http://127.0.0.2:{attacker.server_port}/final")
     yield victim, attacker

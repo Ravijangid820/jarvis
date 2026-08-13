@@ -10,10 +10,22 @@ The chain is pinned in two halves:
     face-align.js  ==  similarity_transform()   <- frontend/test/face-align.test.mjs (fixtures)
     similarity_transform()  ==  cv2 alignCrop   <- THIS FILE, on real pixels through the real model
 
-Skipped when opencv/the models aren't present, so the normal suite doesn't need a 38 MB model or a
-CV dependency. Run it deliberately with:
+*** THIS FILE IS MANUAL-ONLY. IT HAS NEVER RUN IN CI, AND DOES NOT RUN IN THE DEFAULT SUITE. ***
+
+It needs three things the repository deliberately does not carry: opencv (not a dependency of the
+orchestrator, which has no CV code), the two ONNX models (38 MB, fetched by camera setup), and a
+photograph of a real face. The last one is the reason this is not simply a CI job — YuNet is a
+trained detector, so the fixture has to be an actual photograph, and checking a person's likeness
+into a public repository to satisfy a test is not a trade worth making. Any photo with one clear
+face works; drop it at frontend/test/fixtures/face_sample.jpg.
+
+So: the second half of the chain is verified when a human runs it, not on every push. Run it
+after any change to gen_align_fixture.similarity_transform, DST, or the alignment in
+frontend/src/face-align.js:
 
     uv run --with opencv-python-headless --with numpy pytest tests/test_face_align.py -v
+
+A "skipped" line in the normal suite is this file declining to run, never a pass.
 """
 import sys
 from pathlib import Path
@@ -23,7 +35,8 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src" / "scripts"))
 
-cv2 = pytest.importorskip("cv2", reason="opencv not installed")
+cv2 = pytest.importorskip(
+    "cv2", reason="MANUAL-ONLY cross-check: opencv is not a project dependency (see the docstring)")
 np = pytest.importorskip("numpy")
 
 from gen_align_fixture import DST, similarity_transform  # noqa: E402
@@ -32,11 +45,11 @@ YUNET = REPO / "camera" / "models" / "face_detection_yunet_2023mar.onnx"
 SFACE = REPO / "camera" / "models" / "face_recognition_sface_2021dec.onnx"
 SAMPLE = REPO / "frontend" / "test" / "fixtures" / "face_sample.jpg"
 
-# SAMPLE is intentionally not committed — any photo with one clear face works, so there is no need
-# to check a person's likeness into the repo. Supply one to run this cross-check locally.
+# SAMPLE is intentionally not committed — see the module docstring.
 pytestmark = pytest.mark.skipif(
     not (YUNET.exists() and SFACE.exists() and SAMPLE.exists()),
-    reason="face models (run camera setup) or frontend/test/fixtures/face_sample.jpg not present")
+    reason="MANUAL-ONLY cross-check: needs the face models (run camera setup) and a real photo at "
+           "frontend/test/fixtures/face_sample.jpg")
 
 
 @pytest.fixture(scope="module")

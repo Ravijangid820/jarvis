@@ -14,6 +14,7 @@ import os
 import sqlite3
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 import pytest
@@ -33,6 +34,7 @@ if "config" not in sys.modules:
     (_TMP / "config" / "jarvis.json").write_text(json.dumps(_cfg))
     os.environ["JARVIS_HOME"] = str(_TMP)
 
+import chat  # noqa: E402
 import config  # noqa: E402
 import db  # noqa: E402
 import memory  # noqa: E402
@@ -88,6 +90,31 @@ def collection(monkeypatch):
 def test_new_messages_start_unembedded(fresh_db):
     _add_message("first")
     assert len(memory.get_unembedded_messages()) == 1
+
+
+def test_storing_a_message_makes_it_pending(fresh_db, collection):
+    """The join between the two halves. chat.store_message writes the row; the row's embedded=0 IS
+    the queue (enqueue_embedding does nothing any more). Nothing else puts work into the pending
+    set, so if this link breaks, embedding silently stops for the whole system."""
+    chat.store_message("s1", "user", "remember the boiler code is 4417")
+    pending = memory.get_unembedded_messages()
+    assert [p["content"] for p in pending] == ["remember the boiler code is 4417"]
+    # ...carrying the metadata the flush needs to scope the vector to its owner.
+    assert pending[0]["user_id"] == 7 and pending[0]["session_id"] == "s1"
+
+
+def test_storing_a_message_does_not_embed_it_inline(fresh_db, collection):
+    """The measured reason the queue exists: ~1.2 s of a two-core box, spent while the user is
+    typing their next message."""
+    chat.store_message("s1", "user", "hello")
+    assert collection.batches == []
+
+
+def test_a_stored_message_is_picked_up_by_the_next_flush(fresh_db, collection):
+    chat.store_message("s1", "user", "hello")
+    chat.store_message("s1", "jarvis", "Sir.")
+    assert memory.flush_embeddings() == 2
+    assert memory.get_unembedded_messages() == []
 
 
 def test_enqueue_embedding_does_not_embed_inline(fresh_db, collection):
@@ -197,25 +224,160 @@ def test_valve_threshold_is_below_the_extraction_threshold():
     assert config.EMBED_IDLE_SECONDS < config.IDLE_THRESHOLD_SECONDS
 
 
+# --------------------------------------------------------------------- the worker's trigger
+#
+# The condition the whole feature hangs on lives in _memory_worker, inside a `while` around a
+# sleep — so it had no coverage at all, and an inverted comparison would have embedded nothing
+# while every test above still passed. These drive ONE pass of the real loop.
+
+
+class _Clock:
+    """Stands in for the `time` module inside memory, so one worker pass runs without sleeping."""
+    def __init__(self, now=1_000_000.0):
+        self.now = now
+        self.slept = []
+
+    def time(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.slept.append(seconds)
+        memory._memory_worker_running = False    # this iteration finishes, then the loop exits
+
+
+def _one_worker_pass(monkeypatch, *, idle_for, oldest_age, extract=None, flushed=1):
+    """Run a single iteration of _memory_worker and report what it decided to do.
+
+    The recorders below ignore calls from any other thread. Other test modules boot the real app
+    through TestClient, whose lifespan starts a genuine memory-core thread — and it reads the same
+    module globals these tests patch. Without the check, a background tick landing mid-test would
+    show up as an extra flush here and fail an unrelated assertion once in a long while.
+    """
+    clock = _Clock()
+    here = threading.current_thread()
+    did = {"flush": 0, "extract": 0}
+    monkeypatch.setattr(memory, "time", clock)
+    monkeypatch.setattr(memory, "_last_activity_time", clock.now - idle_for)
+    monkeypatch.setattr(memory, "is_busy", lambda: False)
+    monkeypatch.setattr(memory, "_oldest_unembedded_age_s", lambda: oldest_age)
+
+    def _flush(*a, **k):
+        if threading.current_thread() is not here:
+            return 0
+        did["flush"] += 1
+        return flushed                 # how many messages were pending
+
+    def _extract(messages):
+        if threading.current_thread() is not here:
+            return
+        did["extract"] += 1
+
+    monkeypatch.setattr(memory, "flush_embeddings", _flush)
+    monkeypatch.setattr(memory, "get_unprocessed_messages",
+                        lambda batch_size=None: extract or [])
+    monkeypatch.setattr(memory, "extract_facts_batch", _extract)
+    memory._memory_worker()
+    return did
+
+
+def test_the_worker_flushes_once_the_box_goes_idle(monkeypatch):
+    did = _one_worker_pass(monkeypatch, idle_for=memory.EMBED_IDLE_SECONDS + 1, oldest_age=0)
+    assert did["flush"] == 1
+
+
+def test_the_worker_does_not_flush_while_someone_is_typing(monkeypatch):
+    """Embedding mid-conversation is exactly what this change removed: it competes with prefill
+    for the same two cores, right when the user is waiting on a reply."""
+    did = _one_worker_pass(monkeypatch, idle_for=memory.EMBED_IDLE_SECONDS - 1, oldest_age=0)
+    assert did["flush"] == 0
+
+
+def test_an_old_pending_message_trips_the_valve_even_mid_conversation(monkeypatch):
+    """The second half of the condition, and the one that is easy to lose. An unbroken
+    conversation never reaches the idle threshold, so without the age check "defer to idle" would
+    mean "never embed"."""
+    did = _one_worker_pass(monkeypatch, idle_for=0, oldest_age=memory.EMBED_MAX_DEFER_S + 1)
+    assert did["flush"] == 1
+
+
+def test_a_young_pending_message_does_not_trip_the_valve(monkeypatch):
+    did = _one_worker_pass(monkeypatch, idle_for=0, oldest_age=memory.EMBED_MAX_DEFER_S - 1)
+    assert did["flush"] == 0
+
+
+def test_a_flush_defers_fact_extraction_to_the_next_pass(monkeypatch):
+    """Both jobs want the same two cores. Having embedded something, the worker re-checks activity
+    rather than starting a multi-minute LLM call on top of it."""
+    did = _one_worker_pass(monkeypatch, idle_for=memory.IDLE_THRESHOLD_SECONDS + 1, oldest_age=0,
+                           extract=[{"id": 1, "content": "x", "user_id": 7}])
+    assert did == {"flush": 1, "extract": 0}
+
+
+def test_extraction_still_runs_when_there_is_nothing_to_embed(monkeypatch):
+    """...and the deferral must not become a block: with the queue empty, flush returns 0 and the
+    idle pass goes on to the job it was there for."""
+    did = _one_worker_pass(monkeypatch, idle_for=memory.IDLE_THRESHOLD_SECONDS + 1, oldest_age=0,
+                           extract=[{"id": 1, "content": "x", "user_id": 7}], flushed=0)
+    assert did == {"flush": 1, "extract": 1}
+
+
 # --------------------------------------------------------------------- migration
 
-def test_existing_rows_are_marked_embedded_not_pending():
-    """A database upgraded from before this column already has vectors for its history. Defaulting
-    them to 0 would re-embed every message ever sent on the first idle tick — hours of CPU on the
-    box this runs on, for work already done."""
-    tmp = Path(tempfile.mkdtemp()) / "old.db"
-    conn = sqlite3.connect(tmp)
+def _old_schema_db(tmp_path) -> Path:
+    """A database as it looked before the `embedded` column existed, with one message in it."""
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(path)
     conn.executescript("""
         CREATE TABLE conversation_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, timestamp DATETIME,
+            id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
             speaker TEXT, content TEXT NOT NULL, facts_extracted BOOLEAN DEFAULT 0);
-        INSERT INTO conversation_history (session_id, speaker, content) VALUES ('s','user','old');
+        INSERT INTO conversation_history (session_id, speaker, content)
+            VALUES ('s','user','said before the upgrade');
     """)
     conn.commit()
-    assert db._safe_exec(conn, "ALTER TABLE conversation_history ADD COLUMN embedded BOOLEAN DEFAULT 0")
-    conn.execute("UPDATE conversation_history SET embedded = 1")
-    conn.commit()
-    assert conn.execute("SELECT embedded FROM conversation_history").fetchone()[0] == 1
-    # ...and the ALTER reports "already applied" the second time, so the backfill runs ONCE.
-    assert db._safe_exec(conn, "ALTER TABLE conversation_history ADD COLUMN embedded BOOLEAN DEFAULT 0") is False
     conn.close()
+    return path
+
+
+def _embedded_flag(path: Path, content: str) -> int:
+    conn = sqlite3.connect(path)
+    try:
+        return conn.execute(
+            "SELECT embedded FROM conversation_history WHERE content = ?", (content,)).fetchone()[0]
+    finally:
+        conn.close()
+
+
+def test_upgrading_an_old_database_marks_existing_rows_embedded(monkeypatch, tmp_path):
+    """A database upgraded from before this column already has vectors for its history. Defaulting
+    them to 0 would re-embed every message ever sent on the first idle tick — hours of CPU on the
+    box this runs on, for work already done.
+
+    This drives db.init_db() itself against a genuinely pre-column database, because the backfill
+    is one line inside it and an earlier version of this test re-implemented that line instead of
+    calling it: deleting the line from db.py left the test green.
+    """
+    path = _old_schema_db(tmp_path)
+    monkeypatch.setattr(db, "DB_PATH", str(path))
+    db.init_db()                                   # exactly what startup runs
+    assert _embedded_flag(path, "said before the upgrade") == 1
+
+
+def test_the_backfill_does_not_run_a_second_time(monkeypatch, tmp_path):
+    """The backfill is guarded by whether the ALTER actually ran. Unguarded, every restart would
+    mark the whole pending queue embedded and throw away the vectors it still owed."""
+    path = _old_schema_db(tmp_path)
+    monkeypatch.setattr(db, "DB_PATH", str(path))
+    db.init_db()
+
+    conn = sqlite3.connect(path)
+    conn.execute("INSERT INTO conversation_history (session_id, speaker, content) "
+                 "VALUES ('s','user','waiting for a vector')")
+    conn.commit()
+    conn.close()
+    assert _embedded_flag(path, "waiting for a vector") == 0     # new rows start pending
+
+    db.init_db()                                   # a restart
+    assert _embedded_flag(path, "waiting for a vector") == 0, \
+        "a second start re-ran the backfill and silently dropped a pending message's vector"
