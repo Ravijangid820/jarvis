@@ -51,8 +51,15 @@ ACTIVE_MIC = REPO / "config" / "active_mic.json"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("voice-bridge")
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
-_GREETINGS = ("hello", "hi", "hey", "good morning", "good afternoon", "good evening",
-              "you there", "are you there", "there")
+
+# The orchestrator's classifier, imported rather than reimplemented. This file used to carry its
+# own — `c in _GREETINGS or c.startswith(_GREETINGS)` — which, because startswith takes a tuple and
+# "hi" is in the list, treated ANY utterance merely beginning with those letters as a greeting:
+# "Jarvis, hit the lights" and "Jarvis, there is a problem with the fan" were both answered "Yes,
+# sir?" and never acted on. intents.py is pure (re + datetime, no I/O), so importing it costs
+# nothing and there is now one definition instead of a copy per surface.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "orchestrator"))
+from intents import is_greeting  # noqa: E402
 
 
 def play_audio(b64: str) -> None:
@@ -163,11 +170,6 @@ def parse_line(line: str):
     if idx < 0:
         return (False, "")
     return (True, text[idx + len(WAKE):].lstrip(" ,.:;-").strip())
-
-
-def is_greeting(cmd: str) -> bool:
-    c = cmd.lower().rstrip("?!. ")
-    return c in _GREETINGS or c.startswith(_GREETINGS)
 
 
 def main():

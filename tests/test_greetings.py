@@ -22,6 +22,7 @@ relied on. The fix is to stop asking: these never reach the model.
 """
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -33,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "orchestrat
 
 import chat  # noqa: E402
 from routes import chat as routes_chat  # noqa: E402
+import intents  # noqa: E402
 from intents import GREETING_REPLIES, greeting_reply, is_greeting  # noqa: E402
 
 
@@ -77,12 +79,60 @@ def test_empty_input_is_not_a_greeting():
 
 def test_replies_are_short_and_in_character():
     for reply in GREETING_REPLIES:
-        assert len(reply) <= 20
+        assert len(reply) <= 34
         assert "sir" in reply.lower()
 
 
 def test_reply_comes_from_the_fixed_set():
     assert greeting_reply() in GREETING_REPLIES
+
+
+def test_the_reply_is_time_aware():
+    """The spoken path had a dozen time-aware acknowledgements while the typed path had four terse
+    ones, so "hey Jarvis" out loud and "hey Jarvis" typed answered differently for no reason
+    anyone chose. One function now serves both."""
+    assert greeting_reply(datetime(2026, 8, 13, 9, 0)) or True     # smoke: accepts a clock
+    mornings = {greeting_reply(datetime(2026, 8, 13, 9, 0)) for _ in range(60)}
+    evenings = {greeting_reply(datetime(2026, 8, 13, 21, 0)) for _ in range(60)}
+    assert "Good morning, sir." in mornings and "Good morning, sir." not in evenings
+    assert "Good evening, sir." in evenings and "Good evening, sir." not in mornings
+
+
+def test_the_same_reply_never_lands_twice_in_a_row():
+    """Back-to-back repeats are what a person notices, not the size of the pool."""
+    picks = [greeting_reply() for _ in range(40)]
+    assert not any(a == b for a, b in zip(picks, picks[1:]))
+
+
+# --------------------------------------------------------------------------------------------
+# The bug a human found: "Hey, Jarvis. How are you?" answered "Yes, sir."
+
+
+@pytest.mark.parametrize("text", [
+    "Hey, Jarvis. How are you?", "how are you", "How are you?", "how are you doing",
+    "how's it going", "what's up", "are you ok", "are you alright", "how are things",
+])
+def test_a_question_about_jarvis_is_not_a_greeting(text):
+    """The reported failure. These ask something, and the model answers them well — measured
+    against the real model on this box: "How are you?" -> "I am functioning as expected.",
+    "How's it going?" -> "It's running at 100% efficiency, sir.". Intercepting them with a canned
+    acknowledgement replaces a good answer with a worse one, which is the opposite of the point.
+
+    The cause was a prefix match: the old rule accepted any =<3-word utterance whose every word
+    merely BEGAN a known greeting, and "how" begins "howdy", "are" begins "are you there", "you"
+    begins "you there".
+    """
+    assert not is_greeting(text)
+
+
+@pytest.mark.parametrize("text", [
+    "hit the lights", "history of rome", "there is a problem with the fan", "heyward called",
+])
+def test_a_command_that_merely_starts_like_a_greeting_still_acts(text):
+    """The same bug class on the box's microphone, which used `str.startswith` against a tuple:
+    "Jarvis, hit the lights" was a greeting because "hit" begins "hi", so the light never came on
+    and the only feedback was a pleasantry. voice_bridge.py now imports this function."""
+    assert not is_greeting(text)
 
 
 # --------------------------------------------------------------------------------------------
@@ -210,3 +260,40 @@ def test_a_message_with_content_still_reaches_the_model(client, session, monkeyp
     assert len(asked) == 1
     # ...and an ordinary turn IS replayed to the model next time.
     assert len(chat.get_recent_context(sid, for_llm=True)) == 2
+
+
+# --------------------------------------------------------------------------------------------
+# One definition, three surfaces.
+
+_FIXTURE = json.loads((Path(__file__).resolve().parents[1] / "config" / "greeting_phrases.json")
+                      .read_text())
+
+
+def test_the_phrase_list_matches_the_shared_fixture():
+    """config/greeting_phrases.json is the contract between this classifier and the browser's.
+
+    The lists are literals in code on both sides — intents.py is pure by design, and the browser
+    must not fetch a file to answer "hello" — so the fixture pins them from the outside instead.
+    Change one without the other and this fails here, and the matching test fails under `npm test`.
+    """
+    assert set(intents.GREETING_PHRASES) == set(_FIXTURE["phrases"])
+    assert set(intents._NOISE_ONLY) == set(_FIXTURE["noise"])
+
+
+@pytest.mark.parametrize("phrase", _FIXTURE["phrases"] + _FIXTURE["noise"])
+def test_every_listed_phrase_is_answered_without_the_model(phrase):
+    assert is_greeting(phrase)
+    assert is_greeting("Jarvis, " + phrase)      # and with the wake word in front of it
+
+
+@pytest.mark.parametrize("phrase", _FIXTURE["not_greetings"])
+def test_every_regression_phrase_reaches_the_model(phrase):
+    assert not is_greeting(phrase)
+
+
+def test_the_box_microphone_shares_this_exact_function():
+    """voice_bridge.py had its own copy and it was wrong in a different way. It imports this one
+    now; if someone reintroduces a local definition, this fails."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "scripts"))
+    import voice_bridge
+    assert voice_bridge.is_greeting is is_greeting

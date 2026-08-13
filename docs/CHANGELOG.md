@@ -4,6 +4,46 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## Unreleased
+
+### "Hey, Jarvis. How are you?" was answered "Yes, sir."
+
+Reported from real use, and it was three separate bugs wearing one coat.
+
+The greeting fast path answers a bare address without the model, because a 2B model handed a
+contentless turn recites the house — re-measured while fixing this, asked nothing but "Hey Jarvis"
+it replied *"Sir, the lights, tube light, and fan are all off."* That part is doing its job. What
+it must never do is swallow a **question**, and it was: the rule accepted any utterance of three
+words or fewer whose every word merely *began* a known greeting, and "how" begins "howdy", "are"
+begins "are you there", "you" begins "you there". Nobody wrote that intending it; it fell out of a
+`startswith` that looked harmless.
+
+The same bug class, worse, on the box's microphone: `voice_bridge.py` used `str.startswith` against
+a *tuple*, so anything beginning with those letters was a greeting. **"Jarvis, hit the lights" was
+answered "Yes, sir?" and the light never came on** — "hit" begins "hi". Also "Jarvis, there is a
+problem with the fan", and "history of rome".
+
+And the browser had a third copy, with its own rule again, whose list had drifted from both.
+
+Fixes:
+
+- Matching is now **exact equality** against an explicit phrase list. No prefix matching, no
+  decomposition into words, no length heuristic — each of those is how one of the above got in.
+- Questions reach the model, which answers them properly: *"How are you?"* → "I am functioning as
+  expected.", *"How's it going?"* → "It's running at 100% efficiency, sir." Both measured against
+  the real model on the box; both cost ~20 s, which is the right trade. The asymmetry is now the
+  stated design rule — listing a phrase saves one LLM turn, listing one wrongly replaces a good
+  answer with a worse one, so when in doubt it goes to the model.
+- `voice_bridge.py` imports `intents.is_greeting` instead of reimplementing it. The browser keeps
+  its own literal (it cannot import Python, and must not fetch a file to answer "hello") but both
+  are pinned to `config/greeting_phrases.json`, asserted by the pytest **and** `npm test` suites,
+  so they cannot drift again.
+- The typed and spoken paths now share one set of replies. Saying "hey Jarvis" out loud got a
+  time-aware "Good evening, sir."; typing it got "Sir." — two different sets for no reason anyone
+  had chosen. Both use `intents.greeting_reply()` now, which never repeats itself twice running.
+
+465 Python tests (from 385), 96 frontend (from 92).
+
 ## v3.4.0 — 2026-08-12 — grounding, wake phrases, a security pass, and a much shorter wait
 
 ### it recited the state of the house when you said hello

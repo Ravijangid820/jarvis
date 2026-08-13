@@ -8,8 +8,11 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
+import { readFileSync } from "node:fs"
+
 import {
-  DEFAULT_WAKE_PHRASES, isGreetingRemainder, matchWakePhrase, normalise, parsePhraseList,
+  DEFAULT_WAKE_PHRASES, GREETINGS, NOISE, isGreetingRemainder, matchWakePhrase, normalise,
+  parsePhraseList,
 } from "../src/wake-phrases.js"
 
 test("the phrasings that prompted this all wake it", () => {
@@ -100,4 +103,43 @@ test("the remainder is sliced from the original, not the normalised text", () =>
   assert.equal(matchWakePhrase("Jarvis, don't turn off the light!").remainder,
                "don't turn off the light!")
   assert.equal(matchWakePhrase("Hey Jarvis - what's 2+2?").remainder, "what's 2+2?")
+})
+
+
+// --- the greeting contract, shared with the server ------------------------------------------
+// config/greeting_phrases.json is the single definition of "this utterance is only a greeting".
+// It exists because this file's list and the server's had drifted apart without anyone seeing it:
+// the server answered "how are you" with "Yes, sir." because "how" is a prefix of "howdy", and the
+// box microphone dropped "Jarvis, hit the lights" because "hit" starts with "hi". Both sides keep
+// their list as a literal — the browser must not fetch a file to answer "hello" — so the fixture
+// pins them from the outside, and the matching assertions run in pytest too.
+
+const FIXTURE = JSON.parse(
+  readFileSync(new URL("../../config/greeting_phrases.json", import.meta.url), "utf8"))
+
+test("the browser's greeting list matches the shared fixture", () => {
+  assert.deepEqual([...GREETINGS].sort(), [...FIXTURE.phrases].sort())
+  assert.deepEqual([...NOISE].sort(), [...FIXTURE.noise].sort())
+})
+
+test("every listed phrase is answered without the model", () => {
+  for (const phrase of [...FIXTURE.phrases, ...FIXTURE.noise]) {
+    assert.equal(isGreetingRemainder(phrase), true, `${phrase} should be a greeting`)
+  }
+})
+
+test("every regression phrase reaches the model", () => {
+  for (const phrase of FIXTURE.not_greetings) {
+    // The fixture holds whole utterances; this function sees what follows the wake phrase, so
+    // strip it the way matchWakePhrase would.
+    const remainder = matchWakePhrase(phrase).remainder ?? phrase
+    assert.equal(isGreetingRemainder(remainder || phrase), false,
+      `${phrase} carries a question or a command and must not be swallowed`)
+  }
+})
+
+test("a request that merely starts with a greeting is not a greeting", () => {
+  // The old rule matched any remainder STARTING with a greeting, so this was a pleasantry.
+  assert.equal(isGreetingRemainder("hey turn on the light"), false)
+  assert.equal(isGreetingRemainder("hello can you set a timer"), false)
 })

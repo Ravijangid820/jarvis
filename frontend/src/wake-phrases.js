@@ -87,20 +87,34 @@ export function matchWakePhrase(text, phrases = DEFAULT_WAKE_PHRASES) {
 /**
  * Is the remainder just a pleasantry rather than a request?
  *
- * Mirrors the server's list in voice_bridge.py, so "Jarvis, are you there" gets the same spoken
- * acknowledgement whether it was heard by the box's microphone or by a browser tab. Divergence
- * here would be invisible and maddening: the same words answered two different ways depending on
- * which microphone happened to be listening.
+ * The same words must be answered the same way whether they were typed, heard by a browser tab, or
+ * heard by the box's own microphone — so this list and the server's (intents.py GREETING_PHRASES)
+ * are pinned to one another by config/greeting_phrases.json, which both test suites assert against.
+ * They were not, and the drift was invisible until a human hit it: the server classified "how are
+ * you" as a greeting and answered a question with "Yes, sir.".
+ *
+ * Matched by EXACT equality after normalise(). The previous rule also accepted anything *starting*
+ * with a greeting, which made "hey turn on the light" a pleasantry. Prefix matching is how every
+ * bug in this area got in; a phrasing that is not listed simply goes to the model, which is the
+ * cheaper mistake by far.
  */
-const GREETINGS = [
-  "hello", "hi", "hey", "good morning", "good afternoon", "good evening",
-  "you there", "are you there", "there", "are you awake", "wake up", "you awake",
-]
+export const GREETINGS = new Set([
+  "hello", "hi", "hey", "yo", "hiya", "howdy", "greetings", "sup",
+  "good morning", "good afternoon", "good evening", "good day",
+  "morning", "afternoon", "evening",
+  "hello there", "hi there", "hey there", "there",
+  "you there", "are you there", "you up", "are you up",
+  "you awake", "are you awake", "wake up", "you online", "are you online",
+])
+
+/** Filler a speech-to-text pass leaves behind — nothing to answer. */
+export const NOISE = new Set(["i", "a", "uh", "um", "hm", "hmm", "eh", "ah", "oh", "so", "well",
+                              "ok", "okay"])
 
 export function isGreetingRemainder(remainder) {
   const r = normalise(remainder)
   if (!r) return true                       // the wake phrase alone — acknowledge and listen
-  return GREETINGS.some(g => r === g || r.startsWith(g + " "))
+  return GREETINGS.has(r) || NOISE.has(r)
 }
 
 /** Parse a user-edited list ("hey jarvis, jarvis, wake up jarvis") into clean phrases. */

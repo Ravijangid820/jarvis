@@ -12,15 +12,13 @@ wake word and Whisper both run in the tab.
 """
 import asyncio
 import json
-import random
 import re
 import shutil
 import sys
 import threading
 import time
-from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -28,6 +26,7 @@ from pydantic import BaseModel, Field
 
 import deps
 from config import BASE_DIR, logger
+from intents import greeting_reply
 from llm import synthesize_tts
 
 router = APIRouter(tags=["voice"])
@@ -299,38 +298,14 @@ def tts(req: TTSRequest, request: Request):
     return {"audio": audio}
 
 
-# The last acknowledgement spoken, so the next one differs. Hearing the same three words every
-# time you say the wake word is what makes a voice assistant feel like a doorbell rather than a
-# character — and the wake word is the ONE line you hear more than any other.
-_LAST_ACK: List[str] = []
-
-
-def _jarvis_ack() -> str:
-    """A short, time-aware JARVIS acknowledgement — the spoken reply to just the wake word.
-
-    Never repeats the previous one. With a dozen options that alone is most of the perceived
-    variety: back-to-back repeats are what the ear notices, not the size of the pool.
-    """
-    h = datetime.now().hour
-    part = "morning" if h < 12 else "afternoon" if h < 18 else "evening"
-    options = [
-        "Yes, sir?", "At your service, sir.", "How can I help, sir?",
-        f"Good {part}, sir.", "Standing by, sir.", "I'm here, sir.",
-        "Listening, sir.", "Sir?", "Go ahead, sir.", "Ready when you are, sir.",
-        "You have my attention, sir.", "What can I do for you, sir?",
-    ]
-    if h < 5:                       # the small hours deserve their own line
-        options += ["Still awake, sir?", "Burning the midnight oil, sir?"]
-    choices = [o for o in options if o not in _LAST_ACK] or options
-    pick = random.choice(choices)
-    _LAST_ACK.clear()
-    _LAST_ACK.append(pick)
-    return pick
-
-
 @router.get("/greeting")
 def greeting(request: Request):
     """A JARVIS greeting (text + spoken audio), no LLM. Used by the voice bridge when it hears
-    just the wake word ("Jarvis" → "Yes, sir?")."""
-    text = _jarvis_ack()
+    just the wake word ("Jarvis" → "Yes, sir?").
+
+    The wording comes from intents.greeting_reply — the same function the typed path uses. It used
+    to be a second, richer set defined here, so saying "hey Jarvis" out loud got "Good evening,
+    sir." while typing it got "Sir.", for no reason anyone had chosen.
+    """
+    text = greeting_reply()
     return {"text": text, "audio": synthesize_tts(text)}

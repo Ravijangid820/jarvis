@@ -44,18 +44,37 @@ Notes:
 
 ### 1a. The greeting fast path
 
-"hi", "hey jarvis", "good morning" — and contentless noise like a bare "I" or "um" — are answered
-by the server from a fixed set of replies (`intents.greeting_reply`), and **never reach the model**.
+A **bare address** — "hi", "hey jarvis", "good morning", or contentless noise like "I" or "um" — is
+answered by the server from a time-aware set of acknowledgements (`intents.greeting_reply`) and
+**never reaches the model**.
 
 This is not an optimisation. Handed a turn with nothing in it, a 2B model reaches for whatever
-context is in front of it: it recited the state of every device in the house, and with the device
-block removed it invented "the lights, temperature, and security systems are running as
-configured" — hardware that does not exist. The system prompt forbids exactly that and is ignored;
-instruction-following at this size cannot be relied on, so the fix is to stop asking.
+context is in front of it. Re-measured against the real model on the box: asked nothing but
+"Hey Jarvis", with the live device block in context, it answered *"Sir, the lights, tube light, and
+fan are all off."* Nobody asked about the lights. With the device block removed it invented "the
+lights, temperature, and security systems are running as configured" — hardware that does not
+exist. The system prompt forbids exactly that and is ignored, so the fix is to stop asking.
 
-`intents.is_greeting` is deliberately strict: anything carrying content ("hey jarvis, turn off the
-fan", "hi, what's the weather") falls through to the normal path. Both `/inbox` and `/chat/stream`
-short-circuit identically.
+**What it must never do is swallow a question.** `intents.is_greeting` matches by *exact equality*
+against `GREETING_PHRASES` — no prefix matching, no decomposition into words, no length
+heuristic — because every one of those let it over-reach. A rule that accepted any short utterance
+whose words merely *began* a known greeting classified **"how are you"** as a greeting ("how"
+begins "howdy") and answered a question with "Yes, sir.". Questions go to the model, which answers
+them well: "How are you?" → *"I am functioning as expected."*, "How's it going?" → *"It's running
+at 100% efficiency, sir."* — both measured, both worth their ~20 s.
+
+The asymmetry is the design rule: listing a phrase saves one LLM turn; listing one wrongly replaces
+a good answer with a worse one. **When in doubt, leave it out and let the model answer.**
+
+The phrase list lives in `config/greeting_phrases.json`, which is the contract between this
+classifier and the browser's (`frontend/src/wake-phrases.js`). Both keep their list as a literal —
+`intents.py` is pure, and the browser must not fetch a file to answer "hello" — and both test
+suites assert against the fixture, so the two cannot drift. `voice_bridge.py` imports
+`intents.is_greeting` outright; it used to carry a third copy that treated any utterance merely
+*starting* with a greeting as one, so "Jarvis, hit the lights" was answered "Yes, sir?" and the
+light never came on.
+
+Both `/inbox` and `/chat/stream` short-circuit identically.
 
 Greeting turns are stored with `kind='greeting'` and **withheld from the model's history**, the
 same rule device acknowledgements live under (§8) — a screenful of "Sir." teaches it to answer

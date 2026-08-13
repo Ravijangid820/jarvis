@@ -215,31 +215,53 @@ def says_more_than_command(text: str, device_words: str = "", min_words: int = 2
 # browser, or heard by the box's own microphone. Divergence here is invisible and maddening.
 _WAKE_PREFIX = re.compile(r"^\s*(?:hey|hi|hello|ok|okay|yo)?\s*,?\s*jarvis\b[\s,.!?-]*", re.I)
 _WAKE_SUFFIX = re.compile(r"[\s,.!?-]*\bjarvis\b\s*$", re.I)
-_GREETING_WORDS = {
-    "hello", "hi", "hey", "yo", "hiya", "greetings",
+
+# The COMPLETE set of utterances answered without the model, listed exactly. Membership is an
+# equality test against this set — there is no decomposition into words, no prefix matching, and
+# no length heuristic.
+#
+# There was, and it is the reason this list is now explicit. The old rule accepted any utterance of
+# three words or fewer whose every word merely *began* one of these phrases, which quietly made
+# "how are you" a greeting — "how" is a prefix of "howdy", "are" of "are you there", "you" of
+# "you there" — so a question about how Jarvis was doing was answered "Yes, sir." Nobody wrote that
+# rule intending it; it fell out of a `startswith` that looked harmless.
+#
+# Everything here is either a bare address or a presence check, where an acknowledgement IS the
+# complete and correct answer. Anything else — including "how are you", "how's it going",
+# "what's up", "are you ok" — is a question, and questions go to the model. Adding a phrasing here
+# saves one LLM turn; adding one wrongly answers a real question with a pleasantry, which is far
+# worse and is exactly what happened. When in doubt, leave it out and let the model answer.
+GREETING_PHRASES = frozenset({
+    "hello", "hi", "hey", "yo", "hiya", "howdy", "greetings", "sup",
     "good morning", "good afternoon", "good evening", "good day",
-    "you there", "are you there", "there", "you up", "are you up",
-    "are you awake", "you awake", "wake up", "are you online", "you online",
-    "morning", "evening", "afternoon", "sup", "howdy",
-}
+    "morning", "afternoon", "evening",
+    "hello there", "hi there", "hey there", "there",
+    "you there", "are you there", "you up", "are you up",
+    "you awake", "are you awake", "wake up", "you online", "are you online",
+})
 # Fragments a speech-to-text pass or a stray keypress leaves behind. A bare "I" was one of the
 # messages that produced a recitation of the whole house, because the model had nothing else to
 # answer and a device list in front of it.
-_NOISE_ONLY = {"i", "a", "uh", "um", "hm", "hmm", "eh", "ah", "oh", "so", "well", "ok", "okay"}
+_NOISE_ONLY = frozenset({"i", "a", "uh", "um", "hm", "hmm", "eh", "ah", "oh", "so", "well",
+                         "ok", "okay"})
 
 
 def is_greeting(text: str) -> bool:
-    """True when the message is ONLY a greeting (or content-free noise) — nothing to answer.
+    """True when the message is ONLY a greeting or content-free noise — nothing to answer.
 
-    Exists because a 2B model handed a contentless turn does not stay quiet: given "hey jarvis"
-    it recited the state of every device in the house, and with the device block removed it
-    invented "the lights, temperature, and security systems are running as configured" — hardware
-    that does not exist. The system prompt forbids exactly that and is ignored; instruction
-    following at this size is not reliable enough to fix by asking. So these never reach the model.
+    Exists because a 2B model handed a contentless turn does not stay quiet. Re-measured against
+    the real model on this box while fixing the bug above: asked nothing but "Hey Jarvis", with the
+    live device block in context, it answered *"Sir, the lights, tube light, and fan are all off."*
+    Nobody asked about the lights. So a bare address still never reaches the model.
 
-    STRICT on purpose: anything left after the greeting falls through to the normal path, so
-    "hey jarvis, turn off the fan" is a command and "hi, what's the weather" is a question. Only
-    an utterance with no content of its own is answered from here.
+    What it must NOT do is swallow a question. The same session measured the model answering
+    "How are you?" with "I am functioning as expected." and "How's it going?" with "It's running at
+    100% efficiency, sir." — real replies, worth the ~20 s they cost. A greeting fast path that
+    intercepts those is not saving time, it is replacing a good answer with a worse one.
+
+    So the rule is exact membership in GREETING_PHRASES, and anything else falls through: "hey
+    jarvis, turn off the fan" is a command, "hi, what's the weather" is a question, and "how are
+    you" is a question.
     """
     stripped = _WAKE_PREFIX.sub("", text or "", count=1)
     # ...and trailing, because half the shipped wake phrases put the name last ("wake up jarvis",
@@ -249,23 +271,41 @@ def is_greeting(text: str) -> bool:
     cleaned = " ".join(_NON_WORD.sub(" ", stripped.lower()).split())
     if not cleaned:
         return bool((text or "").strip())        # the wake word alone ("jarvis") — still an address
-    if cleaned in _NOISE_ONLY:
-        return True
-    if cleaned in _GREETING_WORDS:
-        return True
-    # "hello there", "hey good morning" — a greeting made only of greeting words.
-    words = cleaned.split()
-    return len(words) <= 3 and all(w in _NOISE_ONLY or w in _GREETING_WORDS
-                                   or any(g.startswith(w) or w in g.split() for g in _GREETING_WORDS)
-                                   for w in words)
+    return cleaned in _NOISE_ONLY or cleaned in GREETING_PHRASES
 
 
-# Dry, and short enough that reading it in the transcript is not tiresome. Rotated only so a
-# screenful of greetings does not look like a stuck record; never fed back to the model, so the
-# variation cannot teach it to imitate the template (the failure that kind='device' exists for).
-GREETING_REPLIES = ("Sir.", "Sir?", "Yes, sir.", "Still here, sir.")
+# The spoken acknowledgement, and now the typed one too — they were two different sets, so saying
+# "hey Jarvis" out loud got "Good evening, sir." while typing it got "Sir." for no reason anyone
+# chose. Never repeats the previous pick: with a dozen options that alone is most of the perceived
+# variety, because back-to-back repeats are what the ear and the eye notice, not the size of the
+# pool. Never fed back to the model, so the variation cannot teach it to imitate the template
+# (the failure that kind='greeting' exists for).
+_LAST_ACK: list = []
 
 
-def greeting_reply() -> str:
+def greeting_reply(now: Optional[datetime] = None) -> str:
+    """A short, time-aware JARVIS acknowledgement — the whole answer to a bare address."""
     import random
-    return random.choice(GREETING_REPLIES)
+    hour = (now or datetime.now()).hour
+    part = "morning" if hour < 12 else "afternoon" if hour < 18 else "evening"
+    options = [
+        "Yes, sir?", "At your service, sir.", "How can I help, sir?",
+        f"Good {part}, sir.", "Standing by, sir.", "I'm here, sir.",
+        "Listening, sir.", "Sir?", "Go ahead, sir.", "Ready when you are, sir.",
+        "You have my attention, sir.", "What can I do for you, sir?",
+    ]
+    if hour < 5:                    # the small hours deserve their own line
+        options += ["Still awake, sir?", "Burning the midnight oil, sir?"]
+    pick = random.choice([o for o in options if o not in _LAST_ACK] or options)
+    _LAST_ACK.clear()
+    _LAST_ACK.append(pick)
+    return pick
+
+
+# Retained as the set a reply is drawn from, for tests and for anything that wants to recognise one.
+GREETING_REPLIES = ("Yes, sir?", "At your service, sir.", "How can I help, sir?",
+                    "Standing by, sir.", "I'm here, sir.", "Listening, sir.", "Sir?",
+                    "Go ahead, sir.", "Ready when you are, sir.", "You have my attention, sir.",
+                    "What can I do for you, sir?", "Still awake, sir?",
+                    "Burning the midnight oil, sir?",
+                    "Good morning, sir.", "Good afternoon, sir.", "Good evening, sir.")

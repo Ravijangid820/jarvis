@@ -89,10 +89,12 @@ Both chat endpoints accept the **QueryRequest** body:
 
 Several things are answered **without reaching the LLM**, on both `/inbox` and `/chat/stream`:
 
-- **Greetings.** "hi", "hey jarvis", "good morning", and contentless noise like a bare "I" or "um"
-  get one of a fixed set of short replies. Handed a turn with nothing in it, a 2B model reaches for
-  whatever context is in front of it and starts inventing household state, so it is never asked.
-  `is_greeting` is strict — "hey jarvis, turn off the fan" is still a command.
+- **A bare address.** "hi", "hey jarvis", "good morning", or contentless noise like "I" or "um" get
+  a time-aware acknowledgement ("At your service, sir."). Handed a turn with nothing in it, a 2B
+  model reaches for whatever context is in front of it and starts reciting household state, so it
+  is never asked. Matched by **exact equality** against `config/greeting_phrases.json` — anything
+  else reaches the model, including questions *about* Jarvis ("how are you", "what's up", "are you
+  ok") and of course commands ("hey jarvis, turn off the fan").
 - **Volume commands** ("set volume to 50%", "volume up", "mute") — authorized via
   `deps.can_control_devices`, enqueued to the device agent, acknowledged with a short spoken reply.
 - **Reminders** ("remind me to … in 20 minutes").
