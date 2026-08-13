@@ -94,7 +94,7 @@ Several things are answered **without reaching the LLM**, on both `/inbox` and `
   whatever context is in front of it and starts inventing household state, so it is never asked.
   `is_greeting` is strict — "hey jarvis, turn off the fan" is still a command.
 - **Volume commands** ("set volume to 50%", "volume up", "mute") — authorized via
-  `_can_control_devices`, enqueued to the device agent, acknowledged with a short spoken reply.
+  `deps.can_control_devices`, enqueued to the device agent, acknowledged with a short spoken reply.
 - **Reminders** ("remind me to … in 20 minutes").
 - **Home commands** — see the intent ladder in [DIAGRAMS.md](DIAGRAMS.md) §2. If the utterance says
   more than the command ("I'm freezing, turn the fan off"), the action still happens immediately and
@@ -179,7 +179,7 @@ admin "Camera · …" active/inactive status); the agent pings it ~every 30s.
 
 | Method | Path | Body | Returns |
 |---|---|---|---|
-| `POST` | `/devices/volume` | `{ action: set\|step\|mute\|unmute, value?, device? }` | `{ "status": "ok", "id": int }` — enqueue a volume command. **Authorized** (admin, or user with `can_control_devices`); `set` needs `value` 0–100, `step` a signed delta. **`403` in demo mode** (`_require_not_demo`). |
+| `POST` | `/devices/volume` | `{ action: set\|step\|mute\|unmute, value?, device? }` | `{ "status": "ok", "id": int }` — enqueue a volume command. **Authorized** (admin, or user with `can_control_devices`); `set` needs `value` 0–100, `step` a signed delta. **`403` in demo mode** (`deps.require_not_demo`). |
 | `POST` | `/devices/gesture` | `{ y: float }` | `{ "active": bool, "expires_in"?: int }` — the camera reports normalized hand height while a gesture mode is running, and the server maps movement to volume steps for that mode's target. **Device-scoped key required** (or admin + `?device=`), and only while a voice-authorized gesture mode is live for *that* camera — so the camera key itself needs no device-control permission. `active:false` tells the camera to stop reporting. **`403` in demo mode.** |
 | `GET` | `/devices/commands?device=&wait=` | — | `{ "commands": [{id, action, params}] }` — device agents **pull** their pending commands (long-poll up to `wait`s; delivered commands aren't re-served). **The API key must be bound to that `device` (or be an admin)** — a key for one device can't drain another's queue. Claimed with a single `UPDATE … RETURNING`, so two concurrent pollers cannot double-deliver. Concurrent long-polls are capped at 16. **`403` in demo mode.** |
 
@@ -189,7 +189,7 @@ the LLM.
 
 **LLM tools** (`set_volume`, `create_reminder`, `get_presence`, and — when Home Assistant is
 configured — `home_control`/`home_status`) execute through the same server-side gates: the model
-only *proposes*; `_can_control_devices`, the optional presence gate, the HA entity **allowlist**,
+only *proposes*; `deps.can_control_devices`, the optional presence gate, the HA entity **allowlist**,
 and the audit log decide. Ambiguous device names are refused, never guessed.
 
 ---
@@ -234,7 +234,7 @@ tool would run under.
 | `POST` | `/mcp/test` | `{ url }` | `{ "ok": bool, "detail": str }` — a **real MCP protocol handshake**. It used to be an HTTP ping that counted 401/404/405 as success, so any web server on the internet passed |
 | `GET` | `/mcp/servers/{name}/tools` | — | `{ "server": name, "tools": [...] }` — discover a configured server's tools for review · `404` unknown server · `502` if discovery fails |
 
-The mutating routes are `_require_not_demo` **as well as** `_require_admin`, and that combination is
+The mutating routes are `deps.require_not_demo` **as well as** `deps.require_admin`, and that combination is
 the actual fix: in demo mode every visitor is an admin of their own household, while the MCP server
 list is process-wide — so admin alone would have let a visitor add an entry everyone sees and make
 the box fetch a URL of their choosing. All outbound fetches go through `safehttp` (redirect cap,

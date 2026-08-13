@@ -8,7 +8,7 @@ This is a living document to track upcoming features, architectural shifts, and 
   hardening round): today device control rests on hand-written regex fast-paths (`intents.py`) —
   reliable and instant, but *scripted*: "turn on the fan" works, "it's boiling in here" doesn't, and
   every new phrasing is a code edit. The plan is a **layered router**, each layer smarter and slower,
-  all feeding the SAME executor (allowlist + `_can_control_devices` + presence + audit — proposal is
+  all feeding the SAME executor (allowlist + `deps.can_control_devices` + presence + audit — proposal is
   never authorization, no matter which layer proposed):
   1. **Regex fast-path** (exists) — exact common phrasings, ~0 ms. Keep as layer 1.
   2. **(DONE 2026-07-09)** Semantic router — reuses the ONNX embedder (~175 ms/query): embed the user

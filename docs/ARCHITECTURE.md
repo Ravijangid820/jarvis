@@ -56,8 +56,10 @@ events + pulls its enrolled set; opens no port). See [DEPLOY.md](DEPLOY.md).
 
 ## Orchestrator module graph
 
-`main.py` was deliberately split into small, single-responsibility modules with an **acyclic**
-import graph (`config → {db, auth, llm, ha} → memory → {chat, intent_router} → main`):
+The orchestrator is split into small, single-responsibility modules with an **acyclic** import
+graph (`config → {db, auth, llm, ha} → memory → {chat, intent_router} → deps → routes → main`).
+`main.py` itself is now the app, the middleware, start-up and the static mounts — the 81 route
+handlers live under `routes/`:
 
 ```
 config.py   configuration, tunables, logging        (no app deps)
@@ -67,13 +69,17 @@ config.py   configuration, tunables, logging        (no app deps)
   ├─ ha.py      Home Assistant REST client + entity-allowlist guardrails (runtime-configurable)
   ├─ onnx_embed.py  torch-free embedder (onnxruntime + tokenizers; used by memory)
   ├─ safehttp.py    outbound HTTP for URLs we were told to fetch: redirect + credential guard
+  ├─ purge.py       deleting an account or a household (admin routes + the demo sweeper)
   └─ llm.py     LLM HTTP client (blocking/stream) + Piper TTS
         └─ intent_router.py  semantic device-intent router (embeds utterances vs per-device
                              exemplars via memory's embedder; calibrated act/confirm thresholds)
         └─ memory.py   embeddings, ChromaDB, knowledge base, the idle worker
         │              (batch embedding + fact extraction), in-flight tracking
               └─ chat.py    sessions, message persistence, context-window prompt assembly
-                    └─ main.py   FastAPI app, auth middleware, route handlers only
+                    ├─ deps.py       the request guards every router shares
+                    ├─ ha_config.py  apply HA settings + rebuild the intent index
+                    └─ routes/       admin · chat · devices · faces · mcp · voice
+                          └─ main.py   the app, middleware, start-up, static mounts
 budget.py   pure token-budgeting helpers (no I/O — unit-tested in isolation)
 intents.py  pure phrase parsing: greetings, volume, reminders, home commands (no I/O)
 mcp.py      MCP client
@@ -81,16 +87,22 @@ mcp.py      MCP client
 
 Why this shape:
 - **`config` has no app dependencies**, so every module can import constants without cycles.
-- **`memory` does not import `chat`/`main`** — the cycle that would naturally form (prompt assembly
-  needs memory; memory cleanup needs sessions) is broken by keeping vector ops behind small
-  functions (`enqueue_embedding`, `delete_vectors`) that `chat` calls into.
+- **`memory` never imports `chat` or `main`** — in any form, including inside a function. The cycle
+  that would naturally form (prompt assembly needs memory; memory cleanup needs sessions) is broken
+  by keeping vector ops behind small functions (`enqueue_embedding`, `delete_vectors`) that `chat`
+  calls into.
 
-  **One deliberate exception, and it is a wart.** `memory.extract_facts_batch` ends by warming the
-  conversation's system prefix back into llama-server's KV cache, and the only thing that knows
-  what that prefix is, is `chat`. It does a *function-local* `import chat as _chat` to call
-  `chat.last_system_prefix()`. It works — Python resolves it at call time, long after both modules
-  are loaded — but it contradicts the invariant stated right above it, which means the invariant
-  cannot be relied on when reasoning about this code.
+  The one place this used to be bent is worth recording. `memory.extract_facts_batch` ends by
+  warming the conversation's system prefix back into llama-server's KV cache — and what that prefix
+  *is*, only `chat` knows. It used to reach for it with a function-local `import chat`. That
+  worked, and that is precisely the problem: nothing failed, the invariant simply stopped being
+  true, and one you cannot rely on buys nothing. The dependency is inverted now — `chat` registers
+  a callback via `memory.on_llm_displaced`, and `memory` calls whatever it was handed without
+  knowing what it is. `tests/test_kv_cache.py` parses memory.py's AST and fails if `chat` appears
+  in *any* import, since a local import inside a function is invisible to every other kind of
+  review.
+- **Nothing under `routes/` imports `main`**, so the graph stays a tree. Two things that both a
+  router and start-up need (`purge`, `ha_config`) are modules for exactly that reason.
 - **`budget` is pure** (no globals, no I/O) so the trickiest logic — token budgeting — is unit-tested
   without loading the 300M embedding model.
 

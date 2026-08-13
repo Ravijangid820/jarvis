@@ -1,7 +1,9 @@
 """Jarvis Memory Core: embeddings + vector store, the user knowledge base,
 idle-time fact extraction, and request-activity tracking.
 
-Depends on config, db, and llm — never on chat/main (keeps the import graph acyclic).
+Depends on config, db and llm — never on chat or main, in any form. The one place that rule
+used to be bent (a function-local `import chat` to warm the KV prefix after fact extraction) is now
+a callback: see on_llm_displaced.
 """
 import json
 import os
@@ -9,7 +11,7 @@ import re
 import threading
 import time
 from collections import defaultdict
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from config import (
     BASE_DIR, CHROMA_DB_PATH, EMBED_DOC_PREFIX, EMBED_MODEL_NAME, EMBED_ONNX_DIR, EMBED_QUERY_PREFIX,
@@ -22,7 +24,7 @@ from config import (
 )
 from budget import estimate_message_tokens, estimate_tokens, truncate_to_tokens
 from db import get_db
-from llm import llm_content, request_llm, warm_prefix
+from llm import llm_content, request_llm
 
 # --- Embeddings + vector store ----------------------------------------------
 # Initialized lazily by init_embeddings() (called once at startup), NOT at import:
@@ -335,6 +337,40 @@ class Inflight:
 def is_busy() -> bool:
     with _inflight_lock:
         return _inflight_requests > 0
+
+
+# --- "the background job just used the LLM slot" ------------------------------
+#
+# Fact extraction spends the single llama-server slot on a prompt sharing nothing with any chat,
+# so afterwards the conversation's prefix should be put back (see llm.warm_prefix for what that
+# costs and why). But WHICH prefix is knowledge chat.py owns, and this module must not import
+# chat — chat imports memory, and the acyclic graph is the reason any of this is testable in
+# isolation.
+#
+# This used to be a function-local `import chat` right at the call site. It worked, and it made the
+# documented invariant false, which is worse than it sounds: an invariant you cannot rely on is not
+# one. So the dependency is inverted instead. chat registers a callback at import time; memory
+# calls whatever it was handed, and knows nothing about what that is.
+_llm_displaced_hooks: List[Callable[[], None]] = []
+
+
+def on_llm_displaced(fn: Callable[[], None]) -> Callable[[], None]:
+    """Register work to run after a background job has finished with the LLM slot.
+
+    Usable as a decorator. Registration is additive and never replaces: two callers both get run.
+    """
+    _llm_displaced_hooks.append(fn)
+    return fn
+
+
+def _notify_llm_displaced() -> None:
+    """Run the hooks. Fail-soft, one at a time — this is latency insurance, never correctness, and
+    a hook that raises must not lose the extraction results that were just written."""
+    for fn in _llm_displaced_hooks:
+        try:
+            fn()
+        except Exception as e:
+            logger.warning("post-LLM hook %s failed: %s", getattr(fn, "__name__", fn), e)
 
 
 # --- Knowledge CRUD ---------------------------------------------------------
@@ -873,8 +909,7 @@ def extract_facts_batch(messages: List[Dict]):
     # Safe to do here: this runs only after the system has been idle, so the CPU is free and the
     # work is exactly what the user would otherwise have waited for.
     if WARM_CACHE_AFTER_EXTRACTION:
-        import chat as _chat        # local import: chat imports memory, so a module-level one cycles
-        warm_prefix(_chat.last_system_prefix())
+        _notify_llm_displaced()
 
 
 def _memory_worker():

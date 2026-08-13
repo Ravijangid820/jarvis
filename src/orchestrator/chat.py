@@ -13,6 +13,7 @@ from config import (COMPLETION_RESERVE_DEFAULT, HISTORY_MAX_AGE_HOURS, KNOWLEDGE
                     MAX_CONTEXT_TOKENS, MIN_COMPLETION_TOKENS, PROMPT_SAFETY_MARGIN,
                     REASONING, SYSTEM_PROMPT)
 from db import get_db
+from llm import warm_prefix
 
 
 # --- Message persistence ----------------------------------------------------
@@ -296,6 +297,17 @@ _LAST_SYSTEM_PREFIX: Optional[str] = None
 def last_system_prefix() -> Optional[str]:
     """The stable prefix a warm-up should restore. See llm.warm_prefix()."""
     return _LAST_SYSTEM_PREFIX
+
+
+@memory.on_llm_displaced
+def _restore_kv_prefix() -> None:
+    """Put this conversation's system prefix back at the head of llama-server's KV cache.
+
+    Registered with memory rather than called by it: the idle worker knows it has just displaced
+    the slot, and this module knows what was in it. Neither has to import the other's internals,
+    and memory.py stays free of any reference to chat.
+    """
+    warm_prefix(last_system_prefix())
 
 
 # Words that carry no meaning in a chat title. Kept small on purpose: this runs on the first

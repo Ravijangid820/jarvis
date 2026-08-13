@@ -140,7 +140,7 @@ flowchart TB
   RUN -->|device| DON2["'start the fan' = on"]
 ```
 
-Every arrow passes: entity **allowlist** → `_can_control_devices` → presence gate → **audit log**.
+Every arrow passes: entity **allowlist** → `deps.can_control_devices` → presence gate → **audit log**.
 Payloads to HA are hardcoded shapes (`entity_id` only) and responses are discarded — nothing for a
 prompt injection to smuggle in either direction.
 
@@ -206,17 +206,23 @@ flowchart TB
   MEM --> CHAT["chat.py<br/>sessions · prompt assembly"]
   MEM --> IR2["intent_router.py<br/>semantic router"]
   HA2 --> IR2
-  CHAT & IR2 --> MAIN["main.py — routes only"]
+  DB2 --> DEPS["deps.py<br/>household · admin · device control<br/>demo · smart home · audit"]
+  MEM --> PUR["purge.py<br/>account + household deletion"]
+  HA2 & IR2 --> HC["ha_config.py<br/>apply settings · rebuild the index"]
+  CHAT & IR2 & DEPS & PUR & HC --> R["routes/<br/>admin · chat · devices<br/>faces · mcp · voice"]
+  R --> MAIN["main.py<br/>app · middleware · start-up · mounts"]
+  DEPS & PUR & HC --> MAIN
   BUD["budget.py — pure token math"] -.-> CHAT
-  INT["intents.py — pure parsers"] -.-> MAIN
-  SH -.-> MCP2["mcp.py — MCP client"] -.-> MAIN
-  CHAT -.->|"function-local import, warm the KV prefix<br/>after fact extraction — the one exception"| MEM
+  INT["intents.py — pure parsers"] -.-> R
+  SH -.-> MCP2["mcp.py — MCP client"] -.-> R
+  CHAT -.->|"registers on_llm_displaced:<br/>warm the KV prefix after<br/>background work"| MEM
 ```
 
-The dotted `chat → memory` edge going *backwards* is real: `memory.extract_facts_batch` ends with a
-function-local `import chat` so it can put the conversation's system prefix back into
-llama-server's KV cache. It works, and it is the one place the "memory never imports chat"
-invariant does not hold.
+The dotted `chat → memory` edge is a **callback registration**, not an import. After fact
+extraction has spent the LLM slot, the conversation's system prefix should go back into it — and
+only `chat` knows what that prefix is. Rather than have `memory` reach into `chat` (which it did,
+via a function-local import, until this was fixed), `chat` hands `memory` a function at import
+time. `memory` calls it without knowing what it does, and the arrows all still point one way.
 
 ---
 
@@ -269,7 +275,7 @@ flowchart TB
     S2["compose split<br/>jarvis-orchestrator + jarvis-llama<br/>+ jarvis-frontend (Nginx)"]
     S3["native · systemd<br/>the 2011 box · local-CA HTTPS"]
   end
-  DEV["push to main"] --> CI["CI job 1: ruff + 382 Python tests<br/>CI job 2: npm lint + 92 frontend tests + build"]
+  DEV["push to main"] --> CI["CI job 1: ruff + 385 Python tests<br/>CI job 2: npm lint + 92 frontend tests + build"]
   DEV --> TAG["bump pyproject → git tag vX.Y.Z"]
   TAG --> GHA["Actions (no secrets needed)"]
   GHA --> IMG["GHCR, FOUR images: X.Y.Z + latest<br/>jarvis-combined · jarvis-orchestrator<br/>jarvis-llama · jarvis-frontend<br/>(manual/RC builds never move latest)"]

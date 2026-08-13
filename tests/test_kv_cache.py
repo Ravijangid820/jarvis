@@ -15,6 +15,7 @@ the full 57 s.
 These tests pin both fixes: a title that needs no model at all, and a warm-up that puts the prefix
 back after background work for the cases llama.cpp cannot rescue.
 """
+import ast
 import os
 import sys
 from pathlib import Path
@@ -27,6 +28,7 @@ os.environ.setdefault("JARVIS_NO_EMBED", "1")
 
 import chat  # noqa: E402
 import llm  # noqa: E402
+import memory  # noqa: E402
 
 
 # --------------------------------------------------------------- titles without the model
@@ -137,3 +139,45 @@ def test_build_messages_records_the_prefix_it_used(monkeypatch):
     msgs = chat.build_messages("sid", 1, 1, "hello", None)
     assert chat.last_system_prefix() == msgs[0]["content"]
     assert msgs[0]["role"] == "system"
+
+
+# --------------------------------------------------------------- the dependency, inverted
+
+def test_memory_never_reaches_into_chat():
+    """The documented invariant: memory depends on config, db and llm, never on chat.
+
+    It was false for a while — extract_facts_batch did a function-local `import chat` to find the
+    prefix to warm. That worked, which is exactly why it is worth a test: nothing failed, the
+    architecture doc simply stopped being true, and an invariant nobody can rely on buys nothing.
+    Import graphs are checked here rather than by reading, because a local import inside a
+    function is invisible to every other kind of review.
+    """
+    src = (Path(__file__).resolve().parents[1] / "src" / "orchestrator" / "memory.py").read_text()
+    tree = ast.parse(src)
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(a.name.split(".")[0] for a in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            imported.add(node.module.split(".")[0])
+    assert "chat" not in imported, "memory imported chat — including inside a function"
+    assert "main" not in imported
+
+
+def test_extraction_warms_the_prefix_through_the_callback(monkeypatch):
+    """And the behaviour that motivated the import is still there: after the idle worker has spent
+    the slot, the conversation's prefix goes back into it."""
+    warmed = []
+    monkeypatch.setattr(chat, "warm_prefix", lambda prefix: warmed.append(prefix))
+    monkeypatch.setattr(chat, "_LAST_SYSTEM_PREFIX", "You are JARVIS. /no_think")
+    memory._notify_llm_displaced()
+    assert warmed == ["You are JARVIS. /no_think"]
+
+
+def test_a_failing_hook_cannot_lose_the_extraction_results(monkeypatch):
+    """The warm-up runs after the facts have been written. A hook that raises must not propagate
+    into the worker, where it would look like the extraction itself failed."""
+    def boom():
+        raise RuntimeError("llama-server is down")
+    monkeypatch.setattr(memory, "_llm_displaced_hooks", [boom])
+    memory._notify_llm_displaced()      # must not raise
