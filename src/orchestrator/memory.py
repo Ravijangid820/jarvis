@@ -273,32 +273,6 @@ def flush_embeddings(limit: int = EMBED_FLUSH_BATCH) -> int:
     return len(pending)
 
 
-# Longest we will hold an embedding back waiting for the LLM to finish. A cap rather than an
-# unbounded wait because is_busy() is a counter: if one request ever failed to decrement it, an
-# uncapped wait would stop the vector store being written to again, silently and permanently.
-# Exceeding it degrades to the old behaviour (embed anyway), which is worse for latency but never
-# loses a memory.
-EMBED_DEFER_MAX_S = 180.0
-_EMBED_DEFER_POLL_S = 0.5
-
-
-def _wait_for_llm_idle(max_wait: float = EMBED_DEFER_MAX_S) -> float:
-    """Block while a generation is in flight. Returns how long we waited.
-
-    Embedding a 300M model on two no-AVX2 cores is hundreds of ms of pure CPU, and it was running
-    the instant a message was stored — which is exactly when the model is generating the reply to
-    that message. The two were competing for the same cores at the worst possible moment.
-
-    Deferring costs nothing in recall: anything not yet embedded is by definition recent, and
-    recent turns are already in the verbatim window. RAG only has to cover what has aged out.
-    """
-    waited = 0.0
-    while is_busy() and waited < max_wait:
-        time.sleep(_EMBED_DEFER_POLL_S)
-        waited += _EMBED_DEFER_POLL_S
-    return waited
-
-
 def delete_vectors(ids: List[str]):
     """Best-effort removal of vectors by id (batched for large deletes)."""
     if not (memory_collection and ids):

@@ -91,17 +91,6 @@ def delete_server(name: str) -> bool:
     return False
 
 
-def toggle_server(name: str, enabled: bool) -> Dict[str, Any]:
-    """Enable or disable an MCP server."""
-    servers = get_servers()
-    for s in servers:
-        if s.get("name") == name:
-            s["enabled"] = bool(enabled)
-            _save_servers(servers)
-            return s
-    raise KeyError(f"MCP server '{name}' not found.")
-
-
 def test_server(url: str) -> Tuple[bool, str]:
     """Verify the MCP lifecycle and report actual tool discovery, not a mere HTTP ping."""
     try:

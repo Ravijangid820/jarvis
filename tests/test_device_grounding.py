@@ -174,39 +174,6 @@ def test_history_older_than_the_cutoff_is_left_to_rag(client, owner):
 import memory  # noqa: E402
 
 
-def test_embedding_waits_while_a_generation_is_in_flight(monkeypatch):
-    slept = []
-    monkeypatch.setattr(memory.time, "sleep", lambda s: slept.append(s))
-    busy = iter([True, True, True, False])
-    monkeypatch.setattr(memory, "is_busy", lambda: next(busy, False))
-    waited = memory._wait_for_llm_idle()
-    assert waited > 0, "must not embed on top of a live generation"
-    assert len(slept) == 3, "should stop waiting as soon as the LLM goes idle"
-
-
-def test_embedding_is_never_blocked_forever_by_a_stuck_counter(monkeypatch):
-    """is_busy() is a counter. If a request ever failed to decrement it, an uncapped wait would
-    stop the vector store being written to again — silently, and for the life of the process."""
-    monkeypatch.setattr(memory.time, "sleep", lambda s: None)
-    monkeypatch.setattr(memory, "is_busy", lambda: True)      # never goes idle
-    waited = memory._wait_for_llm_idle(max_wait=5.0)
-    assert waited >= 5.0, "must give up and embed rather than lose the memory"
-
-
-def test_an_idle_box_embeds_immediately(monkeypatch):
-    monkeypatch.setattr(memory, "is_busy", lambda: False)
-    calls = []
-    monkeypatch.setattr(memory.time, "sleep", lambda s: calls.append(s))
-    assert memory._wait_for_llm_idle() == 0.0
-    assert calls == [], "no delay when there is nothing to yield to"
-
-
-# --- fact extraction must not lose what it already understood ---------------------------------
-# Found live: the extractor hit n_predict mid-object, the whole reply failed json.loads, every fact
-# in it was discarded, and the messages were marked processed anyway — so they could never be
-# retried. Two correct facts about the operator were destroyed that way, silently, because the
-# "unextracted" counter reached zero either way.
-
 TRUNCATED = (
     '```json\n[\n'
     '  {"category": "personal", "content": "The user\'s name is Ravi Jangid."},\n'

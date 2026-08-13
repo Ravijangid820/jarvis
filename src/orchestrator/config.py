@@ -72,7 +72,6 @@ if not LLM_URL.endswith("/v1/chat/completions"):
     LLM_URL += "/v1/chat/completions"
 REQUEST_TIMEOUT: int = CONFIG["llm"]["request_timeout_seconds"]
 TEMPERATURE: float = CONFIG["llm"]["default_temperature"]
-MAX_INPUT_LENGTH: int = CONFIG["orchestrator"]["max_input_length"]
 RATE_LIMIT_RPM: int = CONFIG["orchestrator"]["rate_limit_requests_per_minute"]
 # Opt-in: require a recognized, authorized person physically present (per the cameras) before any
 # device control runs — even for an otherwise-authorized caller. Off by default.
@@ -155,7 +154,6 @@ HA_ALLOWED_ENTITIES: List[str] = [e.strip() for e in (_ha_ents.split(",") if isi
 # UI-managed settings). Set via jarvis.json or the UI → editable in the UI.
 HA_URL_FROM_ENV = bool(os.environ.get("HA_URL"))
 HA_TOKEN_FROM_ENV = bool(os.environ.get("HA_TOKEN"))
-HA_ENTITIES_FROM_ENV = bool(os.environ.get("HA_ALLOWED_ENTITIES"))
 EMBED_DOC_PREFIX = _EMBED_CFG.get("doc_prefix", "title: none | text: ")
 EMBED_QUERY_PREFIX = _EMBED_CFG.get("query_prefix", "task: search result | query: ")
 RAG_DISTANCE_THRESHOLD = 0.6  # cosine distance = 1 - similarity; discard > this
