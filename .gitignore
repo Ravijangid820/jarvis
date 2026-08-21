@@ -19,6 +19,10 @@ systemd/generated/
 # ---- Secrets & runtime config (NEVER commit) ----
 # jarvis.json holds the master API key. Commit jarvis.example.json instead.
 config/jarvis.json
+# ...and any local backup of it. The live config can hold a Home Assistant token,
+# so a timestamped copy must never be sweepable by `git add -A` (one was, briefly).
+config/jarvis.json.bak-*
+config/*.bak
 # Docker env file — holds HF_TOKEN + admin password. Commit .env.example instead.
 .env
 .env.prod
