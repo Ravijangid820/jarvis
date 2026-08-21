@@ -273,6 +273,18 @@ def build_messages(session_id: str, user_id: int, household_id: int, user_text: 
         turn_parts.append(sysinfo.self_status_block())
     elif ha.configured() and ha.owns(household_id) and intents.mentions_home(user_text, _device_names()):
         devices = ha.snapshot()
+        if not devices:
+            # Configured, asked about, and unreachable. Saying nothing is the dangerous option: the
+            # model fills the gap and invents — observed with Home Assistant down, "Is anything
+            # switched on right now?" produced "The lights are on, the coffee is brewing, and the
+            # thermostat is set" for a house with no coffee maker and no thermostat. An explicit
+            # "cannot see them" is a fact it can repeat instead of a blank it has to fill.
+            turn_parts.append(
+                "--- DEVICES IN THIS HOME ---\n"
+                "  The smart home is not responding, so their states are unknown right now.\n"
+                "Tell them you cannot reach the smart home. You have no device states: do not "
+                "describe any device as on, off or running.\n"
+                "---")
         if devices:
             lines = "\n".join(f"  {d['name']} — {d['state']}" for d in devices)
             turn_parts.append(

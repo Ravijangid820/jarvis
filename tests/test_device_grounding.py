@@ -18,18 +18,28 @@ from test_api import _tok, main
 from test_api import client as _app_client  # noqa: F401
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "orchestrator"))
+import json  # noqa: E402
 import re  # noqa: E402
 
 import chat  # noqa: E402
 import intents  # noqa: E402
 import sysinfo  # noqa: E402
 import ha  # noqa: E402
+from routes import devices as routes_devices  # noqa: E402
 from intents import command_residual, says_more_than_command  # noqa: E402
 
 
 @pytest.fixture(scope="module")
 def client(_app_client):  # noqa: F811
     return _app_client
+
+
+@pytest.fixture(autouse=True)
+def _reset_limiters():
+    """Shared per-process, per-IP buckets — without this the Nth login in a full run is a 429."""
+    main._login_store.clear()
+    main._rate_store.clear()
+    yield
 
 
 @pytest.fixture()
@@ -106,12 +116,19 @@ def test_a_household_without_the_smart_home_is_told_nothing(client, monkeypatch)
     assert "Fan" not in msgs[-1]["content"]
 
 
-def test_no_block_at_all_when_home_assistant_is_unreachable(client, monkeypatch):
-    """An empty snapshot means "we could not ask", not "the house is empty". Printing an empty
-    list would assert something false and invite the model to say the house has no devices."""
+def test_an_empty_snapshot_never_becomes_an_empty_device_list(client, monkeypatch):
+    """An empty snapshot means "we could not ask", not "the house is empty", so no list is printed.
+
+    It used to attach nothing at all, on the reasoning that silence is safer than a false list.
+    Measured with Home Assistant genuinely down, silence is the worse of the two: "Is anything
+    switched on right now?" produced "The lights are on, the coffee is brewing, and the thermostat
+    is set" — for a house with no coffee maker and no thermostat. The model fills a blank. It is
+    now told, in words, that the states are unknown.
+    """
     _fake_home(monkeypatch, [])
-    msgs = chat.build_messages("grounding-3", 1, 1, "what's on?")
-    assert "DEVICES IN THIS HOME" not in msgs[-1]["content"]
+    turn = chat.build_messages("grounding-3", 1, 1, "what's on?")[-1]["content"]
+    assert "not responding" in turn                      # says so, rather than staying silent
+    assert "— on" not in turn and "— off" not in turn     # but asserts no state about any device
 
 
 def test_a_completed_action_is_stated_as_already_done(client, monkeypatch):
@@ -467,3 +484,78 @@ def test_a_home_question_still_gets_the_devices(text):
 ])
 def test_ordinary_conversation_does_not(text):
     assert not intents.mentions_home(text, ["Fan", "Light", "Tube Light"])
+
+
+# --- a tool the model asked for, that the user did not ----------------------------------------
+
+
+class _Req:
+    """Enough of a Request for the tool dispatcher: it never reaches an executor in these tests."""
+    class state:
+        user_id = 1
+        household_id = 1
+        is_admin = True
+
+
+def _req():
+    return _Req()
+
+
+def _tool_msg(name, **args):
+    return {"tool_calls": [{"function": {"name": name, "arguments": json.dumps(args)}}]}
+
+
+@pytest.mark.parametrize("text", ["Tell me a joke.", "Recommend a film for tonight.",
+                                  "What is a neural network?", "I'm bored."])
+def test_an_unsolicited_reminder_is_not_created(text, monkeypatch):
+    """Measured on this box with the full tool menu offered: "Recommend a film for tonight." made
+    the model call create_reminder, and a reminder was WRITTEN. Nothing downstream objected,
+    because the executors answer "may this user do this?" — a different question from "did they
+    ask for it?".
+    """
+    fired = []
+    monkeypatch.setattr(routes_devices, "_TOOLS",
+                        {"create_reminder": lambda a, r: fired.append(a) or "made one"})
+    out = routes_devices._run_tool_calls(_tool_msg("create_reminder", in_minutes=30), _req(), text)
+    assert fired == [] and out is None, "a reminder was created for a message that never asked"
+
+
+def test_a_real_reminder_request_still_runs(monkeypatch):
+    """The guard must not cost the feature it protects."""
+    fired = []
+    monkeypatch.setattr(routes_devices, "_TOOLS",
+                        {"create_reminder": lambda a, r: fired.append(a) or "Reminder set."})
+    out = routes_devices._run_tool_calls(_tool_msg("create_reminder", in_minutes=20),
+                                         _req(), "remind me to call mum in 20 minutes")
+    assert out == "Reminder set." and len(fired) == 1
+
+
+def test_an_unsolicited_volume_change_is_not_made(monkeypatch):
+    fired = []
+    monkeypatch.setattr(routes_devices, "_TOOLS", {"set_volume": lambda a, r: fired.append(a) or "ok"})
+    assert routes_devices._run_tool_calls(_tool_msg("set_volume", action="set", value=50),
+                                          _req(), "Tell me a joke.") is None
+    assert fired == []
+    assert routes_devices._run_tool_calls(_tool_msg("set_volume", action="set", value=50),
+                                          _req(), "set the volume to 50") == "ok"
+
+
+def test_read_only_tools_are_never_gated(monkeypatch):
+    """get_presence and home_status have no side effect, and gating them would defeat the point of
+    offering tools at all — catching the phrasings the deterministic parsers miss."""
+    monkeypatch.setattr(routes_devices, "_TOOLS", {"home_status": lambda a, r: "Fan is on."})
+    assert routes_devices._run_tool_calls(_tool_msg("home_status"), _req(), "Tell me a joke.") == "Fan is on."
+
+
+def test_an_unreachable_smart_home_is_stated_not_guessed(client, owner, monkeypatch):
+    """Home Assistant was down while this was written, and the model filled the silence: "Is
+    anything switched on right now?" produced "The lights are on, the coffee is brewing, and the
+    thermostat is set" for a house with no coffee maker and no thermostat. An explicit "cannot
+    see them" is a fact it can repeat instead of a blank it has to fill."""
+    monkeypatch.setattr(ha, "configured", lambda: True)
+    monkeypatch.setattr(ha, "owns", lambda household_id: True)
+    monkeypatch.setattr(ha, "snapshot", lambda: [])          # configured, asked about, unreachable
+    sid = chat.create_session("t", owner)
+    turn = _turn(sid, owner, "Is the fan on?")
+    assert "not responding" in turn and "do not describe any device" in turn.lower()
+    assert "— on" not in turn and "— off" not in turn

@@ -323,6 +323,29 @@ def is_self_query(text: str) -> bool:
     return _normalise(stripped) in SELF_QUERY_PHRASES
 
 
+# --- corroboration for a tool the MODEL asked to run -------------------------
+# A 2B model offered a tool menu will sometimes call one for a message that had nothing to do with
+# it. Measured on this box: "Recommend a film for tonight." produced create_reminder and a reminder
+# was actually written, and "Tell me a joke." produced one too. Nothing downstream questioned it,
+# because the executor's job is authorization ("may this user do it?"), not intent ("did they ask
+# for it?").
+#
+# So a tool that WRITES has to be corroborated by the user's own words before it runs. These are
+# deliberately loose — they ask "is this message even in the right domain?", not "does it parse as
+# a command" — because the whole point of the tool layer is to catch phrasings the parsers miss.
+
+
+def mentions_reminder(text: str) -> bool:
+    return bool(text and _REMINDER_KW.search(text))
+
+
+def mentions_volume(text: str) -> bool:
+    if not text:
+        return False
+    return bool(_VOL.search(text) or re.search(r"\b(louder|quieter|softer|mute|unmute|silence)\b",
+                                               text, re.I))
+
+
 # --- "is this message about the home at all?" --------------------------------
 # Decides whether the live device block is attached to the turn. It used to go on EVERY turn once
 # Home Assistant was configured, which is why an ordinary conversation kept turning into a status

@@ -197,7 +197,7 @@ def process_input(request: QueryRequest, raw_request: Request):
     t1 = time.time()
 
     msg = (llm_resp.get("choices") or [{}])[0].get("message", {})
-    tool_reply = routes_devices._run_tool_calls(msg, raw_request)
+    tool_reply = routes_devices._run_tool_calls(msg, raw_request, user_text)
     answer = tool_reply if tool_reply is not None else (llm_content(llm_resp).strip() or "…")
     comp_tokens = llm_resp.get("usage", {}).get("completion_tokens", 0)
     speed_str = ""

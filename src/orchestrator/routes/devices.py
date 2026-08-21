@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 import deps
 import ha
 import intent_router
+import intents
 import memory
 from config import REQUIRE_PRESENCE_FOR_CONTROL, JARVIS_MODE, logger
 from db import get_db
@@ -498,14 +499,51 @@ _TOOLS = {"set_volume": _tool_set_volume, "create_reminder": _tool_create_remind
           "home_control": _tool_home_control, "home_status": _tool_home_status}
 
 
-def _run_tool_calls(message: Dict[str, Any], raw_request: Request) -> Optional[str]:
-    """Execute the first tool call in an assistant message; return a spoken reply, or None if none."""
+# A tool that WRITES needs the user's own words to corroborate it before it runs.
+#
+# The executors check authorization — may this user do this? — which is a different question from
+# whether they asked for it. Measured on this box with the full menu offered: "Recommend a film for
+# tonight." made the model call create_reminder, and a reminder was written; "Tell me a joke." did
+# the same. Nothing downstream objected, because nothing downstream was looking.
+#
+# Read-only tools are absent from this map on purpose: get_presence and home_status can be called
+# for any reason without consequence, and gating them would defeat the point of offering tools at
+# all — catching phrasings the deterministic parsers miss.
+_WRITE_TOOL_EVIDENCE = {
+    "create_reminder": lambda text, names: intents.mentions_reminder(text),
+    "set_volume": lambda text, names: intents.mentions_volume(text),
+    "home_control": lambda text, names: intents.mentions_home(text, names),
+}
+
+
+def _device_names() -> List[str]:
+    try:
+        return [str(n) for n in (ha.friendly_names() or {}).values()]
+    except Exception:
+        return []
+
+
+def _run_tool_calls(message: Dict[str, Any], raw_request: Request,
+                    user_text: str = "") -> Optional[str]:
+    """Execute the first tool call in an assistant message; return a spoken reply, or None if none.
+
+    `user_text` is what the person actually said. A write tool runs only if that text is in the
+    same domain as the tool — see _WRITE_TOOL_EVIDENCE. Passing "" disables the check, which is
+    why every caller passes it.
+    """
     calls = message.get("tool_calls") or []
     if not calls:
         return None
     fn = calls[0].get("function", {})
-    handler = _TOOLS.get(fn.get("name"))
+    name = fn.get("name")
+    handler = _TOOLS.get(name)
     if not handler:
+        return None
+    corroborates = _WRITE_TOOL_EVIDENCE.get(name)
+    if corroborates and user_text and not corroborates(user_text, _device_names()):
+        # Refused, not executed, and not answered as if it had been: returning None lets the
+        # caller fall back to the model's own prose, which is what the person was asking for.
+        logger.info("ignoring unsolicited %s for %r", name, user_text[:80])
         return None
     try:
         args = json.loads(fn.get("arguments") or "{}")
@@ -545,7 +583,7 @@ def _home_tool_roundtrip(user_text: str, raw_request: Request) -> Optional[str]:
         logger.warning("home tool round-trip failed: %s", e)
         return None
     msg = (resp.get("choices") or [{}])[0].get("message", {})
-    return _run_tool_calls(msg, raw_request)
+    return _run_tool_calls(msg, raw_request, user_text)
 
 
 def _handle_reminder(user_text: str, raw_request: Request) -> Optional[str]:
